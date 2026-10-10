@@ -17,8 +17,82 @@ const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
-/// Kernel version string, as NetBSD's version.h provides.
-const version: []const u8 = "ZenBSD 0.1 (amd64)";
+/// Copyright notice, as NetBSD's sys/conf/copyright provides.
+const copyright: []const u8 =
+    "Copyright (c) 2026 The ZenBSD Project.  All rights reserved.\n";
+
+/// Build identification, as NetBSD's generated `version` string provides.
+const version: []const u8 =
+    "ZenBSD 0.1 (GENERIC) #0: Sat Oct 10 12:00:00 UTC 2026\n" ++
+    "\tbuild@zenbsd:/usr/src/sys/arch/amd64/compile/GENERIC\n";
+
+/// Print a byte count the way NetBSD's format_bytes() does (KB/MB/GB).
+fn printBytes(bytes: u64) void {
+    if (bytes >= 1024 * 1024 * 1024) {
+        prf.printDec(bytes / (1024 * 1024 * 1024));
+        prf.print(" GB");
+    } else if (bytes >= 1024 * 1024) {
+        prf.printDec(bytes / (1024 * 1024));
+        prf.print(" MB");
+    } else {
+        prf.printDec(bytes / 1024);
+        prf.print(" KB");
+    }
+}
+
+/// Total usable physical memory reported by the boot protocol.
+fn totalMemory() u64 {
+    var total: u64 = 0;
+    const entries: usize = arch.boot.memmapEntryCount() orelse 0;
+    var i: usize = 0;
+    while (i < entries) : (i += 1) {
+        const entry = arch.boot.memmapEntry(i) orelse continue;
+        if (entry.type == arch.boot.MemmapEntry.USABLE) {
+            total += entry.length;
+        }
+    }
+    return total;
+}
+
+/// Print the system start-up banner (cf. NetBSD's banner()).
+fn banner() void {
+    prf.print(copyright);
+    prf.print(version);
+
+    prf.print("total memory = ");
+    printBytes(totalMemory());
+    prf.printLine("");
+
+    prf.print("avail memory = ");
+    printBytes(@as(u64, uvm_page.freeCount()) * param.PAGE_SIZE);
+    prf.printLine("");
+
+    // Machine and boot environment, in the spirit of NetBSD's early dmesg.
+    prf.printLine("mainbus0 (root)");
+    prf.print("  bootloader: ");
+    if (arch.boot.bootloaderName()) |name| {
+        prf.print(name);
+        if (arch.boot.bootloaderVersion()) |v| {
+            prf.print(" ");
+            prf.print(v);
+        }
+    } else {
+        prf.print("unknown");
+    }
+    prf.printLine("");
+    if (arch.boot.cmdline()) |line| {
+        if (line.len != 0) {
+            prf.print("  cmdline: ");
+            prf.printLine(line);
+        }
+    }
+}
+
+/// Attempt to find the console and initialize it, for early panic messages.
+/// (NetBSD's consinit(), implemented machine-dependently.)
+fn consinit() void {
+    arch.consinit.consinit(bootRaster());
+}
 
 /// Build a machine-independent raster from the boot framebuffer.
 fn bootRaster() ?rasops.Raster {
@@ -39,45 +113,17 @@ fn bootRaster() ?rasops.Raster {
     };
 }
 
-/// Print the system start-up banner (cf. NetBSD's banner()).
-fn banner() void {
-    prf.printLine(version);
+/// Configure the system hardware. This brings up interrupts (NetBSD's
+/// configure(), whose cpu_configure() enables them).
+fn configure() void {
+    arch.intr.init();
+    arch.clock.init();
 
-    prf.print("  bootloader:    ");
-    if (arch.boot.bootloaderName()) |name| {
-        prf.print(name);
-        if (arch.boot.bootloaderVersion()) |v| {
-            prf.print(" ");
-            prf.print(v);
-        }
-    } else {
-        prf.print("unknown");
-    }
-    prf.printLine("");
-
-    prf.print("  firmware:      ");
-    switch (arch.boot.firmwareType() orelse 0xff) {
-        arch.boot.FirmwareTypeResponse.X86_BIOS => prf.printLine("x86 BIOS"),
-        arch.boot.FirmwareTypeResponse.EFI32 => prf.printLine("EFI32"),
-        arch.boot.FirmwareTypeResponse.EFI64 => prf.printLine("EFI64"),
-        arch.boot.FirmwareTypeResponse.SBI => prf.printLine("SBI"),
-        else => prf.printLine("unknown"),
-    }
-
-    if (arch.boot.hhdmOffset()) |offset| {
-        prf.print("  hhdm:          ");
-        prf.printHex(offset);
-        prf.printLine("");
-    }
-
-    if (arch.boot.executableVirtualBase()) |vbase| {
-        prf.print("  load base:     ");
-        prf.printHex(vbase);
-        prf.printLine("");
-    }
-
+    // Device attach lines, in NetBSD autoconfiguration style.
+    prf.printLine("com0 at isa0 port 0x3f8-0x3ff: ns16550a");
+    prf.printLine("i8254 at isa0 port 0x40-0x43");
     if (arch.boot.framebuffer(0)) |fb| {
-        prf.print("  framebuffer:   ");
+        prf.print("wsdisplay0 at vga0: console ");
         prf.printDec(fb.width);
         prf.print("x");
         prf.printDec(fb.height);
@@ -86,34 +132,12 @@ fn banner() void {
         prf.printLine("");
     }
 
-    if (arch.boot.cmdline()) |line| {
-        if (line.len != 0) {
-            prf.print("  cmdline:       ");
-            prf.printLine(line);
-        }
-    }
-}
-
-/// Attempt to find the console and initialize it, for early panic messages.
-/// (NetBSD's consinit(), implemented machine-dependently.)
-fn consinit() void {
-    arch.consinit.consinit(bootRaster());
-}
-
-/// Configure the system hardware. This brings up interrupts (NetBSD's
-/// configure(), whose cpu_configure() enables them).
-fn configure() void {
-    arch.intr.init();
-    arch.clock.init();
-
-    prf.printLine("");
     prf.printLine("ZenBSD: enabling interrupts (PIT @ 100 Hz)");
     arch.cpu.enable_interrupts();
 }
 
 /// Create process 1 (init) and hand off to userland. Not implemented yet.
 fn start_init() void {
-    prf.printLine("");
     prf.printLine("ZenBSD: init(8) not implemented; idling.");
 }
 
@@ -126,7 +150,7 @@ fn bringup_selftest() void {
     arch.pmap.kenterPa(va, pa, .kernel_rw);
     const cell: *volatile u64 = @ptrFromInt(va);
     cell.* = 0x5a5a_5a5a_5a5a_5a5a;
-    prf.print("  vm test:       pa ");
+    prf.print("vm test: pa ");
     prf.printHex(pa);
     prf.print(" at va ");
     prf.printHex(va);
@@ -139,7 +163,7 @@ fn bringup_selftest() void {
     uvm_fault.register(fault_va, fault_va + param.PAGE_SIZE);
     const fault_cell: *volatile u64 = @ptrFromInt(fault_va);
     fault_cell.* = 0xdead_beef_cafe_babe;
-    prf.print("  fault test:    pa ");
+    prf.print("fault test: pa ");
     prf.printHex(arch.pmap.extract(fault_va) orelse 0);
     prf.print(" read ");
     prf.printHex(fault_cell.*);
@@ -152,15 +176,12 @@ pub export fn main() void {
     // other messages.
     consinit();
 
-    // Announce the system.
-    banner();
-
     // Initialize the virtual memory system. (NetBSD initializes much more here:
     // timeouts, event counters, the process and lwp tables, the scheduler, ...)
     uvm_init.uvm_init();
-    prf.print("  memory:        ");
-    prf.printDec(uvm_page.freeCount());
-    prf.printLine(" free pages");
+
+    // Announce the system.
+    banner();
 
     bringup_selftest();
 

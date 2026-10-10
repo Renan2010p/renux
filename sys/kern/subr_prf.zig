@@ -22,10 +22,11 @@ pub fn print(s: []const u8) void {
     }
 }
 
-/// Emit a byte string followed by CRLF.
+/// Emit a byte string followed by a newline. The console driver turns the
+/// newline into a carriage return plus newline where required.
 pub fn printLine(s: []const u8) void {
     print(s);
-    print("\r\n");
+    print("\n");
 }
 
 fn hexDigit(nibble: u8) u8 {

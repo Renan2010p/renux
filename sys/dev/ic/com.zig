@@ -65,8 +65,13 @@ fn transmitterReady() bool {
     return (readReg(REG_LSR) & LSR_THRE) != 0;
 }
 
-/// Emit one character, blocking until the transmitter can accept it.
+/// Emit one character, blocking until the transmitter can accept it. A newline
+/// is preceded by a carriage return, as console output requires.
 pub fn putc(c: u8) void {
+    if (c == '\n') {
+        while (!transmitterReady()) {}
+        writeReg(REG_DATA, '\r');
+    }
     while (!transmitterReady()) {}
     writeReg(REG_DATA, c);
 }
