@@ -10,10 +10,30 @@
 // loop. It never names a driver or a boot protocol directly.
 
 const arch: type = @import("../arch/arch.zig");
+const rasops: type = @import("../dev/rasops/rasops.zig");
 const prf: type = @import("subr_prf.zig");
 
+/// Build a machine-independent raster description from the boot framebuffer.
+fn buildRaster() ?rasops.Raster {
+    const fb = arch.boot.framebuffer(0) orelse return null;
+    const address = fb.address orelse return null;
+    return .{
+        .base = @ptrCast(address),
+        .width = @intCast(fb.width),
+        .height = @intCast(fb.height),
+        .stride = @intCast(fb.pitch),
+        .depth = @intCast(fb.bpp),
+        .red_mask_size = fb.red_mask_size,
+        .red_mask_shift = fb.red_mask_shift,
+        .green_mask_size = fb.green_mask_size,
+        .green_mask_shift = fb.green_mask_shift,
+        .blue_mask_size = fb.blue_mask_size,
+        .blue_mask_shift = fb.blue_mask_shift,
+    };
+}
+
 pub export fn main() void {
-    arch.consinit.consinit();
+    arch.consinit.consinit(buildRaster());
 
     prf.printLine("");
     prf.printLine("ZenBSD: kernel entered");

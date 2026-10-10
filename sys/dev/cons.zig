@@ -4,9 +4,13 @@
 // MI console switch.
 //
 // Mirrors the role of sys/dev/cons.c in NetBSD: it is the single place through
-// which the kernel writes to (and later reads from) the system console. Drivers
-// register a Console here; nothing above this layer knows which device is
-// installed. The MD port picks the initial console via consinit().
+// which the kernel writes to (and later reads from) the system console. Any
+// number of drivers register here; output is broadcast to all of them, so the
+// kernel can print to serial and to a screen at the same time. Nothing above
+// this layer knows which devices are installed.
+
+/// Maximum number of attached consoles.
+pub const MAX_CONSOLES: usize = 4;
 
 /// A console device, described by callbacks. Only putc is required; getc is
 /// optional and used by the (future) kernel debugger and getchar path.
@@ -17,31 +21,37 @@ pub const Console: type = struct {
     getc: ?*const fn () u8 = null,
 };
 
-/// The currently selected console, or null before consinit() runs.
-var console: ?Console = null;
+var consoles: [MAX_CONSOLES]Console = undefined;
+var nconsoles: usize = 0;
 
-/// Install `tab` as the system console. Called from MD consinit().
-pub fn cn_set_tab(tab: Console) void {
-    console = tab;
+/// Register `tab` as a system console. Called from MD consinit().
+pub fn cn_attach(tab: Console) void {
+    if (nconsoles >= MAX_CONSOLES) {
+        return;
+    }
+    consoles[nconsoles] = tab;
+    nconsoles += 1;
 }
 
-/// True when a console has been installed.
+/// True when at least one console has been attached.
 pub fn cn_attached() bool {
-    return console != null;
+    return nconsoles != 0;
 }
 
-/// Emit one character on the console. A no-op before a console is attached,
-/// which is what lets very early code run safely.
+/// Emit one character on every attached console. A no-op before any console is
+/// attached, which is what lets very early code run safely.
 pub fn cnputc(c: u8) void {
-    if (console) |tab| {
-        tab.putc(c);
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        consoles[i].putc(c);
     }
 }
 
-/// Receive one character from the console, or 0 if none is available.
+/// Receive one character from the first console able to provide one, else 0.
 pub fn cngetc() u8 {
-    if (console) |tab| {
-        if (tab.getc) |getc| {
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].getc) |getc| {
             return getc();
         }
     }
