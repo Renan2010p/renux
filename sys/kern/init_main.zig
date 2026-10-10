@@ -1,23 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 The ZenBSD Project
 //
-// Machine-independent kernel entry point.
+// Kernel main: system startup.
 //
-// main() is called from the MD entry code (arch/amd64/amd64/locore.zig). It
-// must remain machine independent: it brings up the console through the arch
-// dispatch, reports the boot environment through the arch-provided boot
-// protocol bindings, and then hands control to the machine-dependent idle
-// loop. It never names a driver or a boot protocol directly.
+// This mirrors the startup sequence of NetBSD's sys/kern/init_main.c: find the
+// console, announce the system, initialise the virtual memory system, configure
+// the hardware (which enables interrupts) and hand off to init(8). The long
+// middle of NetBSD's main() -- process 0, the scheduler, filesystems,
+// networking and so on -- is not implemented yet and is noted where it belongs.
 
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const uvm_init: type = @import("../uvm/uvm_init.zig");
 const uvm_fault: type = @import("../uvm/uvm_fault.zig");
+const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
-/// Build a machine-independent raster description from the boot framebuffer.
-fn buildRaster() ?rasops.Raster {
+/// Kernel version string, as NetBSD's version.h provides.
+const version: []const u8 = "ZenBSD 0.1 (amd64)";
+
+/// Build a machine-independent raster from the boot framebuffer.
+fn bootRaster() ?rasops.Raster {
     const fb = arch.boot.framebuffer(0) orelse return null;
     const address = fb.address orelse return null;
     return .{
@@ -35,76 +39,16 @@ fn buildRaster() ?rasops.Raster {
     };
 }
 
-/// Bring up the physical page allocator and the machine page map, then run a
-/// mapping self-test.
-fn bringUpVm(hhdm: u64) void {
-    arch.pmap.bootstrap(hhdm);
-    uvm_page.init(hhdm);
-
-    const entries: usize = arch.boot.memmapEntryCount() orelse 0;
-    var i: usize = 0;
-    while (i < entries) : (i += 1) {
-        const entry = arch.boot.memmapEntry(i) orelse continue;
-        if (entry.type == arch.boot.MemmapEntry.USABLE) {
-            uvm_page.physload(entry.base, entry.base + entry.length);
-        }
-    }
-
-    prf.print("  phys memory:   ");
-    prf.printDec(uvm_page.freeCount());
-    prf.printLine(" free pages");
-
-    // Allocate a page, map it at a scratch kernel address, and read it back.
-    const va: u64 = arch.vmparam.KERNEL_SCRATCH_BASE;
-    const pa: u64 = uvm_page.physalloc() orelse {
-        prf.printLine("  vm: out of physical memory");
-        return;
-    };
-    arch.pmap.kenterPa(va, pa, .kernel_rw);
-
-    const cell: *volatile u64 = @ptrFromInt(va);
-    cell.* = 0x5a5a_5a5a_5a5a_5a5a;
-    const readback: u64 = cell.*;
-    const translated: u64 = arch.pmap.extract(va) orelse 0;
-
-    prf.print("  vm: pa ");
-    prf.printHex(pa);
-    prf.print(" at va ");
-    prf.printHex(va);
-    prf.print(" extract ");
-    prf.printHex(translated);
-    prf.print(" read ");
-    prf.printHex(readback);
-    prf.printLine("");
-
-    // Demand-zero fault: register an unmapped range, then touch it. The page
-    // fault handler fills it in and the instruction retries.
-    const fault_va: u64 = arch.vmparam.KERNEL_SCRATCH_BASE + param.PAGE_SIZE;
-    uvm_fault.register(fault_va, fault_va + param.PAGE_SIZE);
-    const fault_cell: *volatile u64 = @ptrFromInt(fault_va);
-    fault_cell.* = 0xdead_beef_cafe_babe;
-    prf.print("  fault: pa ");
-    prf.printHex(arch.pmap.extract(fault_va) orelse 0);
-    prf.print(" read ");
-    prf.printHex(fault_cell.*);
-    prf.printLine("");
-}
-
-pub export fn main() void {
-    arch.consinit.consinit(buildRaster());
-
-    prf.printLine("");
-    prf.printLine("ZenBSD: kernel entered");
-
-    prf.print("  base revision: ");
-    prf.printLine(if (arch.boot.baseRevisionSupported()) "ok" else "unsupported");
+/// Print the system start-up banner (cf. NetBSD's banner()).
+fn banner() void {
+    prf.printLine(version);
 
     prf.print("  bootloader:    ");
     if (arch.boot.bootloaderName()) |name| {
         prf.print(name);
-        if (arch.boot.bootloaderVersion()) |version| {
+        if (arch.boot.bootloaderVersion()) |v| {
             prf.print(" ");
-            prf.print(version);
+            prf.print(v);
         }
     } else {
         prf.print("unknown");
@@ -132,12 +76,6 @@ pub export fn main() void {
         prf.printLine("");
     }
 
-    if (arch.boot.memmapEntryCount()) |count| {
-        prf.print("  memmap:        ");
-        prf.printDec(count);
-        prf.printLine(" entries");
-    }
-
     if (arch.boot.framebuffer(0)) |fb| {
         prf.print("  framebuffer:   ");
         prf.printDec(fb.width);
@@ -154,23 +92,86 @@ pub export fn main() void {
             prf.printLine(line);
         }
     }
+}
 
-    if (arch.boot.hhdmOffset()) |hhdm| {
-        bringUpVm(hhdm);
-    }
+/// Attempt to find the console and initialize it, for early panic messages.
+/// (NetBSD's consinit(), implemented machine-dependently.)
+fn consinit() void {
+    arch.consinit.consinit(bootRaster());
+}
 
-    prf.printLine("");
-    prf.printLine("ZenBSD: IDT self-test (int3):");
-    arch.cpu.breakpoint();
-    prf.printLine("ZenBSD: trap handler returned.");
-
+/// Configure the system hardware. This brings up interrupts (NetBSD's
+/// configure(), whose cpu_configure() enables them).
+fn configure() void {
     arch.intr.init();
     arch.clock.init();
+
     prf.printLine("");
     prf.printLine("ZenBSD: enabling interrupts (PIT @ 100 Hz)");
     arch.cpu.enable_interrupts();
+}
 
+/// Create process 1 (init) and hand off to userland. Not implemented yet.
+fn start_init() void {
     prf.printLine("");
-    prf.printLine("ZenBSD: entering idle.");
-    arch.cpu.idle();
+    prf.printLine("ZenBSD: init(8) not implemented; idling.");
+}
+
+/// Bring-up checks for the VM and fault paths. Temporary; not part of the
+/// NetBSD start-up flow.
+fn bringup_selftest() void {
+    // Map a physical page at a scratch kernel address and read it back.
+    const va: u64 = arch.vmparam.KERNEL_SCRATCH_BASE;
+    const pa: u64 = uvm_page.physalloc() orelse return;
+    arch.pmap.kenterPa(va, pa, .kernel_rw);
+    const cell: *volatile u64 = @ptrFromInt(va);
+    cell.* = 0x5a5a_5a5a_5a5a_5a5a;
+    prf.print("  vm test:       pa ");
+    prf.printHex(pa);
+    prf.print(" at va ");
+    prf.printHex(va);
+    prf.print(" read ");
+    prf.printHex(cell.*);
+    prf.printLine("");
+
+    // Demand-zero fault: register an unmapped range, then touch it.
+    const fault_va: u64 = va + param.PAGE_SIZE;
+    uvm_fault.register(fault_va, fault_va + param.PAGE_SIZE);
+    const fault_cell: *volatile u64 = @ptrFromInt(fault_va);
+    fault_cell.* = 0xdead_beef_cafe_babe;
+    prf.print("  fault test:    pa ");
+    prf.printHex(arch.pmap.extract(fault_va) orelse 0);
+    prf.print(" read ");
+    prf.printHex(fault_cell.*);
+    prf.printLine("");
+}
+
+/// System startup; initialize the world.
+pub export fn main() void {
+    // Attempt to find the console and initialize it in case of early panic or
+    // other messages.
+    consinit();
+
+    // Announce the system.
+    banner();
+
+    // Initialize the virtual memory system. (NetBSD initializes much more here:
+    // timeouts, event counters, the process and lwp tables, the scheduler, ...)
+    uvm_init.uvm_init();
+    prf.print("  memory:        ");
+    prf.printDec(uvm_page.freeCount());
+    prf.printLine(" free pages");
+
+    bringup_selftest();
+
+    // Configure the system hardware. This enables interrupts.
+    configure();
+
+    // Create process 1 (init).
+    start_init();
+
+    // Should not get here; the scheduler is an infinite loop in NetBSD.
+    while (true) {
+        arch.cpu.idle();
+    }
 }
