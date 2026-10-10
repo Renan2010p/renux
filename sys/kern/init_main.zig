@@ -11,6 +11,7 @@
 
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
+const uvm_page: type = @import("../uvm/uvm_page.zig");
 const prf: type = @import("subr_prf.zig");
 
 /// Build a machine-independent raster description from the boot framebuffer.
@@ -30,6 +31,49 @@ fn buildRaster() ?rasops.Raster {
         .blue_mask_size = fb.blue_mask_size,
         .blue_mask_shift = fb.blue_mask_shift,
     };
+}
+
+/// Bring up the physical page allocator and the machine page map, then run a
+/// mapping self-test.
+fn bringUpVm(hhdm: u64) void {
+    arch.pmap.bootstrap(hhdm);
+    uvm_page.init(hhdm);
+
+    const entries: usize = arch.boot.memmapEntryCount() orelse 0;
+    var i: usize = 0;
+    while (i < entries) : (i += 1) {
+        const entry = arch.boot.memmapEntry(i) orelse continue;
+        if (entry.type == arch.boot.MemmapEntry.USABLE) {
+            uvm_page.physload(entry.base, entry.base + entry.length);
+        }
+    }
+
+    prf.print("  phys memory:   ");
+    prf.printDec(uvm_page.freeCount());
+    prf.printLine(" free pages");
+
+    // Allocate a page, map it at a scratch kernel address, and read it back.
+    const va: u64 = arch.vmparam.KERNEL_SCRATCH_BASE;
+    const pa: u64 = uvm_page.physalloc() orelse {
+        prf.printLine("  vm: out of physical memory");
+        return;
+    };
+    arch.pmap.kenterPa(va, pa, .kernel_rw);
+
+    const cell: *volatile u64 = @ptrFromInt(va);
+    cell.* = 0x5a5a_5a5a_5a5a_5a5a;
+    const readback: u64 = cell.*;
+    const translated: u64 = arch.pmap.extract(va) orelse 0;
+
+    prf.print("  vm: pa ");
+    prf.printHex(pa);
+    prf.print(" at va ");
+    prf.printHex(va);
+    prf.print(" extract ");
+    prf.printHex(translated);
+    prf.print(" read ");
+    prf.printHex(readback);
+    prf.printLine("");
 }
 
 pub export fn main() void {
@@ -95,6 +139,10 @@ pub export fn main() void {
             prf.print("  cmdline:       ");
             prf.printLine(line);
         }
+    }
+
+    if (arch.boot.hhdmOffset()) |hhdm| {
+        bringUpVm(hhdm);
     }
 
     prf.printLine("");

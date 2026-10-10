@@ -30,6 +30,12 @@ pub const bus_space: type = machdep_impl.bus_space;
 /// Machine-dependent console initialisation (see kern/init_main.zig).
 pub const consinit: type = machdep_impl.consinit;
 
+/// Machine-dependent page map (see sys/uvm).
+pub const pmap: type = machdep_impl.pmap;
+
+/// Machine-dependent virtual memory parameters.
+pub const vmparam: type = machdep_impl.vmparam;
+
 /// Boot protocol bindings provided by the port.
 pub const boot: type = machdep_impl.boot;
 
