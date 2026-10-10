@@ -14,9 +14,26 @@
 pub const cpu: type = @import("../../x86/include/cpufunc.zig");
 pub const bus_space: type = @import("../../x86/x86/bus_space.zig");
 pub const consinit: type = @import("../../x86/x86/consinit.zig");
+pub const idt: type = @import("../../x86/x86/idt.zig");
 
 // amd64-specific modules.
 pub const locore: type = @import("../amd64/locore.zig");
+pub const gdt: type = @import("../amd64/gdt.zig");
+pub const vector: type = @import("../amd64/vector.zig");
+pub const trap: type = @import("../amd64/trap.zig");
 
 // Boot protocol bindings in use on this port (Limine).
 pub const boot: type = @import("../../../stand/amd64/limine/limine.zig");
+
+// Force every module (and its exports, e.g. the trap entry) to be analysed.
+comptime {
+    _ = @import("../../x86/include/cpufunc.zig");
+    _ = @import("../../x86/x86/bus_space.zig");
+    _ = @import("../../x86/x86/consinit.zig");
+    _ = @import("../../x86/x86/idt.zig");
+    _ = @import("../amd64/locore.zig");
+    _ = @import("../amd64/gdt.zig");
+    _ = @import("../amd64/vector.zig");
+    _ = @import("../amd64/trap.zig");
+    _ = @import("../../../stand/amd64/limine/limine.zig");
+}

@@ -78,6 +78,11 @@ pub export fn main() void {
     }
 
     prf.printLine("");
+    prf.printLine("ZenBSD: IDT self-test (int3):");
+    arch.cpu.breakpoint();
+    prf.printLine("ZenBSD: trap handler returned.");
+
+    prf.printLine("");
     prf.printLine("ZenBSD: entering idle.");
     arch.cpu.idle();
 }

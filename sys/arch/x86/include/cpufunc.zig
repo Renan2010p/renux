@@ -70,6 +70,11 @@ pub fn halt() void {
     asm volatile ("hlt");
 }
 
+/// Trigger a breakpoint exception (int3). Used to exercise the IDT.
+pub fn breakpoint() void {
+    asm volatile ("int3");
+}
+
 /// Idle forever.
 pub fn idle() noreturn {
     while (true) {
