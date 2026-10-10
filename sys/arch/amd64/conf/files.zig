@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 The ZenBSD Project
+//
+// amd64 machine-dependent module manifest.
+//
+// This is the Zig counterpart of sys/arch/amd64/conf/files.amd64 in NetBSD: it
+// names every machine-dependent module the port contributes, so the arch
+// dispatch (sys/arch/arch.zig) presents a complete port to machine-independent
+// code. The amd64 port is deliberately thin: the parts it shares with the rest
+// of the x86 family live under sys/arch/x86/ and are pulled in here, exactly as
+// files.amd64 includes files.x86 in NetBSD.
+
+// Shared x86 modules.
+pub const cpu: type = @import("../../x86/include/cpufunc.zig");
+pub const bus_space: type = @import("../../x86/x86/bus_space.zig");
+pub const consinit: type = @import("../../x86/x86/consinit.zig");
+
+// amd64-specific modules.
+pub const locore: type = @import("../amd64/locore.zig");
+
+// Boot protocol bindings in use on this port (Limine).
+pub const boot: type = @import("../../../stand/amd64/limine/limine.zig");

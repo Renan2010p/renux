@@ -44,8 +44,6 @@ SECTIONS
 	.boot : AT(ADDR(.boot) - KERNEL_VMA)
 	{
 		KEEP(*(.multiboot2))
-		KEEP(*(.limine_requests))
-		KEEP(*(.limine_reqs))
 	}
 
 	. = ALIGN(__PAGE_SIZE);
@@ -75,6 +73,14 @@ SECTIONS
 		__data_start = .;
 		*(.data)
 		*(.data.*)
+		/*
+		 * Limine boot protocol requests. The three input sections must be
+		 * emitted in this order so the start/end delimiters bracket the
+		 * requests, as required by the protocol.
+		 */
+		KEEP(*(.limine_requests_start))
+		KEEP(*(.limine_requests))
+		KEEP(*(.limine_requests_end))
 		. = ALIGN(__PAGE_SIZE);
 		__data_end = .;
 	}

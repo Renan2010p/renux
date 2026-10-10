@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 The ZenBSD Project
+//
+// Kernel root source file.
+//
+// This file wires the kernel together: it installs the panic hook and pulls in
+// the machine-independent subsystems. Machine-dependent code is reached only
+// through sys/arch/arch.zig, which each subsystem imports itself; the root
+// never names a port-specific file.
+
+const std: type = @import("std");
+
+/// Route panics to the kernel console.
+pub const panic = std.debug.FullPanic(@import("kern/subr_prf.zig").panic);
 
 comptime {
     _ = @import("arch/arch.zig");
