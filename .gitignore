@@ -1,0 +1,17 @@
+# Zig build artifacts
+.zig-cache/
+zig-cache/
+zig-out/
+
+# Compiled objects / images
+*.o
+*.a
+*.so
+*.elf
+*.iso
+*.img
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store
