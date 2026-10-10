@@ -33,6 +33,12 @@ pub const consinit: type = machdep_impl.consinit;
 /// Machine-dependent page map (see sys/uvm).
 pub const pmap: type = machdep_impl.pmap;
 
+/// Interrupt dispatch (legacy PIC).
+pub const intr: type = machdep_impl.intr;
+
+/// System clock / periodic timer.
+pub const clock: type = machdep_impl.clock;
+
 /// Machine-dependent virtual memory parameters.
 pub const vmparam: type = machdep_impl.vmparam;
 

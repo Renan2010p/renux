@@ -16,6 +16,8 @@ pub const bus_space: type = @import("../../x86/x86/bus_space.zig");
 pub const consinit: type = @import("../../x86/x86/consinit.zig");
 pub const idt: type = @import("../../x86/x86/idt.zig");
 pub const pmap: type = @import("../../x86/x86/pmap.zig");
+pub const intr: type = @import("../../x86/x86/intr.zig");
+pub const clock: type = @import("../../x86/isa/clock.zig");
 
 // amd64-specific modules.
 pub const locore: type = @import("../amd64/locore.zig");
@@ -34,6 +36,8 @@ comptime {
     _ = @import("../../x86/x86/consinit.zig");
     _ = @import("../../x86/x86/idt.zig");
     _ = @import("../../x86/x86/pmap.zig");
+    _ = @import("../../x86/x86/intr.zig");
+    _ = @import("../../x86/isa/clock.zig");
     _ = @import("../amd64/locore.zig");
     _ = @import("../amd64/gdt.zig");
     _ = @import("../amd64/vector.zig");

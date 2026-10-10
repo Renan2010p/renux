@@ -5,10 +5,17 @@
 //
 // This plays the role of NetBSD's sys/arch/amd64/amd64/trap.c: the common
 // entry saves the machine state, hands a trap frame to the machine-independent
-// dispatcher and restores state on the way out. Exceptions that cannot be
-// recovered are reported and halt the machine.
+// dispatcher and restores state on the way out. Page faults are offered to the
+// fault registry, PIC vectors are handed to the interrupt dispatcher, and
+// anything that cannot be recovered is reported and halts the machine.
 
 const trap: type = @import("../include/trap.zig");
+const intr: type = @import("../../x86/x86/intr.zig");
+const intrdefs: type = @import("../../x86/include/intrdefs.zig");
+const pmap: type = @import("../../x86/x86/pmap.zig");
+const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
+const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
 /// Common entry point for every vector stub (see vector.zig).
@@ -56,12 +63,46 @@ pub export fn trap_common() callconv(.naked) void {
     );
 }
 
+/// Read CR2, the address that caused the most recent page fault.
+fn readCr2() u64 {
+    return asm volatile ("mov %%cr2, %[value]"
+        : [value] "=r" (-> u64),
+    );
+}
+
+/// Try to resolve a not-present page fault by mapping a demand-zero page.
+fn handlePageFault(frame: *trap.TrapFrame) bool {
+    if ((frame.error_code & 1) != 0) {
+        return false; // protection fault, not a missing page
+    }
+    const va: u64 = readCr2();
+    if (uvm_fault.regionFor(va) == null) {
+        return false;
+    }
+    const pa: u64 = uvm_page.physalloc() orelse return false;
+    pmap.kenterPa(va & ~param.PAGE_MASK, pa, .kernel_rw);
+    return true;
+}
+
 /// Trap dispatcher, called by trap_common().
-///
-/// Reports the trap on the console. The breakpoint vector is used by the
-/// bring-up self-test and resumes execution; every other vector is fatal for
-/// now, until per-vector recovery exists.
 export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
+    if (frame.vector == trap.T_PAGE) {
+        if (handlePageFault(frame)) {
+            return;
+        }
+        prf.print("page fault at ");
+        prf.printHex(readCr2());
+        prf.print(" error ");
+        prf.printHex(frame.error_code);
+        prf.printLine("");
+        prf.panic("unhandled page fault", null);
+    }
+
+    if (intrdefs.isPicVector(frame.vector)) {
+        intr.dispatch(frame.vector);
+        return;
+    }
+
     prf.print("trap: vector ");
     prf.printDec(frame.vector);
     prf.print(" error ");

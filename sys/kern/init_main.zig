@@ -12,6 +12,8 @@
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
+const uvm_fault: type = @import("../uvm/uvm_fault.zig");
+const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
 /// Build a machine-independent raster description from the boot framebuffer.
@@ -73,6 +75,18 @@ fn bringUpVm(hhdm: u64) void {
     prf.printHex(translated);
     prf.print(" read ");
     prf.printHex(readback);
+    prf.printLine("");
+
+    // Demand-zero fault: register an unmapped range, then touch it. The page
+    // fault handler fills it in and the instruction retries.
+    const fault_va: u64 = arch.vmparam.KERNEL_SCRATCH_BASE + param.PAGE_SIZE;
+    uvm_fault.register(fault_va, fault_va + param.PAGE_SIZE);
+    const fault_cell: *volatile u64 = @ptrFromInt(fault_va);
+    fault_cell.* = 0xdead_beef_cafe_babe;
+    prf.print("  fault: pa ");
+    prf.printHex(arch.pmap.extract(fault_va) orelse 0);
+    prf.print(" read ");
+    prf.printHex(fault_cell.*);
     prf.printLine("");
 }
 
@@ -149,6 +163,12 @@ pub export fn main() void {
     prf.printLine("ZenBSD: IDT self-test (int3):");
     arch.cpu.breakpoint();
     prf.printLine("ZenBSD: trap handler returned.");
+
+    arch.intr.init();
+    arch.clock.init();
+    prf.printLine("");
+    prf.printLine("ZenBSD: enabling interrupts (PIT @ 100 Hz)");
+    arch.cpu.enable_interrupts();
 
     prf.printLine("");
     prf.printLine("ZenBSD: entering idle.");
