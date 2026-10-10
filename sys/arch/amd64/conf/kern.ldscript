@@ -1,0 +1,119 @@
+/*
+ * ZenBSD kernel linker script -- amd64.
+ *
+ * This is a modern rewrite of the NetBSD amd64 layout. It deliberately drops
+ * the legacy bits (the CPP `#include "assym.h"`, the `COHERENCY_UNIT` magic,
+ * the hotpatch sections, the low-bits `AT()` trick) in favour of something
+ * explicit and readable.
+ *
+ * Address model
+ * -------------
+ * KERNEL_VMA is the virtual base the kernel is linked and executed at.
+ * KERNEL_LMA is the physical address the bootloader loads the image at.
+ * The difference is applied with AT() so that every loadable section gets a
+ * correct physical load address (LMA) while keeping its virtual address (VMA).
+ *
+ *   - Higher half (default, like NetBSD/amd64): KERNEL_VMA = 0xffffffff80000000.
+ *     Requires paging to be active before _start runs -- either set up by the
+ *     bootloader (Limine) or by an early trampoline.
+ *   - Flat / identity bring-up: KERNEL_VMA = 0. Nothing has to be mapped
+ *     before entry; switch to higher half once the VM system exists.
+ *
+ * Only KERNEL_VMA and KERNEL_LMA should normally need to change.
+ */
+
+OUTPUT_FORMAT(elf64-x86-64)
+OUTPUT_ARCH(i386:x86-64)
+ENTRY(_start)
+
+KERNEL_VMA = 0xffffffff80000000;
+KERNEL_LMA = 0x00100000;
+
+__PAGE_SIZE = 0x1000;
+
+SECTIONS
+{
+	. = KERNEL_VMA + KERNEL_LMA;
+	__kernel_start = .;
+
+	/*
+	 * Boot protocol header (Multiboot2 / Limine). The loader requires the
+	 * header to sit within the first 32 KiB of the image, so it is emitted
+	 * first. Empty until the boot protocol is wired up; harmless otherwise.
+	 */
+	.boot : AT(ADDR(.boot) - KERNEL_VMA)
+	{
+		KEEP(*(.multiboot2))
+		KEEP(*(.limine_requests))
+		KEEP(*(.limine_reqs))
+	}
+
+	. = ALIGN(__PAGE_SIZE);
+	.text : AT(ADDR(.text) - KERNEL_VMA)
+	{
+		__text_start = .;
+		KEEP(*(.text.entry))
+		*(.text)
+		*(.text.*)
+		. = ALIGN(__PAGE_SIZE);
+		__text_end = .;
+	}
+
+	. = ALIGN(__PAGE_SIZE);
+	.rodata : AT(ADDR(.rodata) - KERNEL_VMA)
+	{
+		__rodata_start = .;
+		*(.rodata)
+		*(.rodata.*)
+		. = ALIGN(__PAGE_SIZE);
+		__rodata_end = .;
+	}
+
+	. = ALIGN(__PAGE_SIZE);
+	.data : AT(ADDR(.data) - KERNEL_VMA)
+	{
+		__data_start = .;
+		*(.data)
+		*(.data.*)
+		. = ALIGN(__PAGE_SIZE);
+		__data_end = .;
+	}
+
+	. = ALIGN(__PAGE_SIZE);
+	.bss : AT(ADDR(.bss) - KERNEL_VMA)
+	{
+		__bss_start = .;
+		*(.bss)
+		*(.bss.*)
+		*(COMMON)
+		. = ALIGN(__PAGE_SIZE);
+		__bss_end = .;
+	}
+
+	. = ALIGN(__PAGE_SIZE);
+	__kernel_end = .;
+
+	/* Portable aliases (NetBSD/BSD-tradition names). */
+	PROVIDE(_etext = __text_end);
+	PROVIDE(etext = __text_end);
+	PROVIDE(_edata = __data_end);
+	PROVIDE(edata = __data_end);
+	PROVIDE(_end = __kernel_end);
+	PROVIDE(end = __kernel_end);
+
+	/*
+	 * Everything below is not part of the loaded image: unwind tables, the
+	 * compiler comment note and stack notes. A kernel has no use for them.
+	 */
+	/DISCARD/ :
+	{
+		*(.eh_frame)
+		*(.eh_frame.*)
+		*(.eh_frame_hdr)
+		*(.gcc_except_table)
+		*(.gcc_except_table.*)
+		*(.comment)
+		*(.note.GNU-stack)
+		*(.note.gnu.*)
+	}
+}

@@ -38,5 +38,9 @@ pub fn build(b: *Builder) !void {
         .use_llvm = true,
     });
 
+    // Architecture-specific linker script. amd64 is the only port so far; once
+    // more ports exist this should be selected from the target CPU arch.
+    kern_exec.setLinkerScript(b.path("arch/amd64/conf/kern.ldscript"));
+
     b.installArtifact(kern_exec);
 }
