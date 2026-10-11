@@ -21,6 +21,8 @@ pub const Cdevsw: type = struct {
     read: *const fn (ctx: ?*anyopaque, buf: []u8) isize,
     /// Write `buf`.
     write: *const fn (ctx: ?*anyopaque, buf: []const u8) isize,
+    /// Handle a device-specific control request.
+    ioctl: *const fn (ctx: ?*anyopaque, cmd: u64, arg: u64) i32,
     /// Called when the last reference to the open file is dropped.
     close: *const fn (ctx: ?*anyopaque) i32,
 };

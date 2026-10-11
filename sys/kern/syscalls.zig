@@ -106,6 +106,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_lseek, .handler = sys_generic.sysLseek },
     .{ .num = sys.SYS_getpid, .handler = sysGetpid },
     .{ .num = sys.SYS_dup2, .handler = sysDup2 },
+    .{ .num = sys.SYS_ioctl, .handler = sys_generic.sysIoctl },
     .{ .num = sys.SYS_execve, .handler = sysExecve },
     .{ .num = sys.SYS_fstat, .handler = vfs_syscalls.sysFstat },
     .{ .num = sys.SYS_mkdir, .handler = vfs_syscalls.sysMkdir },

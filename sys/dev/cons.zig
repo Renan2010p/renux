@@ -162,12 +162,21 @@ fn cnwriteDev(ctx: ?*anyopaque, buf: []const u8) isize {
     return @intCast(buf.len);
 }
 
+/// The console has no control requests (use /dev/tty).
+fn cnioctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
+    _ = ctx;
+    _ = cmd;
+    _ = arg;
+    return -errno.ENOTTY;
+}
+
 /// The /dev/console character device switch.
 const cons_cdevsw: conf.Cdevsw = .{
     .name = "console",
     .open = cnopen,
     .read = cnread,
     .write = cnwriteDev,
+    .ioctl = cnioctl,
     .close = cnclose,
 };
 

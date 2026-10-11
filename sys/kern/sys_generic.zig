@@ -65,6 +65,21 @@ pub fn sysRead(args: [sys.MAXARGS]u64) u64 {
     }
 }
 
+/// ioctl(2): perform a control request on descriptor `fd`.
+pub fn sysIoctl(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const cmd: u64 = args[1];
+    const arg: u64 = args[2];
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.ERROR;
+    const ioctl = f.f_ops.ioctl orelse return sys.ERROR;
+    const err: i32 = ioctl(f, cmd, arg);
+    if (err != 0) {
+        return sys.ERROR;
+    }
+    return 0;
+}
+
 /// lseek(2): reposition the offset of descriptor `fd`.
 pub fn sysLseek(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];

@@ -4,9 +4,9 @@
 // /sbin/login: prompt for a user and start a shell.
 //
 // The Zig counterpart of the BSD login(1), reduced to the console: read a user
-// name, read a password (not echoed, not yet checked since there is no
-// authentication database), and exec the user's shell. A real login would
-// consult /etc/passwd, verify the password and set up the environment.
+// name, read a password with the terminal echo turned off (not checked, since
+// there is no authentication database yet), and exec the user's shell. The
+// terminal (dev/tty) does the echoing and line editing in canonical mode.
 
 const libc: type = @import("libc");
 
@@ -15,23 +15,17 @@ comptime {
     _ = @import("csu").crt0;
 }
 
-/// Read one line, echoing it when `echo` is set.
-fn readLine(buf: []u8, echo: bool) usize {
+/// Read one line from the terminal (the tty echoes it).
+fn readLine(buf: []u8) usize {
     var len: usize = 0;
     while (true) {
         const c: u8 = libc.stdio.getchar();
         if (c == '\r' or c == '\n') {
-            if (echo) {
-                libc.stdio.putchar('\n');
-            }
             return len;
         }
         if (c == 0x7f or c == 0x08) {
             if (len > 0) {
                 len -= 1;
-                if (echo) {
-                    libc.stdio.printf("\x08 \x08", .{});
-                }
             }
             continue;
         }
@@ -41,9 +35,6 @@ fn readLine(buf: []u8, echo: bool) usize {
         if (len < buf.len) {
             buf[len] = c;
             len += 1;
-            if (echo) {
-                libc.stdio.putchar(c);
-            }
         }
     }
 }
@@ -56,11 +47,23 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     var pass: [64]u8 = undefined;
 
     libc.stdio.printf("login: ", .{});
-    _ = readLine(&user, true);
+    _ = readLine(&user);
 
+    // Read the password with echo disabled, then restore the old attributes.
+    var old: libc.syscall.Termios = undefined;
+    var changed: bool = false;
+    if (libc.syscall.ioctl(0, libc.syscall.TIOCGETA, @intFromPtr(&old)) == 0) {
+        var noecho: libc.syscall.Termios = old;
+        noecho.c_lflag &= ~libc.syscall.ECHO;
+        _ = libc.syscall.ioctl(0, libc.syscall.TIOCSETA, @intFromPtr(&noecho));
+        changed = true;
+    }
     libc.stdio.printf("Password: ", .{});
-    _ = readLine(&pass, false);
+    _ = readLine(&pass);
     libc.stdio.putchar('\n');
+    if (changed) {
+        _ = libc.syscall.ioctl(0, libc.syscall.TIOCSETA, @intFromPtr(&old));
+    }
 
     libc.stdio.printf("\nWelcome to ZenBSD!\n", .{});
 

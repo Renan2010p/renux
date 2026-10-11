@@ -25,6 +25,7 @@ pub const SYS_chdir: u64 = 12;
 pub const SYS_lseek: u64 = 19;
 pub const SYS_getpid: u64 = 20;
 pub const SYS_dup: u64 = 41;
+pub const SYS_ioctl: u64 = 54;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;
@@ -54,6 +55,45 @@ pub const Dirent: type = extern struct {
 /// Directory entry types (DT_*).
 pub const DT_DIR: u8 = 4;
 pub const DT_REG: u8 = 8;
+
+/// Terminal attributes, matching the kernel's struct termios.
+pub const Termios: type = extern struct {
+    c_iflag: u32,
+    c_oflag: u32,
+    c_cflag: u32,
+    c_lflag: u32,
+    c_cc: [20]u8,
+    c_ispeed: u32,
+    c_ospeed: u32,
+};
+
+/// Window size, matching the kernel's struct winsize.
+pub const Winsize: type = extern struct {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+};
+
+const IOC_OUT: u64 = 0x40000000;
+const IOC_IN: u64 = 0x80000000;
+
+fn ioc(dir: u64, group: u8, num: u8, len: usize) u64 {
+    return dir | (@as(u64, len) << 16) | (@as(u64, group) << 8) | @as(u64, num);
+}
+
+/// Get terminal attributes (a struct termios).
+pub const TIOCGETA: u64 = ioc(IOC_OUT, 't', 19, @sizeOf(Termios));
+/// Set terminal attributes (a struct termios).
+pub const TIOCSETA: u64 = ioc(IOC_IN, 't', 20, @sizeOf(Termios));
+/// Get the window size (a struct winsize).
+pub const TIOCGWINSZ: u64 = ioc(IOC_OUT, 't', 104, @sizeOf(Winsize));
+/// Set the window size (a struct winsize).
+pub const TIOCSWINSZ: u64 = ioc(IOC_IN, 't', 103, @sizeOf(Winsize));
+
+// Local mode flags (c_lflag), the subset in use.
+pub const ECHO: u32 = 0x00000008;
+pub const ICANON: u32 = 0x00000100;
 
 /// File status, matching the kernel's struct stat (sys/sys/stat.h).
 pub const Stat: type = extern struct {
@@ -155,6 +195,12 @@ pub fn unlink(path: [*:0]const u8) i64 {
 /// Copy the NUL-terminated working directory path into `buf`.
 pub fn getcwd(buf: []u8) i64 {
     const r: u64 = syscall(SYS_getcwd, .{ @intFromPtr(buf.ptr), buf.len, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Perform the control request `cmd` on descriptor `fd`.
+pub fn ioctl(fd: u64, cmd: u64, arg: u64) i64 {
+    const r: u64 = syscall(SYS_ioctl, .{ fd, cmd, arg, 0, 0, 0 });
     return @bitCast(r);
 }
 

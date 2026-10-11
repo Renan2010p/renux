@@ -65,13 +65,11 @@ fn readLine(buf: []u8) usize {
     while (true) {
         const c: u8 = getchar();
         if (c == '\r' or c == '\n') {
-            putchar('\n');
             return len;
         }
         if (c == 0x7f or c == 0x08) {
             if (len > 0) {
                 len -= 1;
-                printf("\x08 \x08", .{});
             }
             continue;
         }
@@ -81,7 +79,6 @@ fn readLine(buf: []u8) usize {
         if (len < buf.len) {
             buf[len] = c;
             len += 1;
-            putchar(c);
         }
     }
 }

@@ -25,6 +25,8 @@ pub const FileOps: type = struct {
     read: *const fn (f: *File, buf: []u8) isize,
     /// Write `buf` at the file's current offset, advancing it.
     write: *const fn (f: *File, buf: []const u8) isize,
+    /// Handle an ioctl(2) request, if the file supports it.
+    ioctl: ?*const fn (f: *File, cmd: u64, arg: u64) i32 = null,
     /// Fill in `st` for fstat(2).
     stat: *const fn (f: *File, st: *stat.Stat) i32,
     /// Drop the descriptor's reference to the file.

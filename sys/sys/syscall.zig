@@ -18,6 +18,7 @@ pub const SYS_chdir: u64 = 12;
 pub const SYS_lseek: u64 = 19;
 pub const SYS_getpid: u64 = 20;
 pub const SYS_dup: u64 = 41;
+pub const SYS_ioctl: u64 = 54;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;

@@ -164,6 +164,9 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     if (vfs_vnops.vn_mknod("/dev/console", .vchr, 0o600, conf.makedev(0, 0))) |vp| {
         vfs_subr.vrele(vp);
     }
+    if (vfs_vnops.vn_mknod("/dev/tty", .vchr, 0o666, conf.makedev(1, 0))) |vp| {
+        vfs_subr.vrele(vp);
+    }
 
     kern_proc.init();
 

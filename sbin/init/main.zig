@@ -21,7 +21,7 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
     // Attach the console as stdin, stdout and stderr: like the BSD init, open
     // /dev/console and dup2() it onto 0, 1 and 2.
-    const cfd: i64 = libc.syscall.open("/dev/console", 2, 0);
+    const cfd: i64 = libc.syscall.open("/dev/tty", 2, 0);
     if (cfd >= 0) {
         _ = libc.syscall.dup2(@intCast(cfd), 0);
         _ = libc.syscall.dup2(@intCast(cfd), 1);

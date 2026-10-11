@@ -26,6 +26,7 @@ const DevFile: type = struct {
 const dev_ops: file.FileOps = .{
     .read = devRead,
     .write = devWrite,
+    .ioctl = devIoctl,
     .stat = devStat,
     .close = devClose,
 };
@@ -43,6 +44,11 @@ fn devRead(f: *file.File, buf: []u8) isize {
 fn devWrite(f: *file.File, buf: []const u8) isize {
     const df: *DevFile = cast(f);
     return df.cdev.write(df.ctx, buf);
+}
+
+fn devIoctl(f: *file.File, cmd: u64, arg: u64) i32 {
+    const df: *DevFile = cast(f);
+    return df.cdev.ioctl(df.ctx, cmd, arg);
 }
 
 fn devStat(f: *file.File, st: *stat.Stat) i32 {
