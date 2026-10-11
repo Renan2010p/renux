@@ -10,6 +10,7 @@
 
 const pic: type = @import("i8259.zig");
 const defs: type = @import("../include/intrdefs.zig");
+const sysinit: type = @import("../../../sys/sysinit.zig");
 
 /// An interrupt handler. Runs in interrupt context.
 pub const Handler: type = *const fn () void;
@@ -63,4 +64,12 @@ pub fn dispatch(vector: u64) void {
     if (defs.isPicVector(vector)) {
         pic.eoi(v);
     }
+}
+
+fn intrInit(_: ?*const anyopaque) callconv(.c) void {
+    init();
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_intr", sysinit.SI_SUB_INTR, sysinit.SI_ORDER_FIRST, intrInit, null);
 }

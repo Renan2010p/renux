@@ -15,6 +15,7 @@ const intr: type = @import("../x86/intr.zig");
 const intrdefs: type = @import("../include/intrdefs.zig");
 const pic: type = @import("../x86/i8259.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
+const sysinit: type = @import("../../../sys/sysinit.zig");
 
 /// Tick rate in Hz.
 pub const HZ: u32 = 100;
@@ -47,4 +48,12 @@ fn tick() void {
     if (ticks % HZ == 0) {
         prf.print(".");
     }
+}
+
+fn clockInit(_: ?*const anyopaque) callconv(.c) void {
+    init();
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_clock", sysinit.SI_SUB_CLOCKS, sysinit.SI_ORDER_FIRST, clockInit, null);
 }

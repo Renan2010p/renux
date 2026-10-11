@@ -16,4 +16,5 @@ pub const panic = std.debug.FullPanic(@import("kern/subr_prf.zig").panic);
 comptime {
     _ = @import("arch/arch.zig");
     _ = @import("kern/init_main.zig");
+    _ = @import("uvm/uvm_init.zig");
 }

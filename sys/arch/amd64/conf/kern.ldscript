@@ -81,6 +81,14 @@ SECTIONS
 		KEEP(*(.limine_requests_start))
 		KEEP(*(.limine_requests))
 		KEEP(*(.limine_requests_end))
+		/*
+		 * SYSINIT linker set: subsystem initialisers, sorted at boot by
+		 * mi_startup().
+		 */
+		. = ALIGN(8);
+		__start_set_sysinit_set = .;
+		KEEP(*(set_sysinit_set))
+		__stop_set_sysinit_set = .;
 		. = ALIGN(__PAGE_SIZE);
 		__data_end = .;
 	}
