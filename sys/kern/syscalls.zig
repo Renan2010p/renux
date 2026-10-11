@@ -22,6 +22,7 @@ const kern_signal: type = @import("kern_signal.zig");
 const kern_time: type = @import("kern_time.zig");
 const kern_prot: type = @import("kern_prot.zig");
 const vfs_syscalls: type = @import("vfs_syscalls.zig");
+const arch_sysarch: type = @import("../arch/arch.zig");
 const sys_generic: type = @import("sys_generic.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
 const uvm_mmap: type = @import("../uvm/uvm_mmap.zig");
@@ -112,6 +113,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_munmap, .handler = uvm_mmap.sysMunmap },
     .{ .num = sys.SYS_mprotect, .handler = uvm_mmap.sysMprotect },
     .{ .num = sys.SYS_issetugid, .handler = kern_prot.sysIssetugid },
+    .{ .num = sys.SYS_sysarch, .handler = arch_sysarch.sysarch.sysSysarch },
     .{ .num = sys.SYS_sigprocmask, .handler = kern_signal.sysSigprocmask },
     .{ .num = sys.SYS_gettimeofday, .handler = kern_time.sysGettimeofday },
     .{ .num = sys.SYS_lseek, .handler = sys_generic.sysLseek },

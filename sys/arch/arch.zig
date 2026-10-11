@@ -46,6 +46,9 @@ pub const swtch: type = machdep_impl.swtch;
 /// Machine-dependent `syscall` instruction entry.
 pub const syscall_entry: type = machdep_impl.syscall_entry;
 
+/// Machine-dependent sysarch(2) requests.
+pub const sysarch: type = machdep_impl.sysarch;
+
 /// Machine-dependent trap frame layout.
 pub const trapframe: type = machdep_impl.trapframe;
 

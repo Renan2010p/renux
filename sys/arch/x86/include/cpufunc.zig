@@ -116,3 +116,38 @@ pub fn enable_interrupts() void {
 pub fn disable_interrupts() void {
     asm volatile ("cli");
 }
+
+fn rdmsr(msr: u32) u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdmsr"
+        : [lo] "={eax}" (lo),
+          [hi] "={edx}" (hi),
+        : [msr] "{ecx}" (msr),
+    );
+    return (@as(u64, hi) << 32) | lo;
+}
+
+fn wrmsr(msr: u32, value: u64) void {
+    const lo: u32 = @truncate(value);
+    const hi: u32 = @truncate(value >> 32);
+    asm volatile ("wrmsr"
+        :
+        : [lo] "{eax}" (lo),
+          [hi] "{edx}" (hi),
+          [msr] "{ecx}" (msr),
+    );
+}
+
+/// IA32_FS_BASE: the base of the FS segment (the thread pointer).
+const MSR_FS_BASE: u32 = 0xc000_0100;
+
+/// Set the FS base (used for thread-local storage).
+pub fn setFsBase(base: u64) void {
+    wrmsr(MSR_FS_BASE, base);
+}
+
+/// The current FS base.
+pub fn fsBase() u64 {
+    return rdmsr(MSR_FS_BASE);
+}
