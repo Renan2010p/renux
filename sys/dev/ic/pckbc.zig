@@ -72,7 +72,6 @@ fn writeData(data: u8) void {
 /// Bring up the controller for the keyboard.
 pub fn init() void {
     flush();
-    writeCmd(CMD_ENABLE_AUX);
     writeCmd(CMD_ENABLE_KBD);
 
     // Enable the keyboard interrupt (config bit 0), keeping scan code

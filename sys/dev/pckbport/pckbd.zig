@@ -20,11 +20,18 @@ const SC_RSHIFT: u8 = 0x36;
 
 var shift_down: bool = false;
 
-/// IRQ 1 handler: consume every pending scan code.
+/// IRQ 1 handler: consume every pending scan code. The status register is read
+/// once per byte: it describes the byte about to be read, so the mouse/AUX bit
+/// must be tested before consuming it (otherwise a mouse byte is mistaken for a
+/// scan code).
 fn handler() void {
-    while ((pckbc.status() & pckbc.STATUS_OUTPUT_FULL) != 0) {
+    while (true) {
+        const st: u8 = pckbc.status();
+        if ((st & pckbc.STATUS_OUTPUT_FULL) == 0) {
+            break;
+        }
         const scancode: u8 = pckbc.readData();
-        if ((pckbc.status() & pckbc.STATUS_AUX) != 0) {
+        if ((st & pckbc.STATUS_AUX) != 0) {
             continue; // mouse byte; not for us
         }
 
