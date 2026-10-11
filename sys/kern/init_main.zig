@@ -200,7 +200,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
         return;
     };
 
-    const result = kern_exec.loadInto(null, init.pmap, "/sbin/init") orelse {
+    const result = kern_exec.loadInto(null, init.pmap, "/sbin/init", 0) orelse {
         prf.printLine("init: cannot load /sbin/init");
         return;
     };
@@ -219,7 +219,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     // Build init's initial argument block: argv = ["/sbin/init"], envp empty.
     const args: []const []const u8 = &.{"/sbin/init"};
     const env: []const []const u8 = &.{};
-    const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env) orelse {
+    const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env, &.{}) orelse {
         prf.printLine("init: cannot build stack");
         return;
     };

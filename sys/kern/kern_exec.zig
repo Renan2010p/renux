@@ -27,6 +27,27 @@ const param: type = @import("../sys/param.zig");
 /// Maximum number of arguments or environment strings execve() accepts.
 pub const MAXARG: usize = 32;
 
+/// Base address at which a PT_INTERP interpreter (a dynamic linker) is mapped.
+const INTERP_BASE: u64 = 0x0000_0000_2000_0000;
+
+/// One aux-vector entry.
+pub const AuxPair: type = struct {
+    type: u64,
+    val: u64,
+};
+
+// Aux-vector types (ELF).
+const AT_PHDR: u64 = 3;
+const AT_PHENT: u64 = 4;
+const AT_PHNUM: u64 = 5;
+const AT_PAGESZ: u64 = 6;
+const AT_BASE: u64 = 7;
+const AT_ENTRY: u64 = 9;
+const AT_UID: u64 = 11;
+const AT_EUID: u64 = 12;
+const AT_GID: u64 = 13;
+const AT_EGID: u64 = 14;
+
 /// Where the new process's stack and argument block live, once built.
 pub const StartInfo: type = struct {
     /// Initial stack pointer (points at argc).
@@ -50,9 +71,9 @@ fn vnodeRead(ctx: *anyopaque, offset: u64, buf: []u8) usize {
 }
 
 /// Load the program at `path` (relative to `start`, or absolute) into page map
-/// `pmap`. Returns null when the path cannot be resolved, opened or
-/// interpreted.
-pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8) ?exec_elf.Result {
+/// `pmap`, at link address + `base`. Returns null when the path cannot be
+/// resolved, opened or interpreted.
+pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8, base: u64) ?exec_elf.Result {
     const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return null;
 
     var vap: vnode.Vattr = .{
@@ -73,7 +94,7 @@ pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8) ?e
     }
 
     const src: exec_elf.Source = .{ .ctx = vp, .size = size, .read = vnodeRead };
-    const result: ?exec_elf.Result = exec_elf.load(pmap, src);
+    const result: ?exec_elf.Result = exec_elf.load(pmap, src, base);
     vfs_subr.vrele(vp);
     return result;
 }
@@ -143,7 +164,7 @@ fn putU64(pmap: arch.pmap.Pmap, va: u64, value: u64) bool {
 /// Build the initial stack in `pmap` for `argv`/`envp`: the strings first, from
 /// the top down, then the pointer vectors and argc below them. Returns where
 /// the process should start, or null on failure.
-pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const []const u8) ?StartInfo {
+pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const []const u8, auxv: []const AuxPair) ?StartInfo {
     if (argv.len > MAXARG or envp.len > MAXARG) {
         return null;
     }
@@ -173,8 +194,9 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
         envp_va[i] = sp;
     }
 
-    // argc, then argv (NUL-terminated), then envp (NUL-terminated).
-    const entries: u64 = 1 + @as(u64, argv.len + 1) + @as(u64, envp.len + 1);
+    // argc, then argv (NUL-terminated), then envp (NUL-terminated), then the
+    // aux vector (pairs terminated by AT_NULL).
+    const entries: u64 = 1 + @as(u64, argv.len + 1) + @as(u64, envp.len + 1) + @as(u64, auxv.len * 2) + 2;
     var base: u64 = sp - entries * 8;
     base &= ~@as(u64, 15); // 16-byte aligned
     base -= 8; // leave rsp so that rsp % 16 == 8 at entry, and argv 8-aligned
@@ -196,6 +218,17 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
         cursor += 8;
     }
     if (!putU64(pmap, cursor, 0)) return null; // envp terminator
+    cursor += 8;
+
+    for (auxv) |pair| {
+        if (!putU64(pmap, cursor, pair.type)) return null;
+        cursor += 8;
+        if (!putU64(pmap, cursor, pair.val)) return null;
+        cursor += 8;
+    }
+    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL
+    cursor += 8;
+    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL value
 
     return .{
         .rsp = base,
@@ -319,16 +352,52 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     }
 
     const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -1;
-    const loaded: exec_elf.Result = loadInto(p.cwd, newmap, exe_path) orelse return -1;
+    const main: exec_elf.Result = loadInto(p.cwd, newmap, exe_path, 0) orelse return -1;
     if (!mapStack(newmap)) {
         return -1;
     }
     if (!mapTrampoline(newmap)) {
         return -1;
     }
-    const info: StartInfo = buildStack(newmap, final[0..final_argc], envbuf[0..envc]) orelse return -1;
 
-    p.brk = loaded.brk;
+    // A PT_INTERP image is a dynamic executable: load the interpreter (the
+    // dynamic linker) and enter it, passing the main program's details in the
+    // aux vector.
+    var entry: u64 = main.entry;
+    var interp_base: u64 = 0;
+    if (main.interp_len > 0) {
+        const ipath: []const u8 = main.interp[0..main.interp_len];
+        const interp_res: exec_elf.Result = loadInto(p.cwd, newmap, ipath, INTERP_BASE) orelse return -1;
+        entry = interp_res.entry;
+        interp_base = INTERP_BASE;
+    }
+
+    var auxv: [12]AuxPair = undefined;
+    var an: usize = 0;
+    auxv[an] = .{ .type = AT_PAGESZ, .val = param.PAGE_SIZE };
+    an += 1;
+    auxv[an] = .{ .type = AT_PHDR, .val = main.phdr };
+    an += 1;
+    auxv[an] = .{ .type = AT_PHENT, .val = main.phentsize };
+    an += 1;
+    auxv[an] = .{ .type = AT_PHNUM, .val = main.phnum };
+    an += 1;
+    auxv[an] = .{ .type = AT_ENTRY, .val = main.entry };
+    an += 1;
+    auxv[an] = .{ .type = AT_BASE, .val = interp_base };
+    an += 1;
+    auxv[an] = .{ .type = AT_UID, .val = p.uid };
+    an += 1;
+    auxv[an] = .{ .type = AT_EUID, .val = p.uid };
+    an += 1;
+    auxv[an] = .{ .type = AT_GID, .val = p.uid };
+    an += 1;
+    auxv[an] = .{ .type = AT_EGID, .val = p.uid };
+    an += 1;
+
+    const info: StartInfo = buildStack(newmap, final[0..final_argc], envbuf[0..envc], auxv[0..an]) orelse return -1;
+
+    p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;
 
     // Caught signals revert to their default action across exec.
@@ -341,7 +410,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     arch.pmap.activate(newmap);
     p.pmap = newmap;
 
-    frame.rip = loaded.entry;
+    frame.rip = entry;
     frame.rsp = info.rsp;
     frame.rdi = info.argc;
     frame.rsi = info.argv;

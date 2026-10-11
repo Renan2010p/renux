@@ -38,7 +38,18 @@ pub const Result: type = struct {
     /// First free virtual address after the loaded segments (the initial
     /// program break).
     brk: u64,
+    /// Virtual address of the program headers (for AT_PHDR).
+    phdr: u64,
+    /// Number and size of the program headers.
+    phnum: u16,
+    phentsize: u16,
+    /// The PT_INTERP path, when the image has one (a dynamic executable).
+    interp: [MAXINTERP]u8,
+    interp_len: usize,
 };
+
+/// Longest interpreter path we accept from PT_INTERP.
+pub const MAXINTERP: usize = 256;
 
 /// Read exactly `buf.len` bytes, or fewer only at end of file.
 fn readFull(src: Source, offset: u64, buf: []u8) usize {
@@ -74,10 +85,12 @@ fn protFor(flags: u32) arch.pmap.Prot {
     return .user_ro;
 }
 
-/// Map one PT_LOAD segment and copy its file-backed bytes.
-fn loadSegment(pmap: arch.pmap.Pmap, src: Source, ph: *const elf.Phdr, hhdm: u64) bool {
-    const vstart: u64 = ph.p_vaddr & ~param.PAGE_MASK;
-    const vend: u64 = param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
+/// Map one PT_LOAD segment and copy its file-backed bytes. Every virtual
+/// address is offset by `base` (zero for an ET_EXEC image).
+fn loadSegment(pmap: arch.pmap.Pmap, src: Source, ph: *const elf.Phdr, hhdm: u64, base: u64) bool {
+    const vstart: u64 = base + (ph.p_vaddr & ~param.PAGE_MASK);
+    const vend: u64 = base + param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
+    const file_vaddr: u64 = base + ph.p_vaddr;
     const prot: arch.pmap.Prot = protFor(ph.p_flags);
 
     // Allocate and map every page the segment occupies (zero-filled).
@@ -99,7 +112,7 @@ fn loadSegment(pmap: arch.pmap.Pmap, src: Source, ph: *const elf.Phdr, hhdm: u64
         }
         var k: usize = 0;
         while (k < got) : (k += 1) {
-            const dst_pa: u64 = arch.pmap.extract(pmap, ph.p_vaddr + skip + k) orelse return false;
+            const dst_pa: u64 = arch.pmap.extract(pmap, file_vaddr + skip + k) orelse return false;
             const dst: *u8 = @ptrFromInt(dst_pa + hhdm);
             dst.* = buf[k];
         }
@@ -108,8 +121,11 @@ fn loadSegment(pmap: arch.pmap.Pmap, src: Source, ph: *const elf.Phdr, hhdm: u64
     return true;
 }
 
-/// Load an ELF64 executable image into page map `pmap`.
-pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
+/// Load an ELF64 image into page map `pmap`, placing its segments at `base`
+/// plus their link-time addresses (`base` is zero for an ET_EXEC image). Accepts
+/// ET_EXEC and ET_DYN (a PIE or the interpreter), and reports a PT_INTERP
+/// interpreter when the image has one.
+pub fn load(pmap: arch.pmap.Pmap, src: Source, base: u64) ?Result {
     var ehdr: elf.Ehdr = undefined;
     const ehdr_bytes: [*]u8 = @ptrCast(&ehdr);
     if (readFull(src, 0, ehdr_bytes[0..@sizeOf(elf.Ehdr)]) != @sizeOf(elf.Ehdr)) {
@@ -123,7 +139,10 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
     if (ehdr.e_ident[7] == elf.ELFOSABI_FREEBSD) {
         prf.printLine("exec: FreeBSD-branded ELF");
     }
-    if (ehdr.e_type != elf.ET_EXEC or ehdr.e_machine != elf.EM_X86_64) {
+    if (ehdr.e_type != elf.ET_EXEC and ehdr.e_type != elf.ET_DYN) {
+        return null;
+    }
+    if (ehdr.e_machine != elf.EM_X86_64) {
         return null;
     }
     if (ehdr.e_phentsize != @sizeOf(elf.Phdr)) {
@@ -133,6 +152,10 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
 
     var max_end: u64 = 0;
+    var phdr: u64 = 0;
+    var interp_buf: [MAXINTERP]u8 = undefined;
+    var interp_len: usize = 0;
+
     var i: u16 = 0;
     while (i < ehdr.e_phnum) : (i += 1) {
         var ph: elf.Phdr = undefined;
@@ -142,16 +165,35 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
             return null;
         }
         if (ph.p_type == elf.PT_LOAD) {
-            const vend: u64 = param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
+            const vend: u64 = base + param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
             if (vend > max_end) {
                 max_end = vend;
             }
-            if (!loadSegment(pmap, src, &ph, hhdm)) {
+            // The program headers are inside this segment when e_phoff falls in
+            // its file range.
+            if (ph.p_offset <= ehdr.e_phoff and ehdr.e_phoff < ph.p_offset + ph.p_filesz) {
+                phdr = base + ph.p_vaddr + (ehdr.e_phoff - ph.p_offset);
+            }
+            if (!loadSegment(pmap, src, &ph, hhdm, base)) {
                 prf.printLine("exec_elf: out of memory");
                 return null;
             }
+        } else if (ph.p_type == elf.PT_INTERP) {
+            const n: usize = if (ph.p_filesz > MAXINTERP) MAXINTERP else @intCast(ph.p_filesz);
+            const got: usize = readFull(src, ph.p_offset, interp_buf[0..n]);
+            var l: usize = got;
+            while (l > 0 and interp_buf[l - 1] == 0) l -= 1;
+            interp_len = l;
         }
     }
 
-    return .{ .entry = ehdr.e_entry, .brk = max_end };
+    return .{
+        .entry = base + ehdr.e_entry,
+        .brk = max_end,
+        .phdr = phdr,
+        .phnum = ehdr.e_phnum,
+        .phentsize = ehdr.e_phentsize,
+        .interp = interp_buf,
+        .interp_len = interp_len,
+    };
 }
