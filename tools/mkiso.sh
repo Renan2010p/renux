@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 The Renux Project
 #
 # Build a hybrid BIOS/UEFI bootable ISO for Renux/amd64.
@@ -49,6 +49,8 @@ RTLD_SO="${RTLD_SO:-$ROOT/libexec/rtld-elf/zig-out/ld-elf.so.1}"
 LIBC_SO="${LIBC_SO:-$ROOT/lib/zig-out/libc.so.1}"
 DYNH="${DYNH:-$ROOT/examples/dynhello/zig-out/dynhello}"
 RC="${RC:-$ROOT/etc/rc}"
+# Optional: a real FreeBSD binary to include as /bin/rescue (bring-up testing).
+RESCUE="${RESCUE:-}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
@@ -106,6 +108,12 @@ cp "$ROOT/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
 cp "$RTLD_SO" "$WORK/libexec/ld-elf.so.1"
 cp "$LIBC_SO" "$WORK/lib/libc.so.1"
 cp "$DYNH" "$WORK/bin/dynhello"
+
+# A real FreeBSD static binary (optional): include it and register the module.
+if [ -n "$RESCUE" ] && [ -f "$RESCUE" ]; then
+    cp "$RESCUE" "$WORK/bin/rescue"
+    sed -i '/cmdline:/i\    module_path: boot():/bin/rescue' "$WORK/limine.conf"
+fi
 
 xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \

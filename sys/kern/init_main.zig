@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
 // Kernel main: system startup.
@@ -234,11 +234,11 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.frame.r10 = 0;
     init.frame.r9 = 0;
     init.frame.r8 = 0;
-    init.frame.rdi = info.argc;
-    init.frame.rsi = info.argv;
+    init.frame.rdi = info.rsp; // FreeBSD entry: %rdi points at argc
+    init.frame.rsi = 0;
     init.frame.rbp = 0;
     init.frame.rbx = 0;
-    init.frame.rdx = info.envp;
+    init.frame.rdx = 0;
     init.frame.rcx = 0;
     init.frame.rax = 0;
     init.frame.vector = 0;

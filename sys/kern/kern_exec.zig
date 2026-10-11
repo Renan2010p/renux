@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
 // exec(): load an executable image.
@@ -414,18 +414,13 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
 
     frame.rip = entry;
     frame.rsp = info.rsp;
-    if (main.interp_len > 0) {
-        // A PT_INTERP image is entered through the dynamic linker, whose
-        // startup (rtld_start.S / _rtld) takes the initial stack pointer in
-        // %rdi, pointing at argc.  The linker passes it on to the program.
-        frame.rdi = info.rsp;
-        frame.rsi = 0;
-        frame.rdx = 0;
-    } else {
-        frame.rdi = info.argc;
-        frame.rsi = info.argv;
-        frame.rdx = info.envp;
-    }
+    // FreeBSD process-entry convention: %rdi points at argc on the initial
+    // stack (both crt1 and the interpreter's rtld_start read it from there).
+    // %rsi carries the cleanup/rtld_fini pointer (none here) and %rdx is
+    // unused; the program derives argv and envp from the stack.
+    frame.rdi = info.rsp;
+    frame.rsi = 0;
+    frame.rdx = 0;
     frame.rax = 0;
     return 0;
 }
