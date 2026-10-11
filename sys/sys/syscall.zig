@@ -3,8 +3,13 @@
 //
 // System call numbers.
 //
+// ZenBSD follows the FreeBSD x86-64 system call ABI, so programs built for
+// FreeBSD run unchanged: the numbers below are FreeBSD's, the call is made with
+// the `syscall` instruction and an error is reported by setting the carry flag
+// with the errno in rax. (The legacy int 0x80 entry remains for bring-up.)
+//
 // NetBSD and FreeBSD both generate this from syscalls.master; ZenBSD lists the
-// handful it implements today by hand. Numbers match the historical BSD values.
+// calls it implements.
 
 pub const SYS_exit: u64 = 1;
 pub const SYS_fork: u64 = 2;
@@ -15,21 +20,24 @@ pub const SYS_close: u64 = 6;
 pub const SYS_wait4: u64 = 7;
 pub const SYS_unlink: u64 = 10;
 pub const SYS_chdir: u64 = 12;
+pub const SYS_brk: u64 = 17;
 pub const SYS_lseek: u64 = 19;
 pub const SYS_getpid: u64 = 20;
+pub const SYS_kill: u64 = 37;
 pub const SYS_dup: u64 = 41;
+pub const SYS_sigaction: u64 = 416;
+pub const SYS_sigprocmask: u64 = 340;
 pub const SYS_ioctl: u64 = 54;
 pub const SYS_execve: u64 = 59;
-pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;
-pub const SYS_kill: u64 = 37;
-pub const SYS_sigaction: u64 = 46;
 pub const SYS_mkdir: u64 = 136;
 pub const SYS_rmdir: u64 = 137;
 pub const SYS_stat: u64 = 188;
-pub const SYS_getdents: u64 = 390;
-pub const SYS_getcwd: u64 = 418;
+pub const SYS_fstat: u64 = 189;
+pub const SYS_getdents: u64 = 272;
+pub const SYS_getcwd: u64 = 326;
 pub const SYS_sigreturn: u64 = 417;
+pub const SYS_mmap: u64 = 477;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;

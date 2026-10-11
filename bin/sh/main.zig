@@ -83,33 +83,29 @@ fn readLine(buf: []u8) usize {
     }
 }
 
-/// Run `name` with arguments `rest` as an external program from /bin via
-/// fork + execve + wait. Arguments are split on spaces.
+/// Run `name` with arguments `rest` as an external program found in /bin or
+/// /usr/bin, via fork + execve + wait. Arguments are split on spaces.
 fn runExternal(name: []const u8, rest: []const u8) void {
-    const prefix: []const u8 = "/bin/";
-    if (prefix.len + name.len + 1 > MAX_NAME) {
+    if (name.len + 1 > MAX_NAME) {
         puts("sh: command name too long");
         return;
     }
 
-    var path: [MAX_NAME]u8 = undefined;
-    var i: usize = 0;
-    while (i < prefix.len) : (i += 1) {
-        path[i] = prefix[i];
-    }
-    var j: usize = 0;
-    while (j < name.len) : (j += 1) {
-        path[i + j] = name[j];
-    }
-    path[i + name.len] = 0;
-
-    // Split the argument text into NUL-terminated words.
     var store: [MAX_LINE]u8 = undefined;
     var av: [MAX_ARGS + 1]?[*:0]const u8 = undefined;
     var argc: usize = 0;
-    av[argc] = @ptrCast(&path[0]);
+
+    // argv[0] is a NUL-terminated copy of the command name.
+    var nbuf: [MAX_NAME]u8 = undefined;
+    var i: usize = 0;
+    while (i < name.len) : (i += 1) {
+        nbuf[i] = name[i];
+    }
+    nbuf[name.len] = 0;
+    av[argc] = @ptrCast(&nbuf[0]);
     argc += 1;
 
+    // Split the argument text into NUL-terminated words.
     var ai: usize = 0;
     var aj: usize = 0;
     while (ai < rest.len and argc < MAX_ARGS) {
@@ -134,7 +130,8 @@ fn runExternal(name: []const u8, rest: []const u8) void {
 
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {
-        _ = libc.syscall.execve(@ptrCast(&path[0]), @ptrCast(&av), @ptrCast(&ep));
+        tryExec("/bin", name, @ptrCast(&av), @ptrCast(&ep));
+        tryExec("/usr/bin", name, @ptrCast(&av), @ptrCast(&ep));
         printf("sh: %s: not found\n", .{name});
         libc.syscall.exit(127);
     } else if (pid > 0) {
@@ -142,6 +139,26 @@ fn runExternal(name: []const u8, rest: []const u8) void {
     } else {
         puts("sh: fork failed");
     }
+}
+
+/// execve `dir/name`; returns only on failure.
+fn tryExec(dir: []const u8, name: []const u8, av: [*]?[*:0]const u8, ep: [*]?[*:0]const u8) void {
+    if (dir.len + 1 + name.len + 1 > MAX_PATH) {
+        return;
+    }
+    var pb: [MAX_PATH]u8 = undefined;
+    var i: usize = 0;
+    while (i < dir.len) : (i += 1) {
+        pb[i] = dir[i];
+    }
+    pb[i] = '/';
+    i += 1;
+    var j: usize = 0;
+    while (j < name.len) : (j += 1) {
+        pb[i + j] = name[j];
+    }
+    pb[i + name.len] = 0;
+    _ = libc.syscall.execve(@ptrCast(&pb[0]), av, ep);
 }
 
 fn execute(line: []const u8) void {
