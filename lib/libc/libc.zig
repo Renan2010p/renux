@@ -9,4 +9,4 @@
 // import it by name ("libc"), the same way the kernel imports "limine".
 
 pub const syscall: type = @import("sys/syscall.zig");
-pub const stdio: type = @import("stdio/printf.zig");
+pub const stdio: type = @import("stdio/stdio.zig");

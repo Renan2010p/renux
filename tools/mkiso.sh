@@ -22,6 +22,7 @@ LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
 OUT="${OUT:-$SYS/zig-out/zenbsd.iso}"
 WORK="${WORK:-$SYS/zig-out/iso}"
 INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
+SH="${SH:-$ROOT/sbin/zig-out/bin/sh}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
@@ -32,8 +33,8 @@ fi
     exit 1
 }
 
-# Build the userland (/sbin/init) if it is not present yet.
-if [ ! -f "$INIT" ]; then
+# Build the userland if it is not present yet.
+if [ ! -f "$INIT" ] || [ ! -f "$SH" ]; then
     ( cd "$ROOT/sbin" && zig build )
 fi
 
@@ -50,6 +51,7 @@ cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
 cp "$CONF" "$WORK/limine.conf"
 cp "$KERNEL" "$WORK/boot/zenbsd/kernel"
 cp "$INIT" "$WORK/sbin/init"
+cp "$SH" "$WORK/sbin/sh"
 
 xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \

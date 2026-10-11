@@ -32,6 +32,7 @@ const LCR_8N1: u8 = 0x03;
 const FCR_ENABLE_CLEAR: u8 = 0xc7;
 const MCR_DTR_RTS: u8 = 0x03;
 const LSR_THRE: u8 = 0x20; // transmitter holding register empty
+const LSR_RXRDY: u8 = 0x01; // receiver data ready
 
 /// The port the driver is currently attached to. Valid after init().
 var attached: Port = undefined;
@@ -76,7 +77,17 @@ pub fn putc(c: u8) void {
     writeReg(REG_DATA, c);
 }
 
-/// The console descriptor for this driver, for cons.cn_set_tab().
+/// The console descriptor for this driver, for cons.cn_attach().
 pub fn console() cons.Console {
-    return .{ .putc = putc };
+    return .{ .putc = putc, .getc = getc };
+}
+
+fn receiverReady() bool {
+    return (readReg(REG_LSR) & LSR_RXRDY) != 0;
+}
+
+/// Receive one character, blocking until one is available.
+pub fn getc() u8 {
+    while (!receiverReady()) {}
+    return readReg(REG_DATA);
 }

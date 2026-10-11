@@ -39,8 +39,18 @@ fn sysWrite(args: [sys.MAXARGS]u64) u64 {
 }
 
 fn sysRead(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
-    return 0; // EOF; nobody feeds the console yet
+    const fd: u64 = args[0];
+    const buf: u64 = args[1];
+    const count: u64 = args[2];
+    if (fd != 0 or count == 0) {
+        return 0;
+    }
+    // Raw input: block for one character. The user pages share the page tables
+    // with the kernel, so the buffer is written through its virtual address.
+    const c: u8 = cons.cngetc();
+    const dst: [*]u8 = @ptrFromInt(buf);
+    dst[0] = c;
+    return 1;
 }
 
 fn sysExit(args: [sys.MAXARGS]u64) u64 {

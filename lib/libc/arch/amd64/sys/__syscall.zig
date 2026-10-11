@@ -25,6 +25,5 @@ pub fn syscall(
           [a3] "{r10}" (a3),
           [a4] "{r8}" (a4),
           [a5] "{r9}" (a5),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }

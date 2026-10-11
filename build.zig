@@ -22,15 +22,10 @@
 const std: type = @import("std");
 const Builder: type = std.Build;
 
-/// The running zig executable, used to invoke the sub-builds.
-fn zig(b: *Builder) []const u8 {
-    return b.graph.zig_exe;
-}
-
 pub fn build(b: *Builder) !void {
     // zig build buildkernel: run sys/build.zig, then collect the kernel image.
     const buildkernel_step: *Builder.Step = b.step("buildkernel", "Build the ZenBSD kernel");
-    const buildkernel: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    const buildkernel: *Builder.Step.Run = b.addSystemCommand(&.{ b.graph.zig_exe, "build" });
     buildkernel.setCwd(b.path("sys"));
 
     const install_kernel: *Builder.Step.InstallFile =
@@ -40,13 +35,13 @@ pub fn build(b: *Builder) !void {
 
     // zig build buildlib: the C library (lib/).
     const buildlib_step: *Builder.Step = b.step("buildlib", "Build the ZenBSD C library");
-    const buildlib: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    const buildlib: *Builder.Step.Run = b.addSystemCommand(&.{ b.graph.zig_exe, "build" });
     buildlib.setCwd(b.path("lib"));
     buildlib_step.dependOn(&buildlib.step);
 
     // zig build builduserland: run sbin/build.zig, then collect init.
     const builduserland_step: *Builder.Step = b.step("builduserland", "Build the ZenBSD userland");
-    const builduserland: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    const builduserland: *Builder.Step.Run = b.addSystemCommand(&.{ b.graph.zig_exe, "build" });
     builduserland.setCwd(b.path("sbin"));
 
     const install_init: *Builder.Step.InstallFile =
@@ -57,7 +52,7 @@ pub fn build(b: *Builder) !void {
     // zig build iso: run sys' iso target (which builds the kernel) and collect
     // the image.
     const iso_step: *Builder.Step = b.step("iso", "Build a bootable ZenBSD ISO image");
-    const iso: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "iso" });
+    const iso: *Builder.Step.Run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "iso" });
     iso.setCwd(b.path("sys"));
     iso.step.dependOn(&install_kernel.step);
     iso.step.dependOn(&install_init.step);
@@ -69,7 +64,7 @@ pub fn build(b: *Builder) !void {
 
     // zig build run: boot the ISO in QEMU (sys' run target builds it first).
     const run_step: *Builder.Step = b.step("run", "Boot ZenBSD in QEMU");
-    const run: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "run" });
+    const run: *Builder.Step.Run = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "run" });
     run.setCwd(b.path("sys"));
     run.step.dependOn(&builduserland.step);
     run_step.dependOn(&run.step);

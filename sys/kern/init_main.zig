@@ -124,7 +124,9 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     prf.printHex(result.entry);
     prf.printLine("");
 
-    arch.locore.enterUser(result.entry, arch.vmparam.USER_STACK_TOP);
+    // The SysV ABI expects rsp % 16 == 8 at function entry (a call has pushed
+    // the return address). iretq pushes no such word, so bias the stack by 8.
+    arch.locore.enterUser(result.entry, arch.vmparam.USER_STACK_TOP - 8);
 }
 
 comptime {
