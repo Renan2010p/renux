@@ -118,6 +118,11 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
     if (!isElfBytes(ehdr_bytes[0..@sizeOf(elf.Ehdr)])) {
         return null;
     }
+    // Accept FreeBSD-branded images (e_ident[EI_OSABI] == ELFOSABI_FREEBSD), so
+    // a binary built for FreeBSD loads here.
+    if (ehdr.e_ident[7] == elf.ELFOSABI_FREEBSD) {
+        prf.printLine("exec: FreeBSD-branded ELF");
+    }
     if (ehdr.e_type != elf.ET_EXEC or ehdr.e_machine != elf.EM_X86_64) {
         return null;
     }

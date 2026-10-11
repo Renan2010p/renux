@@ -21,3 +21,9 @@ pub fn sysSetuid(args: [sys.MAXARGS]u64) u64 {
     kern_proc.current.uid = @truncate(args[0]);
     return 0;
 }
+
+/// issetugid(2): whether the process is setuid/gid. Never, so far.
+pub fn sysIssetugid(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}

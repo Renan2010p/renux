@@ -77,3 +77,9 @@ pub fn sysMunmap(args: [sys.MAXARGS]u64) u64 {
     _ = args;
     return 0;
 }
+
+/// mprotect(2): protection changes are not tracked yet; report success.
+pub fn sysMprotect(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}

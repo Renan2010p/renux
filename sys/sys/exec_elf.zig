@@ -10,6 +10,10 @@
 /// ELF magic, the first four bytes of e_ident.
 pub const ELFMAG: [4]u8 = .{ 0x7f, 'E', 'L', 'F' };
 
+/// Operating system / ABI identifications (e_ident[EI_OSABI]).
+pub const ELFOSABI_NONE: u8 = 0;
+pub const ELFOSABI_FREEBSD: u8 = 9;
+
 pub const ELFCLASS64: u8 = 2;
 pub const ELFDATA2LSB: u8 = 1;
 

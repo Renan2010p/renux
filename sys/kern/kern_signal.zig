@@ -126,6 +126,23 @@ pub fn sysSigaction(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// sigprocmask(2): get and/or set the blocked-signal mask.
+pub fn sysSigprocmask(args: [sys.MAXARGS]u64) u64 {
+    const set_ptr: u64 = args[1];
+    const oset_ptr: u64 = args[2];
+    const p: *proc.Proc = kern_proc.current;
+
+    if (oset_ptr != 0) {
+        const oset: *u64 = @ptrFromInt(oset_ptr);
+        oset.* = p.sig_mask;
+    }
+    if (set_ptr != 0) {
+        const set: *const u64 = @ptrFromInt(set_ptr);
+        p.sig_mask = set.*;
+    }
+    return 0;
+}
+
 /// sigreturn(2): restore the context a signal handler interrupted.
 pub fn sysSigreturn(args: [sys.MAXARGS]u64) u64 {
     _ = args;
