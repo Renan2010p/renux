@@ -17,7 +17,6 @@ const syscall: type = @import("../../x86/x86/syscall.zig");
 const vector: type = @import("vector.zig");
 const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
-const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
