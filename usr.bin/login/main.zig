@@ -47,7 +47,21 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     var pass: [64]u8 = undefined;
 
     libc.stdio.printf("login: ", .{});
-    _ = readLine(&user);
+    const ulen: usize = readLine(&user);
+
+    // Determine the user id: root, or an ordinary user. Record it so the shell
+    // can pick the right prompt.
+    var is_root: bool = (ulen == 4);
+    if (is_root) {
+        const want: [4]u8 = .{ 'r', 'o', 'o', 't' };
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            if (user[i] != want[i]) {
+                is_root = false;
+            }
+        }
+    }
+    _ = libc.syscall.setuid(if (is_root) 0 else 1000);
 
     // Read the password with echo disabled, then restore the old attributes.
     var old: libc.syscall.Termios = undefined;

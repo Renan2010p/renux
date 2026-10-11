@@ -100,6 +100,18 @@ pub export fn getpid() c_int {
     return syscall.getpid();
 }
 
+pub export fn getuid() c_int {
+    return @intCast(syscall.getuidRaw());
+}
+
+pub export fn setuid(uid: c_int) c_int {
+    const r: i64 = syscall.setuid(@intCast(uid));
+    if (r < 0) {
+        return cerr(r);
+    }
+    return 0;
+}
+
 pub export fn _exit(status: c_int) noreturn {
     syscall.exit(@intCast(status));
 }

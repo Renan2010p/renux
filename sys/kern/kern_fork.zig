@@ -47,6 +47,7 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     }
     child.brk = parent.brk;
     child.mmap_next = parent.mmap_next;
+    child.uid = parent.uid;
 
     // Copy the working-directory path.
     var k: usize = 0;

@@ -56,6 +56,8 @@ pub const Proc: type = struct {
     brk: u64,
     /// Next address anonymous mmap() will hand out.
     mmap_next: u64,
+    /// Real user id.
+    uid: u32,
     /// Pending signal bits.
     sig_pending: u64,
     /// Blocked signal bits.

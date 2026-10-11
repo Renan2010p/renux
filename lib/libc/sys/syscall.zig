@@ -25,6 +25,8 @@ pub const SYS_chdir: u64 = 12;
 pub const SYS_brk: u64 = 17;
 pub const SYS_lseek: u64 = 19;
 pub const SYS_getpid: u64 = 20;
+pub const SYS_setuid: u64 = 23;
+pub const SYS_getuid: u64 = 24;
 pub const SYS_kill: u64 = 37;
 pub const SYS_dup: u64 = 41;
 pub const SYS_ioctl: u64 = 54;
@@ -239,6 +241,17 @@ pub fn ioctl(fd: u64, cmd: u64, arg: u64) i64 {
 /// Set the program break; returns the new break or a negative errno.
 pub fn brkRaw(addr: u64) i64 {
     const r: u64 = syscall(SYS_brk, .{ addr, 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// The real user id.
+pub fn getuidRaw() u32 {
+    return @truncate(syscall(SYS_getuid, .{ 0, 0, 0, 0, 0, 0 }));
+}
+
+/// Set the user id.
+pub fn setuid(uid: u32) i64 {
+    const r: u64 = syscall(SYS_setuid, .{ uid, 0, 0, 0, 0, 0 });
     return @bitCast(r);
 }
 

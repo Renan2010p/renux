@@ -36,6 +36,8 @@ int mkdir(const char *path, int mode);
 int rmdir(const char *path);
 int unlink(const char *path);
 int getpid(void);
+int getuid(void);
+int setuid(int uid);
 void _exit(int status) __attribute__((noreturn));
 int isatty(int fd);
 

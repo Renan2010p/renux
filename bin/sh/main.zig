@@ -245,6 +245,63 @@ fn runScript(path: [*:0]const u8) void {
     _ = libc.syscall.close(@intCast(fd));
 }
 
+/// Append `s` to `buf` at index `n`.
+fn appendStr(buf: []u8, n: *usize, s: []const u8) void {
+    for (s) |c| {
+        if (n.* < buf.len) {
+            buf[n.*] = c;
+            n.* += 1;
+        }
+    }
+}
+
+/// Build the shell prompt: $PS1 if set (with a few escapes), else the FreeBSD
+/// default "# " for root and "$ " for a user.
+fn buildPrompt(buf: []u8) []const u8 {
+    const uid: u32 = libc.syscall.getuidRaw();
+    var n: usize = 0;
+
+    const ps1 = libc.c.getenv("PS1");
+    if (ps1) |p| {
+        var i: usize = 0;
+        while (p[i] != 0) : (i += 1) {
+            if (p[i] != '\\' or p[i + 1] == 0) {
+                if (n < buf.len) {
+                    buf[n] = p[i];
+                    n += 1;
+                }
+                continue;
+            }
+            i += 1;
+            switch (p[i]) {
+                'u' => appendStr(buf, &n, if (uid == 0) "root" else "user"),
+                'h' => appendStr(buf, &n, "renux"),
+                '$' => appendStr(buf, &n, if (uid == 0) "#" else "$"),
+                'w' => {
+                    var cw: [256]u8 = undefined;
+                    if (libc.syscall.getcwd(&cw) == 0) {
+                        var k: usize = 0;
+                        while (cw[k] != 0) : (k += 1) {}
+                        appendStr(buf, &n, cw[0..k]);
+                    }
+                },
+                'n' => appendStr(buf, &n, "\n"),
+                '\\' => appendStr(buf, &n, "\\"),
+                else => {
+                    if (n < buf.len) {
+                        buf[n] = p[i];
+                        n += 1;
+                    }
+                },
+            }
+        }
+        return buf[0..n];
+    }
+
+    appendStr(buf, &n, if (uid == 0) "# " else "$ ");
+    return buf[0..n];
+}
+
 export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
     _ = envp;
 
@@ -261,8 +318,9 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
     puts("Renux sh -- type 'help'");
     var buf: [MAX_LINE]u8 = undefined;
+    var pbuf: [256]u8 = undefined;
     while (true) {
-        printf("renux> ", .{});
+        _ = libc.syscall.write(1, buildPrompt(&pbuf));
         const n: usize = readLine(&buf);
         execute(buf[0..n]);
     }
