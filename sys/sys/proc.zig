@@ -56,6 +56,9 @@ pub const Proc: type = struct {
     brk: u64,
     /// Next address anonymous mmap() will hand out.
     mmap_next: u64,
+    /// Value of the IA32_FS_BASE MSR: the user thread-pointer (TCB). Restored
+    /// by the scheduler on every context switch.
+    fsbase: u64,
     /// Real user id.
     uid: u32,
     /// Pending signal bits.

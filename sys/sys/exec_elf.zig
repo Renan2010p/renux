@@ -28,6 +28,7 @@ pub const EM_X86_64: u16 = 62;
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
 pub const PT_INTERP: u32 = 3;
+pub const PT_TLS: u32 = 7;
 
 /// Program header flags.
 pub const PF_X: u32 = 0x1;

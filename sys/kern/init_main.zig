@@ -258,6 +258,10 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.cwd_len = 1;
     init.brk = result.brk;
     init.mmap_next = param.USER_MMAP_BASE;
+    if (!kern_exec.setupInitialTls(init, init.pmap, result)) {
+        prf.printLine("init: cannot set up initial TLS");
+        return;
+    }
 
     kern_sched.prepareContext(init);
     init.state = .runnable;

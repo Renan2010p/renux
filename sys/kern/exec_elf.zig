@@ -46,6 +46,12 @@ pub const Result: type = struct {
     /// The PT_INTERP path, when the image has one (a dynamic executable).
     interp: [MAXINTERP]u8,
     interp_len: usize,
+    /// PT_TLS: link-time address of the static TLS template, its file and
+    /// memory sizes and its alignment (all zero when there is no PT_TLS).
+    tls_vaddr: u64,
+    tls_filesz: u64,
+    tls_memsz: u64,
+    tls_align: u64,
 };
 
 /// Longest interpreter path we accept from PT_INTERP.
@@ -155,6 +161,10 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source, base: u64) ?Result {
     var phdr: u64 = 0;
     var interp_buf: [MAXINTERP]u8 = undefined;
     var interp_len: usize = 0;
+    var tls_vaddr: u64 = 0;
+    var tls_filesz: u64 = 0;
+    var tls_memsz: u64 = 0;
+    var tls_align: u64 = 0;
 
     var i: u16 = 0;
     while (i < ehdr.e_phnum) : (i += 1) {
@@ -184,6 +194,11 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source, base: u64) ?Result {
             var l: usize = got;
             while (l > 0 and interp_buf[l - 1] == 0) l -= 1;
             interp_len = l;
+        } else if (ph.p_type == elf.PT_TLS) {
+            tls_vaddr = base + ph.p_vaddr;
+            tls_filesz = ph.p_filesz;
+            tls_memsz = ph.p_memsz;
+            tls_align = ph.p_align;
         }
     }
 
@@ -195,5 +210,9 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source, base: u64) ?Result {
         .phentsize = ehdr.e_phentsize,
         .interp = interp_buf,
         .interp_len = interp_len,
+        .tls_vaddr = tls_vaddr,
+        .tls_filesz = tls_filesz,
+        .tls_memsz = tls_memsz,
+        .tls_align = tls_align,
     };
 }

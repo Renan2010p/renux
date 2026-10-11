@@ -21,6 +21,8 @@ const kern_descrip: type = @import("kern_descrip.zig");
 const kern_signal: type = @import("kern_signal.zig");
 const kern_time: type = @import("kern_time.zig");
 const kern_prot: type = @import("kern_prot.zig");
+const kern_sysctl: type = @import("kern_sysctl.zig");
+const kern_resource: type = @import("kern_resource.zig");
 const vfs_syscalls: type = @import("vfs_syscalls.zig");
 const arch_sysarch: type = @import("../arch/arch.zig");
 const sys_generic: type = @import("sys_generic.zig");
@@ -133,10 +135,18 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_getdents, .handler = vfs_syscalls.sysGetdents },
     .{ .num = sys.SYS_getcwd, .handler = vfs_getcwd.sysGetcwd },
     .{ .num = sys.SYS_klog, .handler = sys_generic.sysKlog },
+    .{ .num = sys.SYS___sysctl, .handler = kern_sysctl.sysSysctl },
+    .{ .num = sys.SYS___sysctlbyname, .handler = kern_sysctl.sysSysctlbyname },
+    .{ .num = sys.SYS_getrlimit, .handler = kern_resource.sysGetrlimit },
+    .{ .num = sys.SYS_setrlimit, .handler = kern_resource.sysSetrlimit },
+    .{ .num = sys.SYS_fstatat, .handler = vfs_syscalls.sysFstatat },
+    .{ .num = sys.SYS_clock_gettime, .handler = kern_time.sysClockGettime },
+    .{ .num = sys.SYS_writev, .handler = sys_generic.sysWritev },
 };
 
 /// Number-to-handler table, indexed by system call number.
 pub const table: [sys.MAXSYSCALL]?Handler = blk: {
+    @setEvalBranchQuota(100000);
     var t: [sys.MAXSYSCALL]?Handler = undefined;
     for (&t) |*slot| {
         slot.* = null;

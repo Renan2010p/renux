@@ -36,6 +36,46 @@ pub fn sysWrite(args: [sys.MAXARGS]u64) u64 {
     return @intCast(n);
 }
 
+/// An I/O vector (FreeBSD's struct iovec).
+const Iovec: type = extern struct {
+    iov_base: u64,
+    iov_len: u64,
+};
+
+/// writev(2): write the gathered buffers to `fd`.
+pub fn sysWritev(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const iov_ptr: u64 = args[1];
+    const iovcnt: u64 = args[2];
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
+    if ((f.f_flag & file.FWRITE) == 0) {
+        return sys.signed(-errno.EBADF);
+    }
+    const iov: [*]align(1) const Iovec = @ptrFromInt(iov_ptr);
+    var total: isize = 0;
+    var i: u64 = 0;
+    while (i < iovcnt) : (i += 1) {
+        const len: u64 = iov[i].iov_len;
+        if (len == 0) {
+            continue;
+        }
+        const bytes: [*]u8 = @ptrFromInt(iov[i].iov_base);
+        const n: isize = f.f_ops.write(f, bytes[0..@intCast(len)]);
+        if (n < 0) {
+            if (total > 0) {
+                return @intCast(total);
+            }
+            return sys.signed(n);
+        }
+        total += n;
+        if (n < len) {
+            break;
+        }
+    }
+    return @intCast(total);
+}
+
 /// read(2): read from descriptor `fd`.
 pub fn sysRead(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];

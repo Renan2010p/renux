@@ -22,6 +22,7 @@ const sys: type = @import("../../../sys/syscall.zig");
 const errno: type = @import("../../../sys/errno.zig");
 const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const kern_signal: type = @import("../../../kern/kern_signal.zig");
+const kern_exit: type = @import("../../../kern/kern_exit.zig");
 const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
@@ -165,6 +166,11 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
         prf.print(" rip ");
         prf.printHex(frame.rip);
         prf.printLine("");
+        // A fault from user mode kills the process (as SIGSEGV); only a kernel
+        // fault panics.
+        if ((frame.error_code & 0x4) != 0) {
+            kern_exit.exit(139); // 128 + SIGSEGV
+        }
         prf.panic("unhandled page fault", null);
     }
 
@@ -187,6 +193,11 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
 
     if (frame.vector == trap.T_BREAKPOINT) {
         return;
+    }
+
+    // An unhandled trap from user mode kills the process; a kernel trap panics.
+    if ((frame.cs & 0x3) == 0x3) {
+        kern_exit.exit(139); // 128 + SIGSEGV
     }
 
     prf.panic("unhandled trap", null);

@@ -38,3 +38,4 @@ pub const EMLINK: i32 = 31;
 pub const ENAMETOOLONG: i32 = 63;
 pub const ENOTEMPTY: i32 = 66;
 pub const EOPNOTSUPP: i32 = 45;
+pub const ENOSYS: i32 = 78;

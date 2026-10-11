@@ -109,10 +109,12 @@ cp "$RTLD_SO" "$WORK/libexec/ld-elf.so.1"
 cp "$LIBC_SO" "$WORK/lib/libc.so.1"
 cp "$DYNH" "$WORK/bin/dynhello"
 
-# A real FreeBSD static binary (optional): include it and register the module.
+# A real FreeBSD static binary (optional): include it as a rescue applet and
+# register the module. Invoked by applet name (argv[0]).
 if [ -n "$RESCUE" ] && [ -f "$RESCUE" ]; then
-    cp "$RESCUE" "$WORK/bin/rescue"
-    sed -i '/cmdline:/i\    module_path: boot():/bin/rescue' "$WORK/limine.conf"
+    mkdir -p "$WORK/rescue"
+    cp "$RESCUE" "$WORK/rescue/echo"
+    sed -i '/cmdline:/i\    module_path: boot():/rescue/echo' "$WORK/limine.conf"
 fi
 
 xorriso -as mkisofs -R -r -J \

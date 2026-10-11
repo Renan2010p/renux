@@ -33,7 +33,7 @@ typedef Elf64_Verdef	Elf_Verdef;
 typedef Elf64_Verdaux	Elf_Verdaux;
 typedef Elf64_Relr	Elf_Relr;
 typedef Elf32_Word	Elf32_Word_have;
-typedef struct { union { long a_val; void *a_ptr; void (*a_fcn)(void); } a_un; int a_type; } Elf_Auxinfo;
+typedef struct { unsigned int a_type; union { long a_val; void *a_ptr; void (*a_fcn)(void); } a_un; } Elf_Auxinfo;
 #define AT_NULL 0
 #define AT_IGNORE 1
 #define AT_EXECFD 2

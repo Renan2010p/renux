@@ -9,13 +9,15 @@
 
 const syscalls: type = @import("syscalls.zig");
 const sys: type = @import("../sys/syscall.zig");
+const errno: type = @import("../sys/errno.zig");
 
 /// Dispatch `number` with `args`, returning the value to place in the result
-/// register.
+/// register. Unimplemented calls return ENOSYS (like FreeBSD's nosys), so a
+/// program built for FreeBSD can tell "not supported" from a real error.
 pub fn syscall(number: u64, args: [sys.MAXARGS]u64) u64 {
     if (number >= syscalls.table.len) {
-        return sys.ERROR;
+        return sys.signed(-errno.ENOSYS);
     }
-    const handler = syscalls.table[number] orelse return sys.ERROR;
+    const handler = syscalls.table[number] orelse return sys.signed(-errno.ENOSYS);
     return handler(args);
 }

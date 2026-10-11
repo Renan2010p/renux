@@ -46,12 +46,19 @@ pub const SYS_getcwd: u64 = 326;
 pub const SYS_klog: u64 = 500;
 pub const SYS_sigreturn: u64 = 417;
 pub const SYS_mmap: u64 = 477;
+pub const SYS___sysctl: u64 = 202;
+pub const SYS___sysctlbyname: u64 = 570;
+pub const SYS_getrlimit: u64 = 194;
+pub const SYS_setrlimit: u64 = 195;
+pub const SYS_fstatat: u64 = 552;
+pub const SYS_clock_gettime: u64 = 232;
+pub const SYS_writev: u64 = 121;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;
 
 /// Highest system call number plus one.
-pub const MAXSYSCALL: usize = 512;
+pub const MAXSYSCALL: usize = 1024;
 
 /// Error return value (a negative errno as unsigned).
 pub const ERROR: u64 = @bitCast(@as(i64, -1));

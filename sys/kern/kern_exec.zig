@@ -47,6 +47,12 @@ const AT_UID: u64 = 11;
 const AT_EUID: u64 = 12;
 const AT_GID: u64 = 13;
 const AT_EGID: u64 = 14;
+const AT_PAGESIZES: u64 = 20;
+const AT_PAGESIZESLEN: u64 = 21;
+
+/// Number of u64 slots for the page-size array handed to AT_PAGESIZES.  Must be
+/// at least MAXPAGESIZES (3 on amd64); AT_PAGESIZESLEN is its size in bytes.
+const PAGESIZES_SLOTS: u64 = 8;
 
 /// Where the new process's stack and argument block live, once built.
 pub const StartInfo: type = struct {
@@ -195,8 +201,10 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
     }
 
     // argc, then argv (NUL-terminated), then envp (NUL-terminated), then the
-    // aux vector (pairs terminated by AT_NULL).
-    const entries: u64 = 1 + @as(u64, argv.len + 1) + @as(u64, envp.len + 1) + @as(u64, auxv.len * 2) + 2;
+    // aux vector (pairs terminated by AT_NULL), then the page-size array that
+    // AT_PAGESIZES points at.  AT_PAGESIZES and AT_PAGESIZESLEN are appended.
+    const entries: u64 = 1 + @as(u64, argv.len + 1) + @as(u64, envp.len + 1) +
+        @as(u64, (auxv.len + 2) * 2) + 2 + PAGESIZES_SLOTS;
     var base: u64 = sp - entries * 8;
     base &= ~@as(u64, 15); // 16-byte aligned
     base -= 8; // leave rsp so that rsp % 16 == 8 at entry, and argv 8-aligned
@@ -220,17 +228,36 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
     if (!putU64(pmap, cursor, 0)) return null; // envp terminator
     cursor += 8;
 
-    // FreeBSD's Elf_Auxinfo is { a_un; a_type; }: the value comes first, then
-    // the type (as a 4-byte int, padded to 8).  rtld-elf reads this layout.
+    // FreeBSD's Elf_Auxinfo is { a_type; a_un; }: a 4-byte type first (padded
+    // to 8), then the value.  Both rtld-elf and libc read it this way.
     for (auxv) |pair| {
-        if (!putU64(pmap, cursor, pair.val)) return null;
-        cursor += 8;
         if (!putU64(pmap, cursor, pair.type)) return null;
         cursor += 8;
+        if (!putU64(pmap, cursor, pair.val)) return null;
+        cursor += 8;
     }
-    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL value
+    // AT_PAGESIZES points at the page-size array in the last slots;
+    // AT_PAGESIZESLEN is its length in bytes.  FreeBSD's libc (getpagesizes)
+    // reads them.
+    const pagesizes_va: u64 = base + (entries - PAGESIZES_SLOTS) * 8;
+    if (!putU64(pmap, cursor, AT_PAGESIZES)) return null;
+    cursor += 8;
+    if (!putU64(pmap, cursor, pagesizes_va)) return null;
+    cursor += 8;
+    if (!putU64(pmap, cursor, AT_PAGESIZESLEN)) return null;
+    cursor += 8;
+    if (!putU64(pmap, cursor, PAGESIZES_SLOTS * 8)) return null;
     cursor += 8;
     if (!putU64(pmap, cursor, 0)) return null; // AT_NULL type
+    cursor += 8;
+    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL value
+    cursor += 8;
+    var ps: u64 = 0;
+    while (ps < PAGESIZES_SLOTS) : (ps += 1) {
+        const v: u64 = if (ps == 0) param.PAGE_SIZE else 0;
+        if (!putU64(pmap, cursor, v)) return null;
+        cursor += 8;
+    }
 
     return .{
         .rsp = base,
@@ -238,6 +265,55 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
         .argv = base + 8,
         .envp = base + 8 + (argv.len + 1) * 8,
     };
+}
+
+/// Size and alignment of a FreeBSD/amd64 TCB (struct tcb: a self pointer and a
+/// pointer to the dynamic thread vector).
+const TLS_TCB_SIZE: u64 = 16;
+const TLS_TCB_ALIGN: u64 = 16;
+
+/// Build the initial thread-local storage for `p` from the main image's PT_TLS
+/// and install it as the thread pointer (IA32_FS_BASE). The FreeBSD amd64
+/// kernel does the same, so a statically linked FreeBSD libc can bootstrap:
+/// its own TLS allocator runs (and reads thread-local state) before it installs
+/// the final TCB. With no PT_TLS the thread pointer is left at zero.
+pub fn setupInitialTls(p: *proc.Proc, pmap: arch.pmap.Pmap, main: exec_elf.Result) bool {
+    if (main.tls_memsz == 0) {
+        p.fsbase = 0;
+        return true;
+    }
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
+
+    const alignment: u64 = if (main.tls_align > TLS_TCB_ALIGN) main.tls_align else TLS_TCB_ALIGN;
+    const tls_space: u64 = param.alignUp(main.tls_memsz, alignment);
+    const size: u64 = param.alignUp(tls_space + TLS_TCB_SIZE, param.PAGE_SIZE);
+    const base: u64 = param.alignUp(p.mmap_next, param.PAGE_SIZE);
+
+    var va: u64 = base;
+    while (va < base + size) : (va += param.PAGE_SIZE) {
+        const pa: u64 = uvm_page.physalloc() orelse return false;
+        arch.pmap.enterUser(pmap, va, pa, .user_rw);
+    }
+
+    // Copy the initialised part of the TLS template; the rest stays zero.
+    var i: u64 = 0;
+    while (i < main.tls_filesz) : (i += 1) {
+        const srcpa: u64 = arch.pmap.extract(pmap, main.tls_vaddr + i) orelse return false;
+        const dstpa: u64 = arch.pmap.extract(pmap, base + i) orelse return false;
+        const byte: u8 = @as(*const u8, @ptrFromInt(srcpa + hhdm)).*;
+        @as(*u8, @ptrFromInt(dstpa + hhdm)).* = byte;
+    }
+
+    // The thread pointer sits just past the TLS data; the TCB is {self, dtv}.
+    const tp: u64 = base + tls_space;
+    const selfpa: u64 = arch.pmap.extract(pmap, tp) orelse return false;
+    @as(*u64, @ptrFromInt(selfpa + hhdm)).* = tp;
+    const dtvpa: u64 = arch.pmap.extract(pmap, tp + 8) orelse return false;
+    @as(*u64, @ptrFromInt(dtvpa + hhdm)).* = 0;
+
+    p.fsbase = tp;
+    p.mmap_next = base + size;
+    return true;
 }
 
 /// Read a NUL-terminated string from the current (old) address space.
@@ -401,6 +477,9 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
 
     p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;
+    if (!setupInitialTls(p, newmap, main)) {
+        return -1;
+    }
 
     // Caught signals revert to their default action across exec.
     var sg: usize = 0;

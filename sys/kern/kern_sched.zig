@@ -63,6 +63,8 @@ pub fn scheduler() noreturn {
             arch.gdt.setKernelStack(p.kstack_top);
             arch.syscall_entry.setKernelStack(p.kstack_top);
             arch.pmap.activate(p.pmap);
+            // Restore the process's user thread pointer (TLS base).
+            arch.cpu.setFsBase(p.fsbase);
             in_scheduler = false;
             arch.swtch.swtch(&sched_ctx, &p.context);
         }

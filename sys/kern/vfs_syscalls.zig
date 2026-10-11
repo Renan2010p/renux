@@ -95,6 +95,31 @@ pub fn sysFstat(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// fstatat(2): `fstatat(fd, path, buf, flag)`. A NULL or empty path stats the
+/// descriptor itself, which is how libc implements fstat(3).
+pub fn sysFstatat(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const path_ptr: u64 = args[1];
+    const statbuf: u64 = args[2];
+
+    if (path_ptr == 0) {
+        return sysFstat(.{ fd, statbuf, 0, 0, 0, 0 });
+    }
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    if (path.len == 0) {
+        return sysFstat(.{ fd, statbuf, 0, 0, 0, 0 });
+    }
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
+    var st: stat.Stat = undefined;
+    const e: i32 = vfs_vnops.fillStat(vp, &st);
+    vfs_subr.vrele(vp);
+    if (e != 0) {
+        return sys.signed(-e);
+    }
+    copyOut(statbuf, @ptrCast(&st), @sizeOf(stat.Stat));
+    return 0;
+}
+
 /// getdents(2): read directory entries into the caller's buffer.
 pub fn sysGetdents(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];
