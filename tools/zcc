@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 The ZenBSD Project
+#
+# Compile a C program for ZenBSD with zig cc, against the sysroot built by
+# tools/mksysroot.sh. Usage: tools/zcc hello.c -o hello
+set -eu
+
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
+ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
+
+SYSDIR="${SYSROOT:-$ROOT/lib/zig-out/sysroot}"
+
+if [ ! -f "$SYSDIR/lib/libc.a" ]; then
+    "$HERE/mksysroot.sh"
+fi
+
+exec zig cc --target=x86_64-freestanding-none -nostdlib -fno-pie -no-pie \
+    -isystem "$SYSDIR/include" \
+    -Wl,-T,"$SYSDIR/lib/zenbsd.ldscript" -Wl,-e,_start \
+    "$@" "$SYSDIR/lib/libc.a"
