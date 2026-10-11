@@ -4,17 +4,25 @@
 // System call implementations.
 //
 // The Zig counterpart of NetBSD's generated syscalls.c: the table mapping
-// system call numbers to handlers, plus the process-management calls that make
-// the system usable (fork, execve, wait, exit, getpid).
+// system call numbers to handlers, plus the file and process calls that make
+// the system usable. Descriptors 0, 1 and 2 are the console; every other open
+// file lives in the process's descriptor table and reads and writes through its
+// FileOps vector.
 
 const sys: type = @import("../sys/syscall.zig");
 const cons: type = @import("../dev/cons.zig");
 const arch: type = @import("../arch/arch.zig");
+const param: type = @import("../sys/param.zig");
+const file: type = @import("../sys/file.zig");
+const stat: type = @import("../sys/stat.zig");
+const vnode: type = @import("../sys/vnode.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const kern_fork: type = @import("kern_fork.zig");
 const kern_exit: type = @import("kern_exit.zig");
 const kern_exec: type = @import("kern_exec.zig");
+const kern_descrip: type = @import("kern_descrip.zig");
+const vfs_vnops: type = @import("vfs_vnops.zig");
 const prf: type = @import("subr_prf.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
@@ -27,41 +35,194 @@ fn signed(value: i64) u64 {
     return @bitCast(value);
 }
 
+/// Read a NUL-terminated string from the calling process's address space.
+fn userStr(ptr: u64) ?[]const u8 {
+    if (ptr == 0) {
+        return null;
+    }
+    const p: [*]const u8 = @ptrFromInt(ptr);
+    var len: usize = 0;
+    while (len < param.MAXPATHLEN) : (len += 1) {
+        if (p[len] == 0) {
+            return p[0..len];
+        }
+    }
+    return null;
+}
+
 fn sysWrite(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];
     const buf: u64 = args[1];
     const count: u64 = args[2];
-    if (fd != 1 and fd != 2) {
+
+    // The console is written through descriptors 1 and 2.
+    if (fd == 1 or fd == 2) {
+        const bytes: [*]const u8 = @ptrFromInt(buf);
+        var i: u64 = 0;
+        while (i < count) : (i += 1) {
+            cons.cnputc(bytes[i]);
+        }
+        return count;
+    }
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
+    if ((f.f_flag & file.FWRITE) == 0) {
         return error_value;
     }
-    const bytes: [*]const u8 = @ptrFromInt(buf);
-    var i: u64 = 0;
-    while (i < count) : (i += 1) {
-        cons.cnputc(bytes[i]);
+    const bytes: [*]u8 = @ptrFromInt(buf);
+    const n: isize = f.f_ops.write(f, bytes[0..@intCast(count)]);
+    if (n < 0) {
+        return error_value;
     }
-    return count;
+    return @intCast(n);
 }
 
 fn sysRead(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];
     const buf: u64 = args[1];
     const count: u64 = args[2];
-    if (fd != 0 or count == 0) {
+
+    // Descriptor 0 is the console. Wait for input, yielding the CPU (with
+    // interrupts enabled) so the timer and other processes keep running.
+    if (fd == 0) {
+        if (count == 0) {
+            return 0;
+        }
+        while (true) {
+            arch.cpu.enable_interrupts();
+            const maybe: ?u8 = cons.cngetcPoll();
+            arch.cpu.disable_interrupts();
+            if (maybe) |c| {
+                const dst: [*]u8 = @ptrFromInt(buf);
+                dst[0] = c;
+                return 1;
+            }
+            kern_sched.yield();
+        }
+    }
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
+    if ((f.f_flag & file.FREAD) == 0) {
+        return error_value;
+    }
+    const bytes: [*]u8 = @ptrFromInt(buf);
+    const n: isize = f.f_ops.read(f, bytes[0..@intCast(count)]);
+    if (n < 0) {
+        return error_value;
+    }
+    return @intCast(n);
+}
+
+fn sysOpen(args: [sys.MAXARGS]u64) u64 {
+    const path_ptr: u64 = args[0];
+    const flags: i32 = @bitCast(@as(u32, @truncate(args[1])));
+
+    const path: []const u8 = userStr(path_ptr) orelse return error_value;
+    const f: *file.File = vfs_vnops.vn_open(path, flags) orelse return error_value;
+
+    const fd: usize = kern_descrip.fdalloc(kern_proc.current, 3) orelse {
+        _ = kern_descrip.closeFile(f);
+        return error_value;
+    };
+    kern_descrip.fdAffix(kern_proc.current, fd, f);
+    return @intCast(fd);
+}
+
+fn sysClose(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const err: i32 = kern_descrip.fd_close(kern_proc.current, @intCast(fd));
+    if (err != 0) {
+        return error_value;
+    }
+    return 0;
+}
+
+/// Size in bytes of the file behind `f`, or 0 when unknown.
+fn fileSize(f: *file.File) u64 {
+    if (f.f_type != file.DTYPE_VNODE) {
         return 0;
     }
-    // Wait for input, yielding the CPU (with interrupts enabled) so the timer
-    // and other processes keep running while this process blocks.
-    while (true) {
-        arch.cpu.enable_interrupts();
-        const maybe: ?u8 = cons.cngetcPoll();
-        arch.cpu.disable_interrupts();
-        if (maybe) |c| {
-            const dst: [*]u8 = @ptrFromInt(buf);
-            dst[0] = c;
-            return 1;
-        }
-        kern_sched.yield();
+    const raw: ?*anyopaque = f.f_data orelse return 0;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    var vap: vnode.Vattr = .{
+        .type = .vnone,
+        .mode = 0,
+        .nlink = 0,
+        .size = 0,
+        .uid = 0,
+        .gid = 0,
+        .rdev = 0,
+        .atime = 0,
+        .mtime = 0,
+        .ctime = 0,
+    };
+    if (vp.v_op.getattr(vp, &vap) != 0) {
+        return 0;
     }
+    return vap.size;
+}
+
+fn sysLseek(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const off: i64 = @bitCast(args[1]);
+    const whence: u64 = args[2];
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
+
+    var base: i64 = 0;
+    switch (whence) {
+        0 => base = 0, // SEEK_SET
+        1 => base = @intCast(f.f_offset), // SEEK_CUR
+        2 => base = @intCast(fileSize(f)), // SEEK_END
+        else => return error_value,
+    }
+    const target: i64 = base + off;
+    if (target < 0) {
+        return error_value;
+    }
+    f.f_offset = @intCast(target);
+    return @intCast(f.f_offset);
+}
+
+fn sysFstat(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const statbuf: u64 = args[1];
+
+    var st: stat.Stat = .{
+        .dev = 0,
+        .ino = 0,
+        .mode = 0,
+        .nlink = 0,
+        .uid = 0,
+        .gid = 0,
+        .rdev = 0,
+        .size = 0,
+        .blksize = 0,
+        .blocks = 0,
+        .atime = 0,
+        .mtime = 0,
+        .ctime = 0,
+    };
+
+    if (fd <= 2) {
+        st.mode = stat.S_IFCHR | 0o620;
+        st.nlink = 1;
+        st.blksize = 4096;
+    } else {
+        const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
+        const err: i32 = f.f_ops.stat(f, &st);
+        if (err != 0) {
+            return error_value;
+        }
+    }
+
+    const dst: [*]u8 = @ptrFromInt(statbuf);
+    const src: [*]const u8 = @ptrCast(&st);
+    var i: usize = 0;
+    while (i < @sizeOf(stat.Stat)) : (i += 1) {
+        dst[i] = src[i];
+    }
+    return 0;
 }
 
 fn sysExit(args: [sys.MAXARGS]u64) u64 {
@@ -89,7 +250,7 @@ fn sysGetpid(args: [sys.MAXARGS]u64) u64 {
 fn sysExecve(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
     const frame = arch.trap.currentFrame() orelse return error_value;
-    const path: [*:0]const u8 = @ptrFromInt(path_ptr);
+    const path: []const u8 = userStr(path_ptr) orelse return error_value;
     return signed(kern_exec.execve(frame, path));
 }
 
@@ -100,8 +261,8 @@ pub const table: [sys.MAXSYSCALL]?Handler = .{
     sysFork, // 2
     sysRead, // 3
     sysWrite, // 4
-    null, // 5
-    null, // 6
+    sysOpen, // 5
+    sysClose, // 6
     sysWait, // 7
     null, // 8
     null, // 9
@@ -114,7 +275,7 @@ pub const table: [sys.MAXSYSCALL]?Handler = .{
     null, // 16
     null, // 17
     null, // 18
-    null, // 19
+    sysLseek, // 19
     sysGetpid, // 20
     null, // 21
     null, // 22
@@ -157,6 +318,6 @@ pub const table: [sys.MAXSYSCALL]?Handler = .{
     sysExecve, // 59
     null, // 60
     null, // 61
-    null, // 62
+    sysFstat, // 62
     null, // 63
 };

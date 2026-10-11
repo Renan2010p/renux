@@ -11,7 +11,7 @@ const libc: type = @import("libc");
 export fn _start() callconv(.c) noreturn {
     libc.stdio.puts("init: starting /bin/sh");
 
-    _ = libc.syscall.execve("sh");
+    _ = libc.syscall.execve("/bin/sh");
 
     libc.stdio.puts("init: cannot exec /bin/sh");
     libc.syscall.exit(1);

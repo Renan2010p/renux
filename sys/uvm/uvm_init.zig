@@ -12,6 +12,7 @@
 
 const arch: type = @import("../arch/arch.zig");
 const uvm_page: type = @import("uvm_page.zig");
+const kmem: type = @import("../kern/subr_kmem.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("../kern/subr_prf.zig");
@@ -22,6 +23,7 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
 
     arch.pmap.bootstrap(hhdm);
     uvm_page.init(hhdm);
+    kmem.init(hhdm);
 
     const entries: usize = arch.boot.memmapEntryCount() orelse 0;
     var i: usize = 0;

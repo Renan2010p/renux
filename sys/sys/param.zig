@@ -16,6 +16,9 @@ pub const PAGE_SIZE: u64 = 4096;
 /// Mask selecting the offset within a page.
 pub const PAGE_MASK: u64 = PAGE_SIZE - 1;
 
+/// Maximum length of a pathname, NUL not included (NetBSD's MAXPATHLEN).
+pub const MAXPATHLEN: usize = 1024;
+
 /// Round `value` up to the next multiple of `alignment` (a power of two).
 pub fn alignUp(value: u64, alignment: u64) u64 {
     return (value + alignment - 1) & ~(alignment - 1);

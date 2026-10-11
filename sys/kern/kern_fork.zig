@@ -8,8 +8,10 @@
 // context that starts at procEntry.
 
 const arch: type = @import("../arch/arch.zig");
+const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
+const vfs_subr: type = @import("vfs_subr.zig");
 
 /// Fork the current process. Returns the child's pid in the parent, 0 in the
 /// child, or -1 on failure.
@@ -29,6 +31,19 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     // The child resumes from the same user frame, but fork returns 0 in it.
     child.frame = frame.*;
     child.frame.rax = 0;
+
+    // Inherit the open file table and the working directory.
+    var fd: usize = 0;
+    while (fd < proc.NFILE) : (fd += 1) {
+        child.fds[fd] = parent.fds[fd];
+        if (child.fds[fd]) |openfile| {
+            openfile.f_count += 1;
+        }
+    }
+    child.cwd = parent.cwd;
+    if (child.cwd) |cwd| {
+        vfs_subr.vref(cwd);
+    }
 
     kern_sched.prepareContext(child);
     child.state = .runnable;

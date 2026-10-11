@@ -13,10 +13,15 @@
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const cons: type = @import("../dev/cons.zig");
+const vnode: type = @import("../sys/vnode.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
+const vfs_mount: type = @import("vfs_mount.zig");
+const vfs_vnops: type = @import("vfs_vnops.zig");
+const vfs_lookup: type = @import("vfs_lookup.zig");
+const vfs_subr: type = @import("vfs_subr.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
@@ -93,18 +98,61 @@ fn configure(_: ?*const anyopaque) callconv(.c) void {
     arch.cpu.enable_interrupts();
 }
 
-/// Create process 1 (init): load the init executable passed as a boot module,
-/// set up its stack, and enter ring 3 (NetBSD's start_init()).
+/// A NUL-terminated kernel string as a slice.
+fn cstr(ptr: [*:0]const u8) []const u8 {
+    var len: usize = 0;
+    while (ptr[len] != 0) : (len += 1) {}
+    return ptr[0..len];
+}
+
+/// Ensure that every parent directory of `path` exists in the root filesystem.
+fn ensureParents(path: []const u8) void {
+    var i: usize = 1;
+    while (i < path.len) : (i += 1) {
+        if (path[i] != '/') {
+            continue;
+        }
+        const dir: []const u8 = path[0..i];
+        if (vfs_lookup.nameiLookup(dir)) |vp| {
+            vfs_subr.vrele(vp);
+            continue;
+        }
+        if (vfs_vnops.vn_create(dir, .vdir, 0o755)) |vp| {
+            vfs_subr.vrele(vp);
+        }
+    }
+}
+
+/// Populate the root filesystem from the boot modules: each module's path
+/// becomes a file, so /sbin/init and /bin/sh are ordinary files and no longer
+/// special cases. Parent directories are created as needed.
+fn populateRoot() void {
+    const count: usize = arch.boot.moduleCount() orelse 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const mod: *arch.boot.File = arch.boot.module(i) orelse continue;
+        const path_ptr: [*:0]const u8 = mod.path orelse continue;
+        const address: ?*anyopaque = mod.address orelse continue;
+        const path: []const u8 = cstr(path_ptr);
+        const bytes: []const u8 = @as([*]const u8, @ptrCast(address))[0..@intCast(mod.size)];
+
+        ensureParents(path);
+        const vp: *vnode.Vnode = vfs_vnops.vn_create(path, .vreg, 0o755) orelse continue;
+        _ = vp.v_op.write(vp, 0, bytes);
+        vfs_subr.vrele(vp);
+    }
+}
+
+/// Create process 1 (init): mount the root filesystem, populate it from the
+/// boot modules, load /sbin/init from it, set up its stack, and enter ring 3
+/// (NetBSD's start_init()).
 fn start_init(_: ?*const anyopaque) callconv(.c) void {
-    const module = arch.boot.module(0) orelse {
-        prf.printLine("init: no init module provided");
+    const mp = vfs_mount.mountFs("tmpfs", null) orelse {
+        prf.printLine("init: cannot mount root filesystem");
         return;
     };
-    const address = module.address orelse {
-        prf.printLine("init: module has no address");
-        return;
-    };
-    const image: []const u8 = @as([*]const u8, @ptrCast(address))[0..@intCast(module.size)];
+    vfs_mount.setRoot(mp);
+    populateRoot();
 
     kern_proc.init();
 
@@ -114,8 +162,8 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
         return;
     };
 
-    const result = kern_exec.exec(init.pmap, image) orelse {
-        prf.printLine("init: not an executable image");
+    const result = kern_exec.loadInto(init.pmap, "/sbin/init") orelse {
+        prf.printLine("init: cannot load /sbin/init");
         return;
     };
 
@@ -150,6 +198,12 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.frame.rflags = 0x202; // reserved bit + IF
     init.frame.rsp = arch.vmparam.USER_STACK_TOP - 8;
     init.frame.ss = arch.gdt_defs.UDATA_SEL;
+
+    // The process starts with the root as its working directory.
+    init.cwd = vfs_mount.getRoot();
+    if (init.cwd) |cwd| {
+        vfs_subr.vref(cwd);
+    }
 
     kern_sched.prepareContext(init);
     init.state = .runnable;

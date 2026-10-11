@@ -5,9 +5,14 @@
 //
 // This is the Zig counterpart of NetBSD's sys/kern/exec_elf.c (FreeBSD's
 // sys/kern/imgact_elf.c): it maps an ELF image's loadable segments into the
-// user address space and returns the entry point. Segments are written through
-// their user virtual addresses because user and kernel share the page tables at
-// this stage; a copyout path will replace this once the spaces are separated.
+// user address space and returns the entry point. The image is read through a
+// Source, so the same loader serves a boot module (a byte slice) and a file on
+// a filesystem (a vnode); it never needs the whole image in memory at once.
+//
+// Segment bytes are written through their physical addresses (via the direct
+// map), not through their user virtual addresses: a segment is mapped with its
+// final protection (read-only for text), so the kernel must not write through
+// that mapping.
 
 const elf: type = @import("../sys/exec_elf.zig");
 const arch: type = @import("../arch/arch.zig");
@@ -15,14 +20,38 @@ const param: type = @import("../sys/param.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const prf: type = @import("subr_prf.zig");
 
+/// Where the loader reads an image from.
+pub const Source: type = struct {
+    /// Caller state passed back to `read` (e.g. a vnode).
+    ctx: *anyopaque,
+    /// Size of the image in bytes, for the loader's own bookkeeping.
+    size: u64,
+    /// Read up to `buf.len` bytes at `offset`, returning the count read; a
+    /// short read (including zero at end of file) ends the request early.
+    read: *const fn (ctx: *anyopaque, offset: u64, buf: []u8) usize,
+};
+
 /// What the loader reports back to the caller.
 pub const Result: type = struct {
     /// Entry point virtual address.
     entry: u64,
 };
 
+/// Read exactly `buf.len` bytes, or fewer only at end of file.
+fn readFull(src: Source, offset: u64, buf: []u8) usize {
+    var done: usize = 0;
+    while (done < buf.len) {
+        const n: usize = src.read(src.ctx, offset + done, buf[done..]);
+        if (n == 0) {
+            break;
+        }
+        done += n;
+    }
+    return done;
+}
+
 /// True when `bytes` starts with the ELF magic.
-pub fn isElf(bytes: []const u8) bool {
+fn isElfBytes(bytes: []const u8) bool {
     if (bytes.len < elf.ELFMAG.len) {
         return false;
     }
@@ -43,12 +72,7 @@ fn protFor(flags: u32) arch.pmap.Prot {
 }
 
 /// Map one PT_LOAD segment and copy its file-backed bytes.
-///
-/// The bytes are written through the page's physical address (via the direct
-/// map), not through its user virtual address: the segment is already mapped
-/// with its final protection (read-only for text), so the kernel must not write
-/// through that mapping.
-fn loadSegment(pmap: arch.pmap.Pmap, bytes: []const u8, ph: *const elf.Phdr, hhdm: u64) bool {
+fn loadSegment(pmap: arch.pmap.Pmap, src: Source, ph: *const elf.Phdr, hhdm: u64) bool {
     const vstart: u64 = ph.p_vaddr & ~param.PAGE_MASK;
     const vend: u64 = param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
     const prot: arch.pmap.Prot = protFor(ph.p_flags);
@@ -61,26 +85,36 @@ fn loadSegment(pmap: arch.pmap.Pmap, bytes: []const u8, ph: *const elf.Phdr, hhd
     }
 
     // Copy the file-backed part over the zero-filled pages.
-    var i: u64 = 0;
-    while (i < ph.p_filesz) : (i += 1) {
-        const src: u64 = ph.p_offset + i;
-        if (src >= bytes.len) {
+    var skip: u64 = 0;
+    var buf: [512]u8 = undefined;
+    while (skip < ph.p_filesz) {
+        const want64: u64 = ph.p_filesz - skip;
+        const want: usize = if (want64 > buf.len) buf.len else @intCast(want64);
+        const got: usize = src.read(src.ctx, ph.p_offset + skip, buf[0..want]);
+        if (got == 0) {
             break;
         }
-        const dst_pa: u64 = arch.pmap.extract(pmap, ph.p_vaddr + i) orelse return false;
-        const dst: *u8 = @ptrFromInt(dst_pa + hhdm);
-        dst.* = bytes[@intCast(src)];
+        var k: usize = 0;
+        while (k < got) : (k += 1) {
+            const dst_pa: u64 = arch.pmap.extract(pmap, ph.p_vaddr + skip + k) orelse return false;
+            const dst: *u8 = @ptrFromInt(dst_pa + hhdm);
+            dst.* = buf[k];
+        }
+        skip += got;
     }
     return true;
 }
 
 /// Load an ELF64 executable image into page map `pmap`.
-pub fn load(pmap: arch.pmap.Pmap, bytes: []const u8) ?Result {
-    if (bytes.len < @sizeOf(elf.Ehdr) or !isElf(bytes)) {
+pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
+    var ehdr: elf.Ehdr = undefined;
+    const ehdr_bytes: [*]u8 = @ptrCast(&ehdr);
+    if (readFull(src, 0, ehdr_bytes[0..@sizeOf(elf.Ehdr)]) != @sizeOf(elf.Ehdr)) {
         return null;
     }
-
-    const ehdr: *const elf.Ehdr = @ptrFromInt(@intFromPtr(bytes.ptr));
+    if (!isElfBytes(ehdr_bytes[0..@sizeOf(elf.Ehdr)])) {
+        return null;
+    }
     if (ehdr.e_type != elf.ET_EXEC or ehdr.e_machine != elf.EM_X86_64) {
         return null;
     }
@@ -92,13 +126,14 @@ pub fn load(pmap: arch.pmap.Pmap, bytes: []const u8) ?Result {
 
     var i: u16 = 0;
     while (i < ehdr.e_phnum) : (i += 1) {
-        const off: usize = @intCast(ehdr.e_phoff + @as(u64, i) * ehdr.e_phentsize);
-        if (off + @sizeOf(elf.Phdr) > bytes.len) {
+        var ph: elf.Phdr = undefined;
+        const ph_bytes: [*]u8 = @ptrCast(&ph);
+        const off: u64 = ehdr.e_phoff + @as(u64, i) * ehdr.e_phentsize;
+        if (readFull(src, off, ph_bytes[0..@sizeOf(elf.Phdr)]) != @sizeOf(elf.Phdr)) {
             return null;
         }
-        const ph: *const elf.Phdr = @ptrFromInt(@intFromPtr(bytes.ptr) + off);
         if (ph.p_type == elf.PT_LOAD) {
-            if (!loadSegment(pmap, bytes, ph, hhdm)) {
+            if (!loadSegment(pmap, src, &ph, hhdm)) {
                 prf.printLine("exec_elf: out of memory");
                 return null;
             }

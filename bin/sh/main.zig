@@ -66,19 +66,24 @@ fn readLine(buf: []u8) usize {
     }
 }
 
-/// Run `name` as an external program via fork + execve + wait.
+/// Run `name` as an external program from /bin via fork + execve + wait.
 fn runExternal(name: []const u8) void {
-    if (name.len + 1 > MAX_NAME) {
+    const prefix: []const u8 = "/bin/";
+    if (prefix.len + name.len + 1 > MAX_NAME) {
         puts("sh: command name too long");
         return;
     }
 
     var path: [MAX_NAME]u8 = undefined;
     var i: usize = 0;
-    while (i < name.len) : (i += 1) {
-        path[i] = name[i];
+    while (i < prefix.len) : (i += 1) {
+        path[i] = prefix[i];
     }
-    path[name.len] = 0;
+    var j: usize = 0;
+    while (j < name.len) : (j += 1) {
+        path[i + j] = name[j];
+    }
+    path[i + name.len] = 0;
 
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {
@@ -105,7 +110,7 @@ fn execute(line: []const u8) void {
 
     if (equal(name, "help")) {
         puts("builtins: help echo uname getpid exit");
-        puts("external commands are loaded from the boot modules");
+        puts("external commands are loaded from /bin");
     } else if (equal(name, "echo")) {
         puts(rest);
     } else if (equal(name, "uname")) {

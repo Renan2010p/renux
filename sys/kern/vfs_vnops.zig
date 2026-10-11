@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 The ZenBSD Project
+//
+// Vnode-level operations.
+//
+// This is the Zig counterpart of NetBSD's sys/kern/vfs_vnops.c, reduced to
+// three things: opening a path into an open file (vn_open), creating a file or
+// directory during bring-up (vn_create), and the FileOps vector that makes a
+// vnode-backed descriptor read, write, stat and close through its vnode.
+
+const vnode: type = @import("../sys/vnode.zig");
+const namei: type = @import("../sys/namei.zig");
+const file: type = @import("../sys/file.zig");
+const stat: type = @import("../sys/stat.zig");
+const errno: type = @import("../sys/errno.zig");
+const fcntl: type = @import("../sys/fcntl.zig");
+const vfs_lookup: type = @import("vfs_lookup.zig");
+const vfs_mount: type = @import("vfs_mount.zig");
+const vfs_subr: type = @import("vfs_subr.zig");
+const kmem: type = @import("subr_kmem.zig");
+
+/// The FileOps used by every vnode-backed descriptor.
+pub const vnode_ops: file.FileOps = .{
+    .read = vnodeRead,
+    .write = vnodeWrite,
+    .stat = vnodeStat,
+    .close = vnodeClose,
+};
+
+/// Turn a vnode's attributes into a struct stat.
+fn fillStat(vp: *vnode.Vnode, st: *stat.Stat) i32 {
+    var vap: vnode.Vattr = .{
+        .type = .vnone,
+        .mode = 0,
+        .nlink = 0,
+        .size = 0,
+        .uid = 0,
+        .gid = 0,
+        .rdev = 0,
+        .atime = 0,
+        .mtime = 0,
+        .ctime = 0,
+    };
+    const err: i32 = vp.v_op.getattr(vp, &vap);
+    if (err != 0) {
+        return err;
+    }
+
+    st.dev = 0;
+    st.ino = 0;
+    st.mode = @as(u32, vap.mode) | typeBits(vap.type);
+    st.nlink = vap.nlink;
+    st.uid = vap.uid;
+    st.gid = vap.gid;
+    st.rdev = vap.rdev;
+    st.size = vap.size;
+    st.blksize = 4096;
+    st.blocks = (vap.size + 511) / 512;
+    st.atime = vap.atime;
+    st.mtime = vap.mtime;
+    st.ctime = vap.ctime;
+    return 0;
+}
+
+/// The S_IFMT bits matching a vnode type.
+fn typeBits(t: vnode.Vtype) u32 {
+    return switch (t) {
+        .vreg => stat.S_IFREG,
+        .vdir => stat.S_IFDIR,
+        .vblk => stat.S_IFBLK,
+        .vchr => stat.S_IFCHR,
+        .vlnk => stat.S_IFLNK,
+        .vfifo => stat.S_IFIFO,
+        else => 0,
+    };
+}
+
+fn vnodeRead(f: *file.File, buf: []u8) isize {
+    const raw: ?*anyopaque = f.f_data orelse return -errno.EBADF;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    const n: isize = vp.v_op.read(vp, f.f_offset, buf);
+    if (n > 0) {
+        f.f_offset += @intCast(n);
+    }
+    return n;
+}
+
+fn vnodeWrite(f: *file.File, buf: []const u8) isize {
+    const raw: ?*anyopaque = f.f_data orelse return -errno.EBADF;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    const n: isize = vp.v_op.write(vp, f.f_offset, buf);
+    if (n > 0) {
+        f.f_offset += @intCast(n);
+    }
+    return n;
+}
+
+fn vnodeStat(f: *file.File, st: *stat.Stat) i32 {
+    const raw: ?*anyopaque = f.f_data orelse return errno.EBADF;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    return fillStat(vp, st);
+}
+
+fn vnodeClose(f: *file.File) i32 {
+    const raw: ?*anyopaque = f.f_data orelse return 0;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    const err: i32 = vp.v_op.close(vp, f.f_flag);
+    vfs_subr.vrele(vp);
+    return err;
+}
+
+/// Open `path` and return a new open-file entry, or null when the path cannot
+/// be resolved or opened.
+pub fn vn_open(path: []const u8, flags: i32) ?*file.File {
+    const vp: *vnode.Vnode = vfs_lookup.nameiLookup(path) orelse return null;
+
+    // Translate the access mode into the FREAD/FWRITE bits a filesystem sees.
+    var mode: i32 = 0;
+    const acc: i32 = flags & fcntl.O_ACCMODE;
+    if (acc != fcntl.O_WRONLY) {
+        mode |= file.FREAD;
+    }
+    if (acc != fcntl.O_RDONLY) {
+        mode |= file.FWRITE;
+    }
+
+    if (vp.v_op.open(vp, mode) != 0) {
+        vfs_subr.vrele(vp);
+        return null;
+    }
+
+    const f: *file.File = kmem.zallocAs(file.File) orelse {
+        vfs_subr.vrele(vp);
+        return null;
+    };
+    f.f_type = file.DTYPE_VNODE;
+    f.f_flag = mode;
+    f.f_offset = 0;
+    f.f_count = 1;
+    f.f_data = vp;
+    f.f_ops = &vnode_ops;
+    return f;
+}
+
+/// Create `path` with type `v_type` and permission bits `mode`, returning its
+/// vnode. Used while populating the root filesystem from the boot modules.
+pub fn vn_create(path: []const u8, v_type: vnode.Vtype, mode: u16) ?*vnode.Vnode {
+    // Split the path into its parent directory and final component.
+    var slash: ?usize = null;
+    var i: usize = 0;
+    while (i < path.len) : (i += 1) {
+        if (path[i] == '/') {
+            slash = i;
+        }
+    }
+    const parent_path: []const u8 = if (slash) |s| path[0..s] else "";
+    const name: []const u8 = if (slash) |s| path[s + 1 ..] else path;
+    if (name.len == 0) {
+        return null;
+    }
+
+    const dvp: *vnode.Vnode = if (parent_path.len == 0)
+        (vfs_mount.getRoot() orelse return null)
+    else
+        (vfs_lookup.nameiLookup(parent_path) orelse return null);
+    if (dvp.v_type != .vdir) {
+        return null;
+    }
+
+    var cnp: namei.Componentname = .{
+        .nameptr = name.ptr,
+        .namelen = name.len,
+        .nameiop = namei.CREATE,
+        .flags = namei.ISLASTCN,
+    };
+    if (v_type == .vdir) {
+        cnp.flags |= namei.WILLBEDIR;
+    }
+
+    const vap: vnode.Vattr = .{
+        .type = v_type,
+        .mode = mode,
+        .nlink = 1,
+        .size = 0,
+        .uid = 0,
+        .gid = 0,
+        .rdev = 0,
+        .atime = 0,
+        .mtime = 0,
+        .ctime = 0,
+    };
+    return dvp.v_op.create(dvp, &cnp, &vap);
+}

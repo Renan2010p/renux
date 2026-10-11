@@ -10,6 +10,8 @@ const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
+const descrip: type = @import("kern_descrip.zig");
+const vfs_subr: type = @import("vfs_subr.zig");
 
 /// Maximum number of processes.
 pub const NPROC: usize = 16;
@@ -31,6 +33,11 @@ pub fn init() void {
         p.kstack_top = 0;
         p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
+        var fd: usize = 0;
+        while (fd < proc.NFILE) : (fd += 1) {
+            p.fds[fd] = null;
+        }
+        p.cwd = null;
     }
 }
 
@@ -54,6 +61,11 @@ pub fn alloc() ?*proc.Proc {
         p.kstack_top = kpage + hhdm + param.PAGE_SIZE;
         p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
+        var fd: usize = 0;
+        while (fd < proc.NFILE) : (fd += 1) {
+            p.fds[fd] = null;
+        }
+        p.cwd = null;
         p.state = .runnable;
         return p;
     }
@@ -62,6 +74,11 @@ pub fn alloc() ?*proc.Proc {
 
 /// Release a process.
 pub fn free(p: *proc.Proc) void {
+    descrip.fd_closeAll(p);
+    if (p.cwd) |cwd| {
+        vfs_subr.vrele(cwd);
+        p.cwd = null;
+    }
     if (p.kstack_page != 0) {
         uvm_page.physfree(p.kstack_page);
     }
