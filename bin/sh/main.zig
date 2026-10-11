@@ -15,6 +15,7 @@ const getchar = libc.stdio.getchar;
 const MAX_LINE: usize = 256;
 const MAX_NAME: usize = 128;
 const MAX_PATH: usize = 256;
+const MAX_ARGS: usize = 8;
 
 /// Copy `s` into `buf` and NUL-terminate it, returning the C string.
 fn cstr(s: []const u8, buf: []u8) ?[*:0]const u8 {
@@ -125,8 +126,9 @@ fn readLine(buf: []u8) usize {
     }
 }
 
-/// Run `name` as an external program from /bin via fork + execve + wait.
-fn runExternal(name: []const u8) void {
+/// Run `name` with arguments `rest` as an external program from /bin via
+/// fork + execve + wait. Arguments are split on spaces.
+fn runExternal(name: []const u8, rest: []const u8) void {
     const prefix: []const u8 = "/bin/";
     if (prefix.len + name.len + 1 > MAX_NAME) {
         puts("sh: command name too long");
@@ -144,9 +146,38 @@ fn runExternal(name: []const u8) void {
     }
     path[i + name.len] = 0;
 
+    // Split the argument text into NUL-terminated words.
+    var store: [MAX_LINE]u8 = undefined;
+    var av: [MAX_ARGS + 1]?[*:0]const u8 = undefined;
+    var argc: usize = 0;
+    av[argc] = @ptrCast(&path[0]);
+    argc += 1;
+
+    var ai: usize = 0;
+    var aj: usize = 0;
+    while (ai < rest.len and argc < MAX_ARGS) {
+        while (ai < rest.len and rest[ai] == ' ') : (ai += 1) {}
+        if (ai >= rest.len) {
+            break;
+        }
+        const start: usize = aj;
+        while (ai < rest.len and rest[ai] != ' ') {
+            store[aj] = rest[ai];
+            aj += 1;
+            ai += 1;
+        }
+        store[aj] = 0;
+        aj += 1;
+        av[argc] = @ptrCast(&store[start]);
+        argc += 1;
+    }
+    av[argc] = null;
+
+    var ep: [1]?[*:0]const u8 = .{null};
+
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {
-        _ = libc.syscall.execve(@ptrCast(&path));
+        _ = libc.syscall.execve(@ptrCast(&path[0]), @ptrCast(&av), @ptrCast(&ep));
         printf("sh: %s: not found\n", .{name});
         libc.syscall.exit(127);
     } else if (pid > 0) {
@@ -160,6 +191,9 @@ fn execute(line: []const u8) void {
     const cmd: []const u8 = trim(line);
     if (cmd.len == 0) {
         return;
+    }
+    if (cmd[0] == '#') {
+        return; // comment
     }
 
     var i: usize = 0;
@@ -183,13 +217,63 @@ fn execute(line: []const u8) void {
     } else if (equal(name, "exit")) {
         libc.syscall.exit(0);
     } else {
-        runExternal(name);
+        runExternal(name, rest);
     }
 }
 
-export fn _start() callconv(.c) noreturn {
-    puts("ZenBSD sh -- type 'help'");
+/// A NUL-terminated string as a slice.
+fn zspan(p: [*:0]const u8) []const u8 {
+    var n: usize = 0;
+    while (p[n] != 0) : (n += 1) {}
+    return p[0..n];
+}
 
+/// Run a shell script from `path`, one command per line, then return.
+fn runScript(path: [*:0]const u8) void {
+    const fd: i64 = libc.syscall.open(path, 0, 0);
+    if (fd < 0) {
+        printf("sh: %s: cannot open\n", .{zspan(path)});
+        return;
+    }
+
+    var buf: [512]u8 = undefined;
+    var line: [MAX_LINE]u8 = undefined;
+    var linelen: usize = 0;
+    while (true) {
+        const n: u64 = libc.syscall.read(@intCast(fd), &buf);
+        if (n == 0 or n > buf.len) {
+            break;
+        }
+        var k: usize = 0;
+        while (k < n) : (k += 1) {
+            const c: u8 = buf[k];
+            if (c == '\n') {
+                execute(line[0..linelen]);
+                linelen = 0;
+            } else if (c != '\r' and linelen < line.len) {
+                line[linelen] = c;
+                linelen += 1;
+            }
+        }
+    }
+    if (linelen > 0) {
+        execute(line[0..linelen]);
+    }
+    _ = libc.syscall.close(@intCast(fd));
+}
+
+export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
+    _ = envp;
+
+    // "sh script": run the script and exit.
+    if (argc >= 2) {
+        if (argv[1]) |path| {
+            runScript(path);
+            return 0;
+        }
+    }
+
+    puts("ZenBSD sh -- type 'help'");
     var buf: [MAX_LINE]u8 = undefined;
     while (true) {
         printf("zenbsd> ", .{});

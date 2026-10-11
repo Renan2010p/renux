@@ -7,4 +7,4 @@
 # filesystem is up: it starts the system programs that bring the rest of the
 # system to life. Only the shell is started so far.
 
-echo "ZenBSD: running /etc/rc"
+echo ZenBSD: running /etc/rc

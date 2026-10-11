@@ -174,6 +174,14 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
         arch.pmap.enterUser(init.pmap, va, pa, .user_rw);
     }
 
+    // Build init's initial argument block: argv = ["/sbin/init"], envp empty.
+    const args: []const []const u8 = &.{"/sbin/init"};
+    const env: []const []const u8 = &.{};
+    const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env) orelse {
+        prf.printLine("init: cannot build stack");
+        return;
+    };
+
     // Build the user frame init starts with. The SysV ABI expects rsp % 16 == 8
     // at function entry, so bias the stack by 8.
     init.frame.r15 = 0;
@@ -184,11 +192,11 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.frame.r10 = 0;
     init.frame.r9 = 0;
     init.frame.r8 = 0;
-    init.frame.rdi = 0;
-    init.frame.rsi = 0;
+    init.frame.rdi = info.argc;
+    init.frame.rsi = info.argv;
     init.frame.rbp = 0;
     init.frame.rbx = 0;
-    init.frame.rdx = 0;
+    init.frame.rdx = info.envp;
     init.frame.rcx = 0;
     init.frame.rax = 0;
     init.frame.vector = 0;
@@ -196,7 +204,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.frame.rip = result.entry;
     init.frame.cs = arch.gdt_defs.UCODE_SEL;
     init.frame.rflags = 0x202; // reserved bit + IF
-    init.frame.rsp = arch.vmparam.USER_STACK_TOP - 8;
+    init.frame.rsp = info.rsp;
     init.frame.ss = arch.gdt_defs.UDATA_SEL;
 
     // The process starts with the root as its working directory.

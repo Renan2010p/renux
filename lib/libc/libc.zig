@@ -10,3 +10,10 @@
 
 pub const syscall: type = @import("sys/syscall.zig");
 pub const stdio: type = @import("stdio/stdio.zig");
+pub const crt0: type = @import("crt/crt0.zig");
+
+comptime {
+    // Force startup to be analysed (and its exported _start emitted) whenever
+    // the library is used, so the program's entry point exists.
+    _ = crt0;
+}

@@ -94,9 +94,10 @@ pub fn fork() i32 {
     return @bitCast(@as(u32, @truncate(r)));
 }
 
-/// Replace the process image with `path`. Returns only on failure.
-pub fn execve(path: [*:0]const u8) i64 {
-    const r: u64 = syscall(SYS_execve, .{ @intFromPtr(path), 0, 0, 0, 0, 0 });
+/// Replace the process image with `path`, started with `argv`/`envp`. Returns
+/// only on failure.
+pub fn execve(path: [*:0]const u8, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) i64 {
+    const r: u64 = syscall(SYS_execve, .{ @intFromPtr(path), @intFromPtr(argv), @intFromPtr(envp), 0, 0, 0 });
     return @bitCast(r);
 }
 

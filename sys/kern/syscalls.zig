@@ -249,9 +249,11 @@ fn sysGetpid(args: [sys.MAXARGS]u64) u64 {
 
 fn sysExecve(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
+    const argv_ptr: u64 = args[1];
+    const envp_ptr: u64 = args[2];
     const frame = arch.trap.currentFrame() orelse return error_value;
     const path: []const u8 = userStr(path_ptr) orelse return error_value;
-    return signed(kern_exec.execve(frame, path));
+    return signed(kern_exec.execve(frame, path, argv_ptr, envp_ptr));
 }
 
 /// Number-to-handler table, indexed by system call number.
