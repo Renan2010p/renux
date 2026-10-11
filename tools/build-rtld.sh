@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 The Renux Project
 #
----
+# Compile FreeBSD's rtld-elf (the dynamic linker) for Renux.
 #
 # The sources are vendored from FreeBSD under libexec/rtld-elf, together with a
-# small FreeBSD-compatible header tree (libexec/rtld-elf/include). All of the C
-# files and the amd64 start assembly compile; linking ld-elf.so.1 still needs a
-# syscall layer for the __sys_* wrappers in rtld-libc/rtld_libc.c, so this
-# script stops at producing the objects.
+# small FreeBSD-compatible header tree (libexec/rtld-elf/include). The C files,
+# rtld_syscalls.c (the __sys_* layer) and the amd64 start assembly compile and
+# link into ld-elf.so.1.
 set -eu
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
