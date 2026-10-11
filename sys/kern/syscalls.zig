@@ -16,6 +16,7 @@ const param: type = @import("../sys/param.zig");
 const proc: type = @import("../sys/proc.zig");
 const file: type = @import("../sys/file.zig");
 const stat: type = @import("../sys/stat.zig");
+const dirent: type = @import("../sys/dirent.zig");
 const errno: type = @import("../sys/errno.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const kern_proc: type = @import("kern_proc.zig");
@@ -25,6 +26,8 @@ const kern_exit: type = @import("kern_exit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
 const vfs_vnops: type = @import("vfs_vnops.zig");
+const vfs_lookup: type = @import("vfs_lookup.zig");
+const vfs_subr: type = @import("vfs_subr.zig");
 const prf: type = @import("subr_prf.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
@@ -204,6 +207,77 @@ fn sysFstat(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// stat(2): resolve a path and copy its attributes to the caller.
+fn sysStat(args: [sys.MAXARGS]u64) u64 {
+    const path_ptr: u64 = args[0];
+    const statbuf: u64 = args[1];
+
+    const path: []const u8 = userStr(path_ptr) orelse return error_value;
+    const vp: *vnode.Vnode = vfs_lookup.nameiLookup(path) orelse return error_value;
+
+    var st: stat.Stat = undefined;
+    const err: i32 = vfs_vnops.fillStat(vp, &st);
+    vfs_subr.vrele(vp);
+    if (err != 0) {
+        return error_value;
+    }
+
+    const dst: [*]u8 = @ptrFromInt(statbuf);
+    const src: [*]const u8 = @ptrCast(&st);
+    var i: usize = 0;
+    while (i < @sizeOf(stat.Stat)) : (i += 1) {
+        dst[i] = src[i];
+    }
+    return 0;
+}
+
+/// getdents(2): read directory entries into the caller's buffer.
+fn sysGetdents(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const buf: u64 = args[1];
+    const count: u64 = args[2];
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
+    if (f.f_type != file.DTYPE_VNODE) {
+        return error_value;
+    }
+    const raw: ?*anyopaque = f.f_data orelse return error_value;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    if (vp.v_type != .vdir) {
+        return error_value;
+    }
+
+    // Read into a kernel buffer, then copy out and advance the file offset by
+    // the number of whole entries produced.
+    var kbuf: [512]u8 = undefined;
+    const want: usize = if (count > kbuf.len) kbuf.len else @intCast(count);
+    var eofflag: bool = false;
+    const n: isize = vp.v_op.readdir(vp, f.f_offset, kbuf[0..want], &eofflag);
+    if (n < 0) {
+        return error_value;
+    }
+    const nn: usize = @intCast(n);
+
+    const dst: [*]u8 = @ptrFromInt(buf);
+    var i: usize = 0;
+    while (i < nn) : (i += 1) {
+        dst[i] = kbuf[i];
+    }
+
+    var off: u64 = f.f_offset;
+    var j: usize = 0;
+    while (j + @sizeOf(dirent.Dirent) <= nn) {
+        const rec: *const dirent.Dirent = @ptrCast(@alignCast(&kbuf[j]));
+        if (rec.reclen == 0) {
+            break;
+        }
+        off += 1;
+        j += rec.reclen;
+    }
+    f.f_offset = off;
+    return nn;
+}
+
 fn sysExit(args: [sys.MAXARGS]u64) u64 {
     const status: i32 = @bitCast(@as(u32, @truncate(args[0])));
     kern_exit.exit(status);
@@ -275,6 +349,8 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_dup2, .handler = sysDup2 },
     .{ .num = sys.SYS_execve, .handler = sysExecve },
     .{ .num = sys.SYS_fstat, .handler = sysFstat },
+    .{ .num = sys.SYS_stat, .handler = sysStat },
+    .{ .num = sys.SYS_getdents, .handler = sysGetdents },
 };
 
 /// Number-to-handler table, indexed by system call number.

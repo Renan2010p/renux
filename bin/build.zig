@@ -58,6 +58,17 @@ pub fn build(b: *Builder) !void {
 
     const sh: *Builder.Step.Compile = program(b, target, optimize, libc, "sh", "sh/main.zig");
     const install_sh: *Builder.Step.InstallArtifact = b.addInstallArtifact(sh, .{});
-
     b.getInstallStep().dependOn(&install_sh.step);
+
+    const ls: *Builder.Step.Compile = program(b, target, optimize, libc, "ls", "ls/main.zig");
+    const install_ls: *Builder.Step.InstallArtifact = b.addInstallArtifact(ls, .{});
+    b.getInstallStep().dependOn(&install_ls.step);
+
+    const cat: *Builder.Step.Compile = program(b, target, optimize, libc, "cat", "cat/main.zig");
+    const install_cat: *Builder.Step.InstallArtifact = b.addInstallArtifact(cat, .{});
+    b.getInstallStep().dependOn(&install_cat.step);
+
+    const stat: *Builder.Step.Compile = program(b, target, optimize, libc, "stat", "stat/main.zig");
+    const install_stat: *Builder.Step.InstallArtifact = b.addInstallArtifact(stat, .{});
+    b.getInstallStep().dependOn(&install_stat.step);
 }

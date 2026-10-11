@@ -26,6 +26,29 @@ pub const SYS_dup: u64 = 41;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;
+pub const SYS_stat: u64 = 188;
+pub const SYS_getdents: u64 = 390;
+
+/// open(2) flags (the subset in use).
+pub const O_RDONLY: u64 = 0;
+pub const O_WRONLY: u64 = 1;
+pub const O_RDWR: u64 = 2;
+pub const O_CREAT: u64 = 0x0200;
+pub const O_DIRECTORY: u64 = 0x20000;
+
+/// Directory entry, matching the kernel's struct dirent (16 bytes of fields
+/// padded to 24 by the C ABI).
+pub const Dirent: type = extern struct {
+    ino: u64,
+    off: i64,
+    reclen: u16,
+    type: u8,
+    namlen: u16,
+};
+
+/// Directory entry types (DT_*).
+pub const DT_DIR: u8 = 4;
+pub const DT_REG: u8 = 8;
 
 /// File status, matching the kernel's struct stat (sys/sys/stat.h).
 pub const Stat: type = extern struct {
@@ -87,6 +110,17 @@ pub fn dup2(oldfd: u64, newfd: u64) i64 {
 pub fn fstat(fd: u64, st: *Stat) i64 {
     const r: u64 = syscall(SYS_fstat, .{ fd, @intFromPtr(st), 0, 0, 0, 0 });
     return @bitCast(r);
+}
+
+/// Fill in `st` for `path`.
+pub fn stat(path: [*:0]const u8, st: *Stat) i64 {
+    const r: u64 = syscall(SYS_stat, .{ @intFromPtr(path), @intFromPtr(st), 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Read directory entries into `buf`; returns the number of bytes read.
+pub fn getdents(fd: u64, buf: []u8) u64 {
+    return syscall(SYS_getdents, .{ fd, @intFromPtr(buf.ptr), buf.len, 0, 0, 0 });
 }
 
 /// Terminate the calling process.

@@ -9,7 +9,8 @@
 // boundary.
 
 /// Directory entry header; the name bytes follow immediately after it.
-pub const Dirent: type = struct {
+/// Declared extern so its layout is the C ABI's and matches libc's copy.
+pub const Dirent: type = extern struct {
     /// File serial number (inode).
     ino: u64,
     /// Offset of the next entry, for telldir/seekdir.

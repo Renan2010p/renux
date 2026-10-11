@@ -27,6 +27,9 @@ INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
 GETTY="${GETTY:-$ROOT/sbin/zig-out/bin/getty}"
 LOGIN="${LOGIN:-$ROOT/sbin/zig-out/bin/login}"
 SH="${SH:-$ROOT/bin/zig-out/bin/sh}"
+LS="${LS:-$ROOT/bin/zig-out/bin/ls}"
+CAT="${CAT:-$ROOT/bin/zig-out/bin/cat}"
+STAT="${STAT:-$ROOT/bin/zig-out/bin/stat}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -58,6 +61,9 @@ cp "$INIT" "$WORK/sbin/init"
 cp "$GETTY" "$WORK/sbin/getty"
 cp "$LOGIN" "$WORK/sbin/login"
 cp "$SH" "$WORK/bin/sh"
+cp "$LS" "$WORK/bin/ls"
+cp "$CAT" "$WORK/bin/cat"
+cp "$STAT" "$WORK/bin/stat"
 cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \

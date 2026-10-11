@@ -29,7 +29,7 @@ pub const vnode_ops: file.FileOps = .{
 };
 
 /// Turn a vnode's attributes into a struct stat.
-fn fillStat(vp: *vnode.Vnode, st: *stat.Stat) i32 {
+pub fn fillStat(vp: *vnode.Vnode, st: *stat.Stat) i32 {
     var vap: vnode.Vattr = .{
         .type = .vnone,
         .mode = 0,

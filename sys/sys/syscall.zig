@@ -19,9 +19,11 @@ pub const SYS_dup: u64 = 41;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;
+pub const SYS_stat: u64 = 188;
+pub const SYS_getdents: u64 = 390;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;
 
 /// Highest system call number plus one.
-pub const MAXSYSCALL: usize = 128;
+pub const MAXSYSCALL: usize = 512;
