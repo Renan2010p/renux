@@ -13,6 +13,9 @@
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
+const kern_exec: type = @import("kern_exec.zig");
+const uvm_page: type = @import("../uvm/uvm_page.zig");
+const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
 /// Copyright notice (cf. FreeBSD's sys/conf/copyright).
@@ -87,9 +90,41 @@ fn configure(_: ?*const anyopaque) callconv(.c) void {
     arch.cpu.enable_interrupts();
 }
 
-/// Create process 1 (init) and hand off to userland. Not implemented yet.
+/// Create process 1 (init): load the init executable passed as a boot module,
+/// set up its stack, and enter ring 3 (NetBSD's start_init()).
 fn start_init(_: ?*const anyopaque) callconv(.c) void {
-    prf.printLine("ZenBSD: init(8) not implemented; idling.");
+    const module = arch.boot.module(0) orelse {
+        prf.printLine("init: no init module provided");
+        return;
+    };
+    const address = module.address orelse {
+        prf.printLine("init: module has no address");
+        return;
+    };
+    const image: []const u8 = @as([*]const u8, @ptrCast(address))[0..@intCast(module.size)];
+
+    const result = kern_exec.exec(image) orelse {
+        prf.printLine("init: not an executable image");
+        return;
+    };
+
+    // Map the initial user stack.
+    var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
+    while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
+        const pa: u64 = uvm_page.physalloc() orelse return;
+        arch.pmap.enterUser(va, pa, .user_rw);
+    }
+
+    // Kernel stack the CPU switches to when control returns from ring 3.
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return;
+    const kpa: u64 = uvm_page.physalloc() orelse return;
+    arch.gdt.setKernelStack(hhdm + kpa + param.PAGE_SIZE);
+
+    prf.print("init: entering user mode at ");
+    prf.printHex(result.entry);
+    prf.printLine("");
+
+    arch.locore.enterUser(result.entry, arch.vmparam.USER_STACK_TOP);
 }
 
 comptime {

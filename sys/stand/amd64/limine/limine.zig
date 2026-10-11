@@ -119,6 +119,37 @@ pub const FramebufferResponse = extern struct {
     framebuffers: ?[*]?*Framebuffer,
 };
 
+pub const Uuid = extern struct {
+    a: u32,
+    b: u16,
+    c: u16,
+    d: [8]u8,
+};
+
+/// A file loaded by the bootloader (an executable, module or initrd entry).
+pub const File = extern struct {
+    revision: u64,
+    address: ?*anyopaque,
+    size: u64,
+    path: ?[*:0]const u8,
+    string: ?[*:0]const u8,
+    media_type: u32,
+    unused: u32,
+    tftp_ipv4: [4]u8,
+    tftp_port: u32,
+    partition_index: u32,
+    mbr_disk_id: u32,
+    gpt_disk_uuid: Uuid,
+    gpt_part_uuid: Uuid,
+    part_uuid: Uuid,
+};
+
+pub const ModuleResponse = extern struct {
+    revision: u64,
+    module_count: u64,
+    modules: ?[*]?*File,
+};
+
 // -- Requests (exported into the loaded image) -------------------------------
 
 export var requests_start: [4]u64 align(8) linksection(".limine_requests_start") = .{
@@ -156,6 +187,10 @@ export var memmap_request: Request(MemmapResponse) align(8) linksection(".limine
 
 export var framebuffer_request: Request(FramebufferResponse) align(8) linksection(".limine_requests") = .{
     .id = requestId(0x9d5827dcd881dd75, 0xa3148604f6fab11b),
+};
+
+export var module_request: Request(ModuleResponse) align(8) linksection(".limine_requests") = .{
+    .id = requestId(0x3e7e279702be32af, 0xca1c4f3bd1280cee),
 };
 
 export var requests_end: [2]u64 align(8) linksection(".limine_requests_end") = .{ 0xadc0e0531bb10d03, 0x9572709f31764c62 };
@@ -229,4 +264,16 @@ pub fn framebuffer(index: usize) ?*Framebuffer {
     if (index >= response.framebuffer_count) return null;
     const framebuffers = response.framebuffers orelse return null;
     return framebuffers[index];
+}
+
+pub fn moduleCount() ?usize {
+    const response = module_request.response orelse return null;
+    return @intCast(response.module_count);
+}
+
+pub fn module(index: usize) ?*File {
+    const response = module_request.response orelse return null;
+    if (index >= response.module_count) return null;
+    const modules = response.modules orelse return null;
+    return modules[index];
 }

@@ -17,6 +17,11 @@ pub const GDT_KCODE: u16 = 1;
 pub const GDT_KDATA: u16 = 2;
 pub const GDT_UCODE: u16 = 3;
 pub const GDT_UDATA: u16 = 4;
+/// First of the two slots occupied by the 64-bit TSS descriptor.
+pub const GDT_TSS: u16 = 5;
+
+/// Number of GDT slots: the TSS descriptor spans two.
+pub const GDT_SLOTS: usize = 7;
 
 /// Derive a selector from a slot index and a requested privilege level.
 pub fn selector(index: u16, rpl: u16) u16 {
@@ -31,3 +36,5 @@ pub const KDATA_SEL: u16 = selector(GDT_KDATA, 0);
 pub const UCODE_SEL: u16 = selector(GDT_UCODE, 3);
 /// User data selector (ring 3).
 pub const UDATA_SEL: u16 = selector(GDT_UDATA, 3);
+/// Task State Segment selector (ring 0).
+pub const TSS_SEL: u16 = selector(GDT_TSS, 0);

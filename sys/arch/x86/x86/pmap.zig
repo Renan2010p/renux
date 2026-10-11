@@ -42,6 +42,9 @@ fn flagsFor(prot: Prot) u64 {
         .kernel_rw => pte.P | pte.RW | pte.NX,
         .kernel_ro => pte.P | pte.NX,
         .kernel_rx => pte.P,
+        .user_rw => pte.P | pte.RW | pte.US | pte.NX,
+        .user_ro => pte.P | pte.US | pte.NX,
+        .user_rx => pte.P | pte.US,
     };
 }
 
@@ -50,19 +53,21 @@ fn index(va: u64, comptime shift: u6) usize {
 }
 
 /// Return the next-level table for `entry`, allocating and linking one if the
-/// entry is not present.
+/// entry is not present. Intermediate tables are marked user-accessible; a user
+/// mapping still requires the US bit at the leaf, so kernel mappings stay
+/// unreachable from ring 3.
 fn descend(parent: [*]u64, i: usize) ?[*]u64 {
     var entry: u64 = parent[i];
     if ((entry & pte.P) == 0) {
         const child = uvm_page.physalloc() orelse return null;
-        entry = child | pte.P | pte.RW;
+        entry = child | pte.P | pte.RW | pte.US;
         parent[i] = entry;
     }
     return table(entry);
 }
 
-/// Map physical page `pa` at kernel virtual address `va`.
-pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
+/// Install a leaf mapping for `va` -> `pa` with the given protection.
+fn map(va: u64, pa: u64, prot: Prot) void {
     const pml4 = table(readCr3());
     const pdp = descend(pml4, index(va, pte.L4_SHIFT)) orelse return;
     const pd = descend(pdp, index(va, pte.L3_SHIFT)) orelse return;
@@ -73,6 +78,16 @@ pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
         :
         : [p] "r" (va),
         : .{ .memory = true });
+}
+
+/// Map physical page `pa` at kernel virtual address `va`.
+pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
+    map(va, pa, prot);
+}
+
+/// Map physical page `pa` at user virtual address `va` (leaf with the US bit).
+pub fn enterUser(va: u64, pa: u64, prot: Prot) void {
+    map(va, pa, prot);
 }
 
 /// Translate `va` to a physical address, or null if it is not mapped.

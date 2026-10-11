@@ -7,7 +7,7 @@
 // machine-dependent half of the VM system, which owns page tables. The
 // implementation lives in sys/arch/x86/x86/pmap.zig.
 
-/// Protection requested for a kernel mapping.
+/// Protection requested for a mapping.
 pub const Prot: type = enum {
     /// Kernel read/write data (not executable).
     kernel_rw,
@@ -15,4 +15,10 @@ pub const Prot: type = enum {
     kernel_ro,
     /// Kernel executable code (read/execute).
     kernel_rx,
+    /// User read/write data (not executable).
+    user_rw,
+    /// User read-only data (not executable).
+    user_ro,
+    /// User executable code (read/execute).
+    user_rx,
 };

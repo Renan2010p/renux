@@ -13,6 +13,8 @@ const trap: type = @import("../include/trap.zig");
 const intr: type = @import("../../x86/x86/intr.zig");
 const intrdefs: type = @import("../../x86/include/intrdefs.zig");
 const pmap: type = @import("../../x86/x86/pmap.zig");
+const syscall: type = @import("../../x86/x86/syscall.zig");
+const vector: type = @import("vector.zig");
 const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
 const param: type = @import("../../../sys/param.zig");
@@ -86,6 +88,19 @@ fn handlePageFault(frame: *trap.TrapFrame) bool {
 
 /// Trap dispatcher, called by trap_common().
 export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
+    if (frame.vector == vector.SYSCALL_VECTOR) {
+        frame.rax = syscall.dispatch(
+            frame.rax,
+            frame.rdi,
+            frame.rsi,
+            frame.rdx,
+            frame.r10,
+            frame.r8,
+            frame.r9,
+        );
+        return;
+    }
+
     if (frame.vector == trap.T_PAGE) {
         if (handlePageFault(frame)) {
             return;

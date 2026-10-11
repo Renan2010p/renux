@@ -19,12 +19,14 @@ const segments: type = @import("../../x86/include/segments.zig");
 fn Stub(comptime vector: u8, comptime pushes_error: bool) type {
     return struct {
         fn entry() callconv(.naked) void {
+            // Push the vector as an i32 immediate: an i8 immediate would be
+            // sign-extended, corrupting vectors at or above 0x80.
             if (pushes_error) {
                 asm volatile (
                     \\ pushq %[vec]
                     \\ jmp trap_common
                     :
-                    : [vec] "i" (vector),
+                    : [vec] "i" (@as(i32, vector)),
                 );
             } else {
                 asm volatile (
@@ -32,7 +34,7 @@ fn Stub(comptime vector: u8, comptime pushes_error: bool) type {
                     \\ pushq %[vec]
                     \\ jmp trap_common
                     :
-                    : [vec] "i" (vector),
+                    : [vec] "i" (@as(i32, vector)),
                 );
             }
         }
@@ -47,12 +49,17 @@ fn pushesErrorCode(vector: u8) bool {
     };
 }
 
-/// Install all 256 gates (as interrupt gates, DPL 0) and load the IDT.
+/// Vector used for the legacy int 0x80 system call.
+pub const SYSCALL_VECTOR: u8 = 0x80;
+
+/// Install all 256 gates (interrupt gates) and load the IDT. The system call
+/// vector is reachable from ring 3 (DPL 3).
 pub fn install() void {
     inline for (0..idt.IDT_ENTRIES) |i| {
         const vector: u8 = i;
         const handler: u64 = @intFromPtr(&Stub(vector, pushesErrorCode(vector)).entry);
-        idt.setgate(vector, handler, 0, segments.SDT_SYS386IGT, 0);
+        const dpl: u2 = if (vector == SYSCALL_VECTOR) 3 else 0;
+        idt.setgate(vector, handler, 0, segments.SDT_SYS386IGT, dpl);
     }
     idt.load();
 }

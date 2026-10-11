@@ -13,12 +13,14 @@ set -eu
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # sys/stand/amd64/limine
 SYS="$(CDPATH= cd -- "$HERE/../../.." && pwd)"         # sys/
+ROOT="$(CDPATH= cd -- "$SYS/.." && pwd)"               # repository root
 
 KERNEL="${KERNEL:-$SYS/zig-out/bin/kernel}"
 CONF="${CONF:-$SYS/stand/amd64/conf/limine/limine.conf}"
 LIMINE="${LIMINE_DIR:-$SYS/zig-out/limine}"
 OUT="${OUT:-$SYS/zig-out/zenbsd.iso}"
 WORK="${WORK:-$SYS/zig-out/iso}"
+INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
@@ -29,18 +31,24 @@ fi
     exit 1
 }
 
+# Build the userland (/sbin/init) if it is not present yet.
+if [ ! -f "$INIT" ]; then
+    ( cd "$ROOT/sbin" && zig build )
+fi
+
 command -v xorriso >/dev/null 2>&1 || {
     echo "mkiso: 'xorriso' is required to build the ISO" >&2
     exit 1
 }
 
 rm -rf "$WORK"
-mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT"
+mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT" "$WORK/sbin"
 
 cp "$LIMINE/limine-bios.sys" "$LIMINE/limine-bios-cd.bin" "$LIMINE/limine-uefi-cd.bin" "$WORK/boot/limine/"
 cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
 cp "$CONF" "$WORK/limine.conf"
 cp "$KERNEL" "$WORK/boot/zenbsd/kernel"
+cp "$INIT" "$WORK/sbin/init"
 
 xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \

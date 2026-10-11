@@ -21,8 +21,11 @@ const machdep_impl: type = switch (cpu_arch) {
 /// Low-level CPU primitives (halt, interrupt flags, ...).
 pub const cpu: type = machdep_impl.cpu;
 
-/// Low-level entry point.
+/// Low-level entry point and ring 3 transition.
 pub const locore: type = machdep_impl.locore;
+
+/// Descriptor tables (GDT/TSS).
+pub const gdt: type = machdep_impl.gdt;
 
 /// Bus space access implementation (backing sys/sys/bus.zig).
 pub const bus_space: type = machdep_impl.bus_space;
