@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2026 The Renux Project
 #
-# Compile FreeBSD's rtld-elf (the dynamic linker) for Renux.
+---
 #
 # The sources are vendored from FreeBSD under libexec/rtld-elf, together with a
 # small FreeBSD-compatible header tree (libexec/rtld-elf/include). All of the C
@@ -37,7 +37,8 @@ objs="$objs $OUT/pic/rtld_start.o"
 # Link ld-elf.so.1 as a shared object. The entry point is .rtld_start (the
 # leading dot is FreeBSD's). zig cc refuses -shared on a freestanding target, so
 # the bundled lld is invoked directly.
-"${LD:-zig ld.lld}" -shared -e .rtld_start -Bsymbolic --strip-debug \
+ld="${LD:-zig ld.lld}"
+$ld -shared -e .rtld_start -Bsymbolic --strip-debug \
 	-o "$OUT/ld-elf.so.1" $objs
 
 echo "built $OUT/ld-elf.so.1"
