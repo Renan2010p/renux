@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 The ZenBSD Project
+//
+// /sbin build definition.
+//
+// Builds the system programs (currently init). Each is a static, non-PIE ELF at
+// a fixed low address, linking the C library.
 
 const std: type = @import("std");
 const builtin: type = std.builtin;
@@ -7,8 +12,7 @@ const Target: type = std.Target;
 const Query: type = Target.Query;
 const Builder: type = std.Build;
 
-/// Build one userland program: a static, non-PIE ELF at a fixed low address,
-/// linking the C library.
+/// Build one program against the C library.
 fn program(
     b: *Builder,
     target: Builder.ResolvedTarget,
@@ -31,7 +35,7 @@ fn program(
         .use_lld = true,
         .use_llvm = true,
     });
-    exe.setLinkerScript(b.path("user.ldscript"));
+    exe.setLinkerScript(libc.path("libc/libc.ldscript"));
     return exe;
 }
 
@@ -44,24 +48,16 @@ pub fn build(b: *Builder) !void {
     };
 
     const target: Builder.ResolvedTarget = b.resolveTargetQuery(query);
-
     const optimize: builtin.OptimizeMode = b.standardOptimizeOption(.{
         .preferred_optimize_mode = .fast,
     });
 
-    // The C library lives in ../lib, a separate package; depend on it and add
-    // its "libc" module as an import.
-    const libc: *Builder.Dependency = b.dependency("libc", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    // The C library module inherits this compilation's target and optimize
+    // mode, so no options need to be passed.
+    const libc: *Builder.Dependency = b.dependency("libc", .{});
 
     const init: *Builder.Step.Compile = program(b, target, optimize, libc, "init", "init/main.zig");
-    const sh: *Builder.Step.Compile = program(b, target, optimize, libc, "sh", "sh/main.zig");
-
     const install_init: *Builder.Step.InstallArtifact = b.addInstallArtifact(init, .{});
-    const install_sh: *Builder.Step.InstallArtifact = b.addInstallArtifact(sh, .{});
 
     b.getInstallStep().dependOn(&install_init.step);
-    b.getInstallStep().dependOn(&install_sh.step);
 }

@@ -26,7 +26,7 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
     const entries: usize = arch.boot.memmapEntryCount() orelse 0;
     var i: usize = 0;
     while (i < entries) : (i += 1) {
-        const entry = arch.boot.memmapEntry(i) orelse continue;
+        const entry: *arch.boot.MemmapEntry = arch.boot.memmapEntry(i) orelse continue;
         if (entry.type == arch.boot.MemmapEntry.USABLE) {
             uvm_page.physload(entry.base, entry.base + entry.length);
         }
@@ -39,7 +39,7 @@ fn totalMemory() u64 {
     const entries: usize = arch.boot.memmapEntryCount() orelse 0;
     var i: usize = 0;
     while (i < entries) : (i += 1) {
-        const entry = arch.boot.memmapEntry(i) orelse continue;
+        const entry: *arch.boot.MemmapEntry = arch.boot.memmapEntry(i) orelse continue;
         if (entry.type == arch.boot.MemmapEntry.USABLE) {
             total += entry.length;
         }

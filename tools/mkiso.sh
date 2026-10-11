@@ -22,7 +22,7 @@ LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
 OUT="${OUT:-$SYS/zig-out/zenbsd.iso}"
 WORK="${WORK:-$SYS/zig-out/iso}"
 INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
-SH="${SH:-$ROOT/sbin/zig-out/bin/sh}"
+SH="${SH:-$ROOT/bin/zig-out/bin/sh}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
@@ -34,9 +34,8 @@ fi
 }
 
 # Build the userland if it is not present yet.
-if [ ! -f "$INIT" ] || [ ! -f "$SH" ]; then
-    ( cd "$ROOT/sbin" && zig build )
-fi
+[ -f "$INIT" ] || ( cd "$ROOT/sbin" && zig build )
+[ -f "$SH" ] || ( cd "$ROOT/bin" && zig build )
 
 command -v xorriso >/dev/null 2>&1 || {
     echo "mkiso: 'xorriso' is required to build the ISO" >&2

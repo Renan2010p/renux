@@ -35,7 +35,7 @@ pub fn physload(start: u64, end: u64) void {
         if (pa == 0) {
             continue; // never hand out page 0
         }
-        const node = link(pa);
+        const node: *u64 = link(pa);
         node.* = head;
         head = pa;
         count += 1;
@@ -61,7 +61,7 @@ pub fn physalloc() ?u64 {
 
 /// Return a page to the free list.
 pub fn physfree(pa: u64) void {
-    const node = link(pa);
+    const node: *u64 = link(pa);
     node.* = head;
     head = pa;
     count += 1;

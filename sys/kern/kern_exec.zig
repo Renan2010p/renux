@@ -17,9 +17,9 @@ pub const Result: type = struct {
 
 /// Load `bytes` as a program image, or return null if no activator matches.
 pub fn exec(bytes: []const u8) ?Result {
-    if (exec_elf.isElf(bytes)) {
-        const result = exec_elf.load(bytes) orelse return null;
-        return .{ .entry = result.entry };
+    if (!exec_elf.isElf(bytes)) {
+        return null;
     }
-    return null;
+    const loaded = exec_elf.load(bytes) orelse return null;
+    return .{ .entry = loaded.entry };
 }
