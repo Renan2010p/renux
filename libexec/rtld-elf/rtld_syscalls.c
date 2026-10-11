@@ -143,6 +143,70 @@ sysarch(int op, void *parms)
 	return ((int)raw(165, op, (long)parms, 0, 0, 0, 0));
 }
 
+void *
+__sys_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
+{
+	long r = raw(477, (long)addr, len, prot, flags, fd, off);
+	if (r == -1)
+		return (MAP_FAILED);
+	return ((void *)r);
+}
+
+int
+__sys_munmap(void *addr, size_t len)
+{
+	return ((int)raw(73, (long)addr, len, 0, 0, 0, 0));
+}
+
+int
+__sys_mprotect(void *addr, size_t len, int prot)
+{
+	return ((int)raw(74, (long)addr, len, prot, 0, 0, 0));
+}
+
+int
+__sys_fstat(int fd, struct stat *st)
+{
+	return ((int)raw(189, fd, (long)st, 0, 0, 0, 0));
+}
+
+int
+__sys___getcwd(char *buf, size_t len)
+{
+	return ((int)raw(326, (long)buf, len, 0, 0, 0, 0));
+}
+
+int
+__sys_getpid(void)
+{
+	return ((int)raw(20, 0, 0, 0, 0, 0, 0));
+}
+
+int
+__sys_geteuid(void)
+{
+	return ((int)raw(24, 0, 0, 0, 0, 0, 0));
+}
+
+int
+__sys_getegid(void)
+{
+	return ((int)raw(24, 0, 0, 0, 0, 0, 0));
+}
+
+int
+__sys_kill(int pid, int sig)
+{
+	return ((int)raw(37, pid, sig, 0, 0, 0, 0));
+}
+
+long
+__sys_getdirentries(int fd, char *buf, size_t n, off_t *basep)
+{
+	(void)basep;
+	return (raw(272, fd, (long)buf, n, 0, 0, 0));
+}
+
 /* utrace is a no-op without kernel tracing. */
 void
 utrace(const void *trace, size_t len)

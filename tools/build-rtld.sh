@@ -23,7 +23,7 @@ mkdir -p "$OUT/pic"
 
 objs=""
 for f in rtld.c map_object.c rtld_malloc.c rtld_printf.c xmalloc.c debug.c \
-	libmap.c rtld_lock.c amd64/reloc.c rtld-libc/rtld_libc.c rtld_syscalls.c; do
+	libmap.c rtld_lock.c amd64/reloc.c rtld-libc/rtld_libc.c rtld_syscalls.c rtld_libc_min.c; do
 	o="$OUT/pic/$(basename "$f").o"
 	$CC -DIN_RTLD -fPIC -fno-sanitize=undefined -c "$RTLD/$f" $inc -o "$o"
 	objs="$objs $o"
