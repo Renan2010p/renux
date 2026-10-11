@@ -15,8 +15,9 @@ pub const S_IFCHR: u32 = 0o020000;
 pub const S_IFLNK: u32 = 0o120000;
 pub const S_IFIFO: u32 = 0o010000;
 
-/// The result of stat(2)/fstat(2) (NetBSD's struct stat, reduced).
-pub const Stat: type = struct {
+/// The result of stat(2)/fstat(2) (NetBSD's struct stat, reduced). Declared
+/// extern so its layout is the C ABI's and matches libc's copy exactly.
+pub const Stat: type = extern struct {
     /// Device containing the file.
     dev: u64,
     /// File serial number (inode).

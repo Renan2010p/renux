@@ -14,6 +14,65 @@ const getchar = libc.stdio.getchar;
 
 const MAX_LINE: usize = 256;
 const MAX_NAME: usize = 128;
+const MAX_PATH: usize = 256;
+
+/// Copy `s` into `buf` and NUL-terminate it, returning the C string.
+fn cstr(s: []const u8, buf: []u8) ?[*:0]const u8 {
+    if (s.len + 1 > buf.len) {
+        return null;
+    }
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        buf[i] = s[i];
+    }
+    buf[s.len] = 0;
+    return @ptrCast(&buf[0]);
+}
+
+/// `stat <path>`: open the path and report its size and mode.
+fn statPath(path: []const u8) void {
+    var pb: [MAX_PATH]u8 = undefined;
+    const cpath: [*:0]const u8 = cstr(path, &pb) orelse {
+        puts("sh: path too long");
+        return;
+    };
+    const fd: i64 = libc.syscall.open(cpath, 0, 0);
+    if (fd < 0) {
+        printf("sh: %s: cannot open\n", .{path});
+        return;
+    }
+    var st: libc.syscall.Stat = undefined;
+    if (libc.syscall.fstat(@intCast(fd), &st) < 0) {
+        puts("sh: fstat failed");
+        _ = libc.syscall.close(@intCast(fd));
+        return;
+    }
+    printf("%s: mode %d nlink %d size %d\n", .{ path, st.mode, st.nlink, st.size });
+    _ = libc.syscall.close(@intCast(fd));
+}
+
+/// `cat <path>`: copy the file to standard output.
+fn catPath(path: []const u8) void {
+    var pb: [MAX_PATH]u8 = undefined;
+    const cpath: [*:0]const u8 = cstr(path, &pb) orelse {
+        puts("sh: path too long");
+        return;
+    };
+    const fd: i64 = libc.syscall.open(cpath, 0, 0);
+    if (fd < 0) {
+        printf("sh: %s: cannot open\n", .{path});
+        return;
+    }
+    var buf: [128]u8 = undefined;
+    while (true) {
+        const n: u64 = libc.syscall.read(@intCast(fd), &buf);
+        if (n == 0 or n > buf.len) {
+            break;
+        }
+        _ = libc.syscall.write(1, buf[0..n]);
+    }
+    _ = libc.syscall.close(@intCast(fd));
+}
 
 fn equal(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) {
@@ -109,7 +168,7 @@ fn execute(line: []const u8) void {
     const rest: []const u8 = if (i < cmd.len) trim(cmd[i..]) else "";
 
     if (equal(name, "help")) {
-        puts("builtins: help echo uname getpid exit");
+        puts("builtins: help echo uname getpid stat cat exit");
         puts("external commands are loaded from /bin");
     } else if (equal(name, "echo")) {
         puts(rest);
@@ -117,6 +176,10 @@ fn execute(line: []const u8) void {
         puts("ZenBSD 0.1 amd64");
     } else if (equal(name, "getpid")) {
         printf("pid %d\n", .{libc.syscall.getpid()});
+    } else if (equal(name, "stat")) {
+        statPath(rest);
+    } else if (equal(name, "cat")) {
+        catPath(rest);
     } else if (equal(name, "exit")) {
         libc.syscall.exit(0);
     } else {

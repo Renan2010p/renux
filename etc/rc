@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 The ZenBSD Project
+#
+# /etc/rc -- ZenBSD system startup script.
+#
+# Like the BSD rc files, this is the sequence init runs once the root
+# filesystem is up: it starts the system programs that bring the rest of the
+# system to life. Only the shell is started so far.
+
+echo "ZenBSD: running /etc/rc"

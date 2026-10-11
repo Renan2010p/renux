@@ -9,6 +9,8 @@
 #   /boot/limine/{limine-bios.sys,limine-bios-cd.bin,limine-uefi-cd.bin}
 #   /boot/zenbsd/kernel
 #   /sbin/init
+#   /bin/sh
+#   /etc/rc
 #   /EFI/BOOT/BOOTX64.EFI
 set -eu
 
@@ -23,6 +25,7 @@ OUT="${OUT:-$SYS/zig-out/zenbsd.iso}"
 WORK="${WORK:-$SYS/zig-out/iso}"
 INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
 SH="${SH:-$ROOT/bin/zig-out/bin/sh}"
+RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
@@ -43,7 +46,7 @@ command -v xorriso >/dev/null 2>&1 || {
 }
 
 rm -rf "$WORK"
-mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT" "$WORK/sbin" "$WORK/bin"
+mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT" "$WORK/sbin" "$WORK/bin" "$WORK/etc"
 
 cp "$LIMINE/limine-bios.sys" "$LIMINE/limine-bios-cd.bin" "$LIMINE/limine-uefi-cd.bin" "$WORK/boot/limine/"
 cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
@@ -51,6 +54,7 @@ cp "$CONF" "$WORK/limine.conf"
 cp "$KERNEL" "$WORK/boot/zenbsd/kernel"
 cp "$INIT" "$WORK/sbin/init"
 cp "$SH" "$WORK/bin/sh"
+cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \
