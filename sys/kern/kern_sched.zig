@@ -17,7 +17,7 @@ const kern_proc: type = @import("kern_proc.zig");
 pub var in_scheduler: bool = true;
 
 /// Context the scheduler switches away from and back to.
-var sched_ctx: proc.Context = .{ .rsp = 0 };
+var sched_ctx: proc.Context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
 
 /// Dedicated stack used while the scheduler idles.
 var sched_stack: [8192]u8 align(16) = undefined;
@@ -32,17 +32,19 @@ fn procEntry() callconv(.c) noreturn {
     arch.trap.usertrapret(&kern_proc.current.frame);
 }
 
-/// Fabricate a process's kernel context so that the first swtch() to it lands in
+/// Prepare a process's kernel context so that the first swtch() to it lands in
 /// procEntry().
 pub fn prepareContext(p: *proc.Proc) void {
-    const sp: [*]u64 = @ptrFromInt(p.kstack_top - 6 * 8);
-    sp[0] = 0; // r15
-    sp[1] = 0; // r14
-    sp[2] = 0; // r13
-    sp[3] = 0; // r12
-    sp[4] = 0; // rbx
-    sp[5] = @intFromPtr(&procEntry); // return address
-    p.context = .{ .rsp = @intFromPtr(sp) };
+    p.context = .{
+        .rsp = p.kstack_top,
+        .rbx = 0,
+        .rbp = 0,
+        .r12 = 0,
+        .r13 = 0,
+        .r14 = 0,
+        .r15 = 0,
+        .rip = @intFromPtr(&procEntry),
+    };
 }
 
 /// The scheduler loop. Runs on the boot stack and never returns.

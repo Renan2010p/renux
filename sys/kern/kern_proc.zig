@@ -29,7 +29,7 @@ pub fn init() void {
         p.pmap = 0;
         p.kstack_page = 0;
         p.kstack_top = 0;
-        p.context = .{ .rsp = 0 };
+        p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
     }
 }
@@ -52,7 +52,7 @@ pub fn alloc() ?*proc.Proc {
         p.pmap = map;
         p.kstack_page = kpage;
         p.kstack_top = kpage + hhdm + param.PAGE_SIZE;
-        p.context = .{ .rsp = 0 };
+        p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
         p.state = .runnable;
         return p;
