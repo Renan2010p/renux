@@ -10,3 +10,4 @@
 
 pub const syscall: type = @import("sys/syscall.zig");
 pub const stdio: type = @import("stdio/stdio.zig");
+pub const c: type = @import("c.zig");

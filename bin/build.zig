@@ -88,4 +88,27 @@ pub fn build(b: *Builder) !void {
     const rmdir: *Builder.Step.Compile = program(b, target, optimize, libc, "rmdir", "rmdir/main.zig");
     const install_rmdir: *Builder.Step.InstallArtifact = b.addInstallArtifact(rmdir, .{});
     b.getInstallStep().dependOn(&install_rmdir.step);
+
+    // A C program: compiled by clang (through Zig) against the headers in
+    // lib/include and linked against the Zig C library.
+    const hello_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("hello/main.zig"),
+        .code_model = .default,
+    });
+    hello_mod.addImport("libc", libc.module("libc"));
+    hello_mod.addImport("csu", libc.module("csu"));
+    hello_mod.addIncludePath(libc.path("include"));
+    hello_mod.addCSourceFile(.{ .file = b.path("hello/main.c"), .flags = &.{} });
+
+    const hello: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "hello",
+        .root_module = hello_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    hello.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_hello: *Builder.Step.InstallArtifact = b.addInstallArtifact(hello, .{});
+    b.getInstallStep().dependOn(&install_hello.step);
 }

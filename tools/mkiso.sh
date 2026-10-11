@@ -38,6 +38,7 @@ PWDCMD="${PWDCMD:-$ROOT/bin/zig-out/bin/pwd}"
 MKDIR="${MKDIR:-$ROOT/bin/zig-out/bin/mkdir}"
 RM="${RM:-$ROOT/bin/zig-out/bin/rm}"
 RMDIR="${RMDIR:-$ROOT/bin/zig-out/bin/rmdir}"
+HELLO="${HELLO:-$ROOT/bin/zig-out/bin/hello}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -80,6 +81,7 @@ cp "$PWDCMD" "$WORK/bin/pwd"
 cp "$MKDIR" "$WORK/bin/mkdir"
 cp "$RM" "$WORK/bin/rm"
 cp "$RMDIR" "$WORK/bin/rmdir"
+cp "$HELLO" "$WORK/bin/hello"
 cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \
