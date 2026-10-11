@@ -111,9 +111,14 @@ fn vnodeClose(f: *file.File) i32 {
 }
 
 /// Open `path` (relative to `start`, or absolute) and return a new open-file
-/// entry, or null when the path cannot be resolved or opened.
-pub fn vn_open(start: ?*vnode.Vnode, path: []const u8, flags: i32) ?*file.File {
-    const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return null;
+/// entry, or null when the path cannot be resolved or opened. O_CREAT creates
+/// the file when it does not exist.
+pub fn vn_open(start: ?*vnode.Vnode, path: []const u8, flags: i32, create_mode: u16) ?*file.File {
+    var resolved: ?*vnode.Vnode = vfs_lookup.nameiAt(start, path);
+    if (resolved == null and (flags & fcntl.O_CREAT) != 0) {
+        resolved = createNode(start, path, .vreg, create_mode, 0);
+    }
+    const vp: *vnode.Vnode = resolved orelse return null;
 
     // Character and block special files dispatch to their device driver.
     if (vp.v_type == .vchr or vp.v_type == .vblk) {

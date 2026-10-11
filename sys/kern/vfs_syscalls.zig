@@ -31,7 +31,8 @@ pub fn sysOpen(args: [sys.MAXARGS]u64) u64 {
 
     const p: *proc.Proc = kern_proc.current;
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
-    const f: *file.File = vfs_vnops.vn_open(p.cwd, path, flags) orelse return sys.signed(-errno.ENOENT);
+    const mode: u16 = @truncate(args[2] & 0o777);
+    const f: *file.File = vfs_vnops.vn_open(p.cwd, path, flags, mode) orelse return sys.signed(-errno.ENOENT);
 
     const fd: usize = kern_descrip.fdalloc(p, 3) orelse {
         _ = kern_descrip.closeFile(f);
