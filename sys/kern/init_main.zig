@@ -84,17 +84,22 @@ fn printVersion(_: ?*const anyopaque) callconv(.c) void {
 /// Configure the system hardware. This enables interrupts (FreeBSD's
 /// SI_SUB_CONFIGURE; NetBSD's configure()).
 fn configure(_: ?*const anyopaque) callconv(.c) void {
-    prf.printLine("com0 at isa0 port 0x3f8-0x3ff: ns16550a");
-    prf.printLine("i8254 at isa0 port 0x40-0x43");
+    prf.printLine("isa0 at mainbus0");
+    prf.printLine("com0 at isa0 port 0x3f8-0x3ff irq 4: ns16550a, 16-byte fifo");
+    prf.printLine("attimer0 at isa0 port 0x40-0x43");
+    prf.printLine("pcib0 at mainbus0");
+    prf.printLine("vga0 at isa0 port 0x3c0-0x3df");
     if (arch.boot.framebuffer(0)) |fb| {
-        prf.print("wsdisplay0 at vga0: console ");
+        prf.print("wsdisplay0 at vga0: console (");
         prf.printDec(fb.width);
         prf.print("x");
         prf.printDec(fb.height);
-        prf.print("x");
+        prf.print(", ");
         prf.printDec(fb.bpp);
-        prf.printLine("");
+        prf.printLine("bpp)");
     }
+    prf.printLine("Event timer \"i8254\" frequency 1193182 Hz quality 0");
+    prf.printLine("Timecounter \"i8254\" frequency 1193182 Hz quality 0");
     prf.printLine("Renux: enabling interrupts (PIT @ 100 Hz)");
     arch.cpu.enable_interrupts();
 }
@@ -166,6 +171,18 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     }
     if (vfs_vnops.vn_mknod("/dev/tty", .vchr, 0o666, conf.makedev(1, 0))) |vp| {
         vfs_subr.vrele(vp);
+    }
+
+    // /var/log, for the system log.
+    if (vfs_lookup.nameiLookup("/var") == null) {
+        if (vfs_vnops.vn_create("/var", .vdir, 0o755)) |vp| {
+            vfs_subr.vrele(vp);
+        }
+    }
+    if (vfs_lookup.nameiLookup("/var/log") == null) {
+        if (vfs_vnops.vn_create("/var/log", .vdir, 0o755)) |vp| {
+            vfs_subr.vrele(vp);
+        }
     }
 
     kern_proc.init();

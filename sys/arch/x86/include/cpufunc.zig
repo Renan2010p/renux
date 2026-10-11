@@ -70,6 +70,31 @@ pub fn halt() void {
     asm volatile ("hlt");
 }
 
+/// The four result registers of a CPUID leaf.
+pub const Cpuid: type = struct {
+    eax: u32,
+    ebx: u32,
+    ecx: u32,
+    edx: u32,
+};
+
+/// Execute CPUID for `leaf` with sub-leaf `subleaf` (in ecx).
+pub fn cpuid(leaf: u32, subleaf: u32) Cpuid {
+    var a: u32 = undefined;
+    var b: u32 = undefined;
+    var c: u32 = undefined;
+    var d: u32 = undefined;
+    asm volatile ("cpuid"
+        : [a] "={eax}" (a),
+          [b] "={ebx}" (b),
+          [c] "={ecx}" (c),
+          [d] "={edx}" (d),
+        : [leaf] "{eax}" (leaf),
+          [sub] "{ecx}" (subleaf),
+    );
+    return .{ .eax = a, .ebx = b, .ecx = c, .edx = d };
+}
+
 /// Trigger a breakpoint exception (int3). Used to exercise the IDT.
 pub fn breakpoint() void {
     asm volatile ("int3");

@@ -188,4 +188,44 @@ pub fn build(b: *Builder) !void {
     nano.setLinkerScript(libc.path("libc/libc.ldscript"));
     const install_nano: *Builder.Step.InstallArtifact = b.addInstallArtifact(nano, .{});
     b.getInstallStep().dependOn(&install_nano.step);
+
+    const dmesg_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("dmesg/main.zig"),
+        .code_model = .default,
+    });
+    dmesg_mod.addImport("libc", libc.module("libc"));
+    dmesg_mod.addImport("csu", libc.module("csu"));
+    dmesg_mod.addIncludePath(libc.path("include"));
+    dmesg_mod.addCSourceFile(.{ .file = b.path("dmesg/main.c"), .flags = &.{} });
+    const dmesg: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "dmesg",
+        .root_module = dmesg_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    dmesg.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_dmesg: *Builder.Step.InstallArtifact = b.addInstallArtifact(dmesg, .{});
+    b.getInstallStep().dependOn(&install_dmesg.step);
+
+    const logger_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("logger/main.zig"),
+        .code_model = .default,
+    });
+    logger_mod.addImport("libc", libc.module("libc"));
+    logger_mod.addImport("csu", libc.module("csu"));
+    logger_mod.addIncludePath(libc.path("include"));
+    logger_mod.addCSourceFile(.{ .file = b.path("logger/main.c"), .flags = &.{} });
+    const logger: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "logger",
+        .root_module = logger_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    logger.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_logger: *Builder.Step.InstallArtifact = b.addInstallArtifact(logger, .{});
+    b.getInstallStep().dependOn(&install_logger.step);
 }

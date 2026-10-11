@@ -42,6 +42,8 @@ HELLO="${HELLO:-$ROOT/bin/zig-out/bin/hello}"
 WC="${WC:-$ROOT/bin/zig-out/bin/wc}"
 TUI="${TUI:-$ROOT/bin/zig-out/bin/tui}"
 NANO="${NANO:-$ROOT/bin/zig-out/bin/nano}"
+DMESG="${DMESG:-$ROOT/bin/zig-out/bin/dmesg}"
+LOGGER="${LOGGER:-$ROOT/bin/zig-out/bin/logger}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -89,6 +91,8 @@ cp "$WC" "$WORK/bin/wc"
 cp "$TUI" "$WORK/bin/tui"
 cp "$NANO" "$WORK/bin/nano"
 cp "$NANO" "$WORK/bin/edit"
+cp "$DMESG" "$WORK/bin/dmesg"
+cp "$LOGGER" "$WORK/usr/bin/logger"
 cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \

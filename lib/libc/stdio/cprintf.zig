@@ -218,10 +218,18 @@ pub export fn sprintf(buf: [*]u8, fmt: [*:0]const u8, ...) callconv(.c) c_int {
 
 pub export fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int {
     var ap = @cVaStart();
+    const n: c_int = vsnprintf(buf, size, fmt, &ap);
+    @cVaEnd(&ap);
+    return n;
+}
+
+/// Format `fmt` with the argument list `ap` into `buf` (NUL-terminated, at
+/// most `size` bytes). Zig-callable by the logging code.
+pub fn vsnprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ap: *VaList) c_int {
     sink_buf = buf;
     sink_pos = 0;
     sink_limit = size;
-    formatLoop(fmt, &ap);
+    formatLoop(fmt, ap);
     if (size > 0) {
         const at: usize = if (sink_pos < size) sink_pos else size - 1;
         buf[at] = 0;
@@ -229,7 +237,6 @@ pub export fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callcon
     const n: usize = sink_pos;
     sink_buf = null;
     sink_limit = 0;
-    @cVaEnd(&ap);
     return @intCast(n);
 }
 

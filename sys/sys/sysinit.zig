@@ -30,6 +30,7 @@ pub const Sysinit: type = extern struct {
 
 // Subsystem identifiers, as FreeBSD's sys/sys/kernel.h defines them.
 pub const SI_SUB_COPYRIGHT: u32 = 0x0800001; // first use of console
+pub const SI_SUB_CPU: u32 = 0x0900000; // CPU identification
 pub const SI_SUB_VM: u32 = 0x1000000; // virtual memory system init
 pub const SI_SUB_INTR: u32 = 0x2800000; // interrupt threads
 pub const SI_SUB_CONFIGURE: u32 = 0x3800000; // configure devices

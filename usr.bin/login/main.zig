@@ -81,6 +81,21 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
     libc.stdio.printf("\nWelcome to Renux!\n", .{});
 
+    // Record the session in the system log.
+    var logbuf: [96]u8 = undefined;
+    var ln: usize = 0;
+    const prefix: []const u8 = "session opened for user ";
+    for (prefix) |c| {
+        logbuf[ln] = c;
+        ln += 1;
+    }
+    var ui: usize = 0;
+    while (ui < ulen and ln < logbuf.len) : (ui += 1) {
+        logbuf[ln] = user[ui];
+        ln += 1;
+    }
+    libc.syslog.msg("login", logbuf[0..ln]);
+
     var av: [2]?[*:0]const u8 = .{ "/bin/sh", null };
     _ = libc.syscall.execve("/bin/sh", @ptrCast(&av), envp);
 

@@ -40,6 +40,7 @@ pub const SYS_stat: u64 = 188;
 pub const SYS_fstat: u64 = 189;
 pub const SYS_getdents: u64 = 272;
 pub const SYS_getcwd: u64 = 326;
+pub const SYS_klog: u64 = 500;
 pub const SYS_sigreturn: u64 = 417;
 pub const SYS_mmap: u64 = 477;
 

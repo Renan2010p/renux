@@ -41,6 +41,7 @@ pub const SYS_fstat: u64 = 189;
 pub const SYS_getdents: u64 = 272;
 pub const SYS_getcwd: u64 = 326;
 pub const SYS_sigprocmask: u64 = 340;
+pub const SYS_klog: u64 = 500;
 pub const SYS_sigaction: u64 = 416;
 pub const SYS_sigreturn: u64 = 417;
 pub const SYS_mmap: u64 = 477;
@@ -252,6 +253,12 @@ pub fn getuidRaw() u32 {
 /// Set the user id.
 pub fn setuid(uid: u32) i64 {
     const r: u64 = syscall(SYS_setuid, .{ uid, 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Copy the kernel message buffer into `buf`; returns the length.
+pub fn klogRaw(buf: []u8) i64 {
+    const r: u64 = syscall(SYS_klog, .{ @intFromPtr(buf.ptr), buf.len, 0, 0, 0, 0 });
     return @bitCast(r);
 }
 

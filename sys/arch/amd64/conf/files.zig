@@ -53,6 +53,7 @@ comptime {
     _ = @import("../amd64/trap.zig");
     _ = @import("../amd64/swtch.zig");
     _ = @import("../amd64/syscall_entry.zig");
+    _ = @import("../amd64/identcpu.zig");
     _ = @import("../include/proc.zig");
     _ = @import("../include/trap.zig");
     _ = @import("../include/vmparam.zig");

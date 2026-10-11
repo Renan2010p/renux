@@ -24,6 +24,7 @@ comptime {
     _ = @import("gen/dirent.zig");
     _ = @import("gen/termios.zig");
     _ = @import("gen/getopt.zig");
+    _ = @import("gen/syslog.zig");
     _ = @import("termcap/termcap.zig");
     _ = @import("curses/curses.zig");
     _ = getenv_;
@@ -112,6 +113,14 @@ pub export fn setuid(uid: c_int) c_int {
     return 0;
 }
 
+pub export fn klog(buf: [*]u8, len: usize) isize {
+    const r: i64 = syscall.klogRaw(buf[0..len]);
+    if (r < 0) {
+        return @intCast(cerr(r));
+    }
+    return @intCast(r);
+}
+
 pub export fn _exit(status: c_int) noreturn {
     syscall.exit(@intCast(status));
 }
@@ -176,6 +185,10 @@ pub export fn strncpy(dst: [*:0]u8, src: [*:0]const u8, n: usize) [*:0]u8 {
 
 pub export fn strchr(s: [*:0]const u8, c: c_int) ?[*:0]u8 {
     return string.strchr(s, @intCast(c & 0xff));
+}
+
+pub export fn strcat(dst: [*:0]u8, src: [*:0]const u8) [*:0]u8 {
+    return string.strcat(dst, src);
 }
 
 pub export fn isdigit(c: c_int) c_int {

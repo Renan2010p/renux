@@ -127,6 +127,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_stat, .handler = vfs_syscalls.sysStat },
     .{ .num = sys.SYS_getdents, .handler = vfs_syscalls.sysGetdents },
     .{ .num = sys.SYS_getcwd, .handler = vfs_getcwd.sysGetcwd },
+    .{ .num = sys.SYS_klog, .handler = sys_generic.sysKlog },
 };
 
 /// Number-to-handler table, indexed by system call number.

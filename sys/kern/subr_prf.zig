@@ -10,9 +10,34 @@
 const arch: type = @import("../arch/arch.zig");
 const cons: type = @import("../dev/cons.zig");
 
-/// Emit one character on the console.
+/// Size of the kernel message buffer (a ring, as FreeBSD's msgbuf).
+pub const MSGBUF_SIZE: usize = 16384;
+
+var msgbuf: [MSGBUF_SIZE]u8 = undefined;
+var msg_head: usize = 0; // next write position
+var msg_count: usize = 0; // valid bytes
+
+/// Emit one character on the console and record it in the message buffer.
 pub fn putchar(c: u8) void {
+    msgbuf[msg_head] = c;
+    msg_head = (msg_head + 1) % MSGBUF_SIZE;
+    if (msg_count < MSGBUF_SIZE) {
+        msg_count += 1;
+    }
     cons.cnputc(c);
+}
+
+/// Copy the kernel message buffer into `dst`, oldest byte first, returning the
+/// number of bytes copied.
+pub fn msgbufCopy(dst: []u8) usize {
+    const n: usize = if (msg_count < dst.len) msg_count else dst.len;
+    var start: usize = (msg_head + MSGBUF_SIZE - msg_count) % MSGBUF_SIZE;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        dst[i] = msgbuf[start];
+        start = (start + 1) % MSGBUF_SIZE;
+    }
+    return n;
 }
 
 /// Emit a byte string.
@@ -50,6 +75,24 @@ pub fn printHex(value: u64) void {
 /// Print a pointer as "0x" followed by 16 hexadecimal digits.
 pub fn printPtr(value: u64) void {
     printHex(value);
+}
+
+/// Print `value` in hexadecimal without leading zeros, prefixed with "0x".
+pub fn printHexTrim(value: u64) void {
+    print("0x");
+    var started: bool = false;
+    var shift: u6 = 60;
+    while (true) {
+        const nibble: u8 = @as(u8, @truncate(value >> shift)) & 0x0f;
+        if (nibble != 0 or started or shift == 0) {
+            started = true;
+            putchar(hexDigit(nibble));
+        }
+        if (shift == 0) {
+            break;
+        }
+        shift -= 4;
+    }
 }
 
 /// Print `value` in decimal.

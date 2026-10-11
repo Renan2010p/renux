@@ -90,3 +90,14 @@ pub fn strchr(s: [*:0]const u8, c: u8) ?[*:0]u8 {
         }
     }
 }
+
+pub fn strcat(dst: [*:0]u8, src: [*:0]const u8) [*:0]u8 {
+    var i: usize = 0;
+    while (dst[i] != 0) : (i += 1) {}
+    var j: usize = 0;
+    while (src[j] != 0) : (j += 1) {
+        dst[i + j] = src[j];
+    }
+    dst[i + j] = 0;
+    return dst;
+}

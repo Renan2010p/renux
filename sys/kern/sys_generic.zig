@@ -16,6 +16,7 @@ const kern_descrip: type = @import("kern_descrip.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 const vfs_vnops: type = @import("vfs_vnops.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// write(2): write to descriptor `fd`.
 pub fn sysWrite(args: [sys.MAXARGS]u64) u64 {
@@ -65,17 +66,29 @@ pub fn sysRead(args: [sys.MAXARGS]u64) u64 {
     }
 }
 
+/// klog(2): copy the kernel message buffer into `buf`; returns the length.
+pub fn sysKlog(args: [sys.MAXARGS]u64) u64 {
+    const buf: u64 = args[0];
+    const len: u64 = args[1];
+    if (buf == 0) {
+        return sys.signed(-errno.EFAULT);
+    }
+    const dst: [*]u8 = @ptrFromInt(buf);
+    const n: usize = prf.msgbufCopy(dst[0..@intCast(len)]);
+    return @intCast(n);
+}
+
 /// ioctl(2): perform a control request on descriptor `fd`.
 pub fn sysIoctl(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];
     const cmd: u64 = args[1];
     const arg: u64 = args[2];
 
-    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.ERROR;
-    const ioctl = f.f_ops.ioctl orelse return sys.ERROR;
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
+    const ioctl = f.f_ops.ioctl orelse return sys.signed(-errno.ENOTTY);
     const err: i32 = ioctl(f, cmd, arg);
     if (err != 0) {
-        return sys.ERROR;
+        return sys.signed(err);
     }
     return 0;
 }
