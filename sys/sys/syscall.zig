@@ -4,12 +4,18 @@
 // System call numbers.
 //
 // NetBSD and FreeBSD both generate this from syscalls.master; ZenBSD lists the
-// handful it implements today by hand. Numbers match the historical BSD values
-// (exit = 1, read = 3, write = 4) so userland stubs are familiar.
+// handful it implements today by hand. Numbers match the historical BSD values.
 
 pub const SYS_exit: u64 = 1;
+pub const SYS_fork: u64 = 2;
 pub const SYS_read: u64 = 3;
 pub const SYS_write: u64 = 4;
+pub const SYS_wait4: u64 = 7;
+pub const SYS_getpid: u64 = 20;
+pub const SYS_execve: u64 = 59;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;
+
+/// Highest system call number plus one.
+pub const MAXSYSCALL: usize = 64;

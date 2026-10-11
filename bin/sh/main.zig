@@ -3,9 +3,8 @@
 //
 // /bin/sh: the ZenBSD command shell.
 //
-// A first shell: it reads lines from the console, echoes them, and runs a few
-// built-in commands. There is no process creation yet, so external commands
-// cannot be executed; that arrives with fork/exec.
+// A small shell in the spirit of the BSD sh: a prompt, line editing, a few
+// built-ins, and external commands run with fork + execve + wait.
 
 const libc: type = @import("libc");
 const printf = libc.stdio.printf;
@@ -14,6 +13,7 @@ const putchar = libc.stdio.putchar;
 const getchar = libc.stdio.getchar;
 
 const MAX_LINE: usize = 256;
+const MAX_NAME: usize = 128;
 
 fn equal(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) {
@@ -40,7 +40,6 @@ fn trim(s: []const u8) []const u8 {
     return s[start..end];
 }
 
-/// Read one line, echoing and handling backspace.
 fn readLine(buf: []u8) usize {
     var len: usize = 0;
     while (true) {
@@ -49,7 +48,7 @@ fn readLine(buf: []u8) usize {
             putchar('\n');
             return len;
         }
-        if (c == 0x7f or c == 0x08) { // backspace / delete
+        if (c == 0x7f or c == 0x08) {
             if (len > 0) {
                 len -= 1;
                 printf("\x08 \x08", .{});
@@ -57,7 +56,7 @@ fn readLine(buf: []u8) usize {
             continue;
         }
         if (c < 0x20 or c >= 0x7f) {
-            continue; // ignore other control characters
+            continue;
         }
         if (len < buf.len) {
             buf[len] = c;
@@ -67,7 +66,32 @@ fn readLine(buf: []u8) usize {
     }
 }
 
-/// Run one command line.
+/// Run `name` as an external program via fork + execve + wait.
+fn runExternal(name: []const u8) void {
+    if (name.len + 1 > MAX_NAME) {
+        puts("sh: command name too long");
+        return;
+    }
+
+    var path: [MAX_NAME]u8 = undefined;
+    var i: usize = 0;
+    while (i < name.len) : (i += 1) {
+        path[i] = name[i];
+    }
+    path[name.len] = 0;
+
+    const pid: i32 = libc.syscall.fork();
+    if (pid == 0) {
+        _ = libc.syscall.execve(@ptrCast(&path));
+        printf("sh: %s: not found\n", .{name});
+        libc.syscall.exit(127);
+    } else if (pid > 0) {
+        _ = libc.syscall.wait(null);
+    } else {
+        puts("sh: fork failed");
+    }
+}
+
 fn execute(line: []const u8) void {
     const cmd: []const u8 = trim(line);
     if (cmd.len == 0) {
@@ -80,15 +104,18 @@ fn execute(line: []const u8) void {
     const rest: []const u8 = if (i < cmd.len) trim(cmd[i..]) else "";
 
     if (equal(name, "help")) {
-        puts("builtins: help echo uname exit");
+        puts("builtins: help echo uname getpid exit");
+        puts("external commands are loaded from the boot modules");
     } else if (equal(name, "echo")) {
         puts(rest);
     } else if (equal(name, "uname")) {
         puts("ZenBSD 0.1 amd64");
+    } else if (equal(name, "getpid")) {
+        printf("pid %d\n", .{libc.syscall.getpid()});
     } else if (equal(name, "exit")) {
         libc.syscall.exit(0);
     } else {
-        printf("sh: %s: not found\n", .{name});
+        runExternal(name);
     }
 }
 

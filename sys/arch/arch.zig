@@ -27,6 +27,9 @@ pub const locore: type = machdep_impl.locore;
 /// Descriptor tables (GDT/TSS).
 pub const gdt: type = machdep_impl.gdt;
 
+/// Segment selectors (shared x86).
+pub const gdt_defs: type = machdep_impl.gdt_defs;
+
 /// Bus space access implementation (backing sys/sys/bus.zig).
 pub const bus_space: type = machdep_impl.bus_space;
 
@@ -35,6 +38,16 @@ pub const consinit: type = machdep_impl.consinit;
 
 /// Machine-dependent page map (see sys/uvm).
 pub const pmap: type = machdep_impl.pmap;
+
+/// Machine-dependent process context and kernel-thread switch.
+pub const proc_md: type = machdep_impl.proc_md;
+pub const swtch: type = machdep_impl.swtch;
+
+/// Machine-dependent trap frame layout.
+pub const trapframe: type = machdep_impl.trapframe;
+
+/// Machine-dependent trap entry (current frame, return to ring 3).
+pub const trap: type = machdep_impl.trap;
 
 /// Interrupt dispatch (legacy PIC).
 pub const intr: type = machdep_impl.intr;

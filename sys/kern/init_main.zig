@@ -14,6 +14,8 @@ const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
+const kern_proc: type = @import("kern_proc.zig");
+const kern_sched: type = @import("kern_sched.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
@@ -103,13 +105,15 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     };
     const image: []const u8 = @as([*]const u8, @ptrCast(address))[0..@intCast(module.size)];
 
-    // Each process gets its own address space (its own CR3).
-    const pmap: arch.pmap.Pmap = arch.pmap.create() orelse {
-        prf.printLine("init: cannot create address space");
+    kern_proc.init();
+
+    // Create the init process; alloc() gives it its own address space.
+    const init = kern_proc.alloc() orelse {
+        prf.printLine("init: cannot create process");
         return;
     };
 
-    const result = kern_exec.exec(pmap, image) orelse {
+    const result = kern_exec.exec(init.pmap, image) orelse {
         prf.printLine("init: not an executable image");
         return;
     };
@@ -118,23 +122,43 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
     while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
         const pa: u64 = uvm_page.physalloc() orelse return;
-        arch.pmap.enterUser(pmap, va, pa, .user_rw);
+        arch.pmap.enterUser(init.pmap, va, pa, .user_rw);
     }
 
-    // Kernel stack the CPU switches to when control returns from ring 3.
-    const hhdm: u64 = arch.boot.hhdmOffset() orelse return;
-    const kpa: u64 = uvm_page.physalloc() orelse return;
-    arch.gdt.setKernelStack(hhdm + kpa + param.PAGE_SIZE);
+    // Build the user frame init starts with. The SysV ABI expects rsp % 16 == 8
+    // at function entry, so bias the stack by 8.
+    init.frame.r15 = 0;
+    init.frame.r14 = 0;
+    init.frame.r13 = 0;
+    init.frame.r12 = 0;
+    init.frame.r11 = 0;
+    init.frame.r10 = 0;
+    init.frame.r9 = 0;
+    init.frame.r8 = 0;
+    init.frame.rdi = 0;
+    init.frame.rsi = 0;
+    init.frame.rbp = 0;
+    init.frame.rbx = 0;
+    init.frame.rdx = 0;
+    init.frame.rcx = 0;
+    init.frame.rax = 0;
+    init.frame.vector = 0;
+    init.frame.error_code = 0;
+    init.frame.rip = result.entry;
+    init.frame.cs = arch.gdt_defs.UCODE_SEL;
+    init.frame.rflags = 0x202; // reserved bit + IF
+    init.frame.rsp = arch.vmparam.USER_STACK_TOP - 8;
+    init.frame.ss = arch.gdt_defs.UDATA_SEL;
 
-    prf.print("init: entering user mode at ");
+    kern_sched.prepareContext(init);
+    init.state = .runnable;
+
+    prf.print("init: starting at ");
     prf.printHex(result.entry);
     prf.printLine("");
 
-    // Load the process's page map and enter ring 3. The SysV ABI expects
-    // rsp % 16 == 8 at function entry (a call has pushed the return address);
-    // iretq pushes no such word, so bias the stack by 8.
-    arch.pmap.activate(pmap);
-    arch.locore.enterUser(result.entry, arch.vmparam.USER_STACK_TOP - 8);
+    // Run the scheduler; it never returns.
+    kern_sched.scheduler();
 }
 
 comptime {

@@ -43,14 +43,14 @@ command -v xorriso >/dev/null 2>&1 || {
 }
 
 rm -rf "$WORK"
-mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT" "$WORK/sbin"
+mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT" "$WORK/sbin" "$WORK/bin"
 
 cp "$LIMINE/limine-bios.sys" "$LIMINE/limine-bios-cd.bin" "$LIMINE/limine-uefi-cd.bin" "$WORK/boot/limine/"
 cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
 cp "$CONF" "$WORK/limine.conf"
 cp "$KERNEL" "$WORK/boot/zenbsd/kernel"
 cp "$INIT" "$WORK/sbin/init"
-cp "$SH" "$WORK/sbin/sh"
+cp "$SH" "$WORK/bin/sh"
 
 xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \

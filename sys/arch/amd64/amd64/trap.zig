@@ -17,15 +17,19 @@ const syscall: type = @import("../../x86/x86/syscall.zig");
 const vector: type = @import("vector.zig");
 const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
+/// The trap frame of the trap currently being handled (used by fork()).
+var trap_frame: ?*trap.TrapFrame = null;
+
+/// The trap frame being handled on this CPU, if any.
+pub fn currentFrame() ?*trap.TrapFrame {
+    return trap_frame;
+}
+
 /// Common entry point for every vector stub (see vector.zig).
-///
-/// On entry the stack holds, from the top: the vector number, the error code,
-/// and the CPU-pushed frame. All general registers are saved to build a
-/// TrapFrame, zb_trap_dispatch() is called with a pointer to it, and the state
-/// is restored before returning with iretq.
 pub export fn trap_common() callconv(.naked) void {
     asm volatile (
         \\ pushq %%rax
@@ -88,6 +92,8 @@ fn handlePageFault(frame: *trap.TrapFrame) bool {
 
 /// Trap dispatcher, called by trap_common().
 export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
+    trap_frame = frame;
+
     if (frame.vector == vector.SYSCALL_VECTOR) {
         frame.rax = syscall.dispatch(
             frame.rax,
@@ -115,6 +121,8 @@ export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
 
     if (intrdefs.isPicVector(frame.vector)) {
         intr.dispatch(frame.vector);
+        // Preemption is disabled for now; switching happens cooperatively at
+        // yield()/sleep() points.
         return;
     }
 
@@ -131,4 +139,37 @@ export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
     }
 
     prf.panic("unhandled trap", null);
+}
+
+/// Return to ring 3 using `frame`, which lives in a process's Proc (not on the
+/// kernel stack). Used the first time a freshly created process runs, where
+/// there is no interrupt frame to return from.
+pub fn usertrapret(frame: *const trap.TrapFrame) noreturn {
+    asm volatile (
+        \\ movq %[f], %%r11
+        \\ pushq 168(%%r11)
+        \\ pushq 160(%%r11)
+        \\ pushq 152(%%r11)
+        \\ pushq 144(%%r11)
+        \\ pushq 136(%%r11)
+        \\ movq 112(%%r11), %%rax
+        \\ movq 104(%%r11), %%rcx
+        \\ movq 96(%%r11), %%rdx
+        \\ movq 88(%%r11), %%rbx
+        \\ movq 80(%%r11), %%rbp
+        \\ movq 72(%%r11), %%rsi
+        \\ movq 64(%%r11), %%rdi
+        \\ movq 56(%%r11), %%r8
+        \\ movq 48(%%r11), %%r9
+        \\ movq 40(%%r11), %%r10
+        \\ movq 24(%%r11), %%r12
+        \\ movq 16(%%r11), %%r13
+        \\ movq 8(%%r11), %%r14
+        \\ movq 0(%%r11), %%r15
+        \\ movq 32(%%r11), %%r11
+        \\ iretq
+        :
+        : [f] "r" (frame),
+        : .{ .memory = true });
+    unreachable;
 }

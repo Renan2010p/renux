@@ -3,14 +3,16 @@
 //
 // /sbin/init: the first user process.
 //
-// It talks to the kernel only through the C library (libc), which is where the
-// system call wrappers live. This file stays machine independent.
+// Once process creation works, init's job is to start the system: for now it
+// execs the shell; a real init would run /etc/rc and spawn getty/login.
 
 const libc: type = @import("libc");
 
 export fn _start() callconv(.c) noreturn {
-    libc.stdio.printf("hello from userland (pid %d)\n", .{1});
-    libc.stdio.printf("libc formatting: %s, %d, %u, %x, %c\n", .{ "str", -42, 42, 255, '!' });
-    libc.stdio.puts("init: exiting");
-    libc.syscall.exit(0);
+    libc.stdio.puts("init: starting /bin/sh");
+
+    _ = libc.syscall.execve("sh");
+
+    libc.stdio.puts("init: cannot exec /bin/sh");
+    libc.syscall.exit(1);
 }

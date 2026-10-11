@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 The ZenBSD Project
+//
+// Process table.
+//
+// The Zig counterpart of NetBSD's sys/kern/kern_proc.c, reduced to what early
+// multitasking needs: a fixed table of processes, pid allocation, and creation.
+
+const proc: type = @import("../sys/proc.zig");
+const arch: type = @import("../arch/arch.zig");
+const uvm_page: type = @import("../uvm/uvm_page.zig");
+const param: type = @import("../sys/param.zig");
+
+/// Maximum number of processes.
+pub const NPROC: usize = 16;
+
+pub var table: [NPROC]proc.Proc = undefined;
+pub var current: *proc.Proc = undefined;
+
+var next_pid: i32 = 1;
+
+/// Initialise the process table.
+pub fn init() void {
+    for (&table) |*p| {
+        p.pid = 0;
+        p.state = .unused;
+        p.parent = null;
+        p.exit_status = 0;
+        p.pmap = 0;
+        p.kstack_page = 0;
+        p.kstack_top = 0;
+        p.context = .{ .rsp = 0 };
+        p.chan = null;
+    }
+}
+
+/// Allocate a process with a fresh address space and kernel stack.
+pub fn alloc() ?*proc.Proc {
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
+
+    for (&table) |*p| {
+        if (p.state != .unused) {
+            continue;
+        }
+        const map = arch.pmap.create() orelse return null;
+        const kpage = uvm_page.physalloc() orelse return null;
+
+        p.pid = next_pid;
+        next_pid += 1;
+        p.parent = null;
+        p.exit_status = 0;
+        p.pmap = map;
+        p.kstack_page = kpage;
+        p.kstack_top = kpage + hhdm + param.PAGE_SIZE;
+        p.context = .{ .rsp = 0 };
+        p.chan = null;
+        p.state = .runnable;
+        return p;
+    }
+    return null;
+}
+
+/// Release a process.
+pub fn free(p: *proc.Proc) void {
+    if (p.kstack_page != 0) {
+        uvm_page.physfree(p.kstack_page);
+    }
+    p.state = .unused;
+    p.pid = 0;
+    p.pmap = 0;
+    p.kstack_page = 0;
+    p.kstack_top = 0;
+}

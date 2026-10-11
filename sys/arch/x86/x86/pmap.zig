@@ -14,6 +14,7 @@
 const pte: type = @import("../include/pte.zig");
 const iface: type = @import("../include/pmap.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const param: type = @import("../../../sys/param.zig");
 
 pub const Prot: type = iface.Prot;
 
@@ -109,19 +110,67 @@ fn descend(parent: [*]u64, i: usize) ?[*]u64 {
     return table(entry);
 }
 
-/// Install a leaf mapping `va` -> `pa` in page map `p`.
-pub fn map(p: Pmap, va: u64, pa: u64, prot: Prot) void {
+/// Install a leaf mapping with raw PTE flags.
+fn install(p: Pmap, va: u64, pa: u64, flags: u64) void {
     const pml4 = table(p);
     const pdp = descend(pml4, index(va, pte.L4_SHIFT)) orelse return;
     const pd = descend(pdp, index(va, pte.L3_SHIFT)) orelse return;
     const pt = descend(pd, index(va, pte.L2_SHIFT)) orelse return;
-    pt[index(va, pte.L1_SHIFT)] = (pa & pte.FRAME_MASK) | flagsFor(prot);
+    pt[index(va, pte.L1_SHIFT)] = (pa & pte.FRAME_MASK) | flags;
 
     if (p == current()) {
         asm volatile ("invlpg (%[p])"
             :
             : [p] "r" (va),
             : .{ .memory = true });
+    }
+}
+
+/// Install a leaf mapping `va` -> `pa` in page map `p`.
+pub fn map(p: Pmap, va: u64, pa: u64, prot: Prot) void {
+    install(p, va, pa, flagsFor(prot));
+}
+
+/// Duplicate the user half of `src` into `dst` (fork): every present 4 KiB user
+/// page is copied to a fresh physical page.
+pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
+    const pml4 = table(src);
+    var idx4: usize = 0;
+    while (idx4 < KERNEL_PML4_START) : (idx4 += 1) {
+        const e4: u64 = pml4[idx4];
+        if ((e4 & pte.P) == 0) continue;
+        const pdp = table(e4);
+        var idx3: usize = 0;
+        while (idx3 < INDEX_MASK + 1) : (idx3 += 1) {
+            const e3: u64 = pdp[idx3];
+            if ((e3 & pte.P) == 0 or (e3 & pte.PS) != 0) continue;
+            const pd = table(e3);
+            var idx2: usize = 0;
+            while (idx2 < INDEX_MASK + 1) : (idx2 += 1) {
+                const e2: u64 = pd[idx2];
+                if ((e2 & pte.P) == 0 or (e2 & pte.PS) != 0) continue;
+                const pt = table(e2);
+                var idx1: usize = 0;
+                while (idx1 < INDEX_MASK + 1) : (idx1 += 1) {
+                    const e1: u64 = pt[idx1];
+                    if ((e1 & pte.P) == 0) continue;
+
+                    const dst_pa: u64 = uvm_page.physalloc() orelse return;
+                    const s: [*]const u8 = @ptrFromInt((e1 & pte.FRAME_MASK) + hhdm_offset);
+                    const d: [*]u8 = @ptrFromInt(dst_pa + hhdm_offset);
+                    var k: usize = 0;
+                    while (k < param.PAGE_SIZE) : (k += 1) {
+                        d[k] = s[k];
+                    }
+
+                    const va: u64 = (@as(u64, idx4) << pte.L4_SHIFT) |
+                        (@as(u64, idx3) << pte.L3_SHIFT) |
+                        (@as(u64, idx2) << pte.L2_SHIFT) |
+                        (@as(u64, idx1) << pte.L1_SHIFT);
+                    install(dst, va, dst_pa, (e1 & 0xfff) | (e1 & pte.NX));
+                }
+            }
+        }
     }
 }
 
