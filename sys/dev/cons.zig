@@ -21,10 +21,38 @@ pub const Console: type = struct {
     getc: ?*const fn () u8 = null,
     /// Receive one character without blocking, if one is available.
     trygetc: ?*const fn () ?u8 = null,
+    /// Set the foreground colour (RGB), if the device can.
+    setfg: ?*const fn (r: u8, g: u8, b: u8) void = null,
 };
 
 var consoles: [MAX_CONSOLES]Console = undefined;
 var nconsoles: usize = 0;
+
+// Input queue fed by input drivers (e.g. the PS/2 keyboard) and drained by
+// cngetcPoll().
+const INPUT_SIZE: usize = 128;
+var input_buf: [INPUT_SIZE]u8 = undefined;
+var input_head: usize = 0;
+var input_tail: usize = 0;
+
+/// Push one character onto the console input queue.
+pub fn cnInput(c: u8) void {
+    const next: usize = (input_tail + 1) % INPUT_SIZE;
+    if (next == input_head) {
+        return; // queue full; drop
+    }
+    input_buf[input_tail] = c;
+    input_tail = next;
+}
+
+fn inputPop() ?u8 {
+    if (input_head == input_tail) {
+        return null;
+    }
+    const c: u8 = input_buf[input_head];
+    input_head = (input_head + 1) % INPUT_SIZE;
+    return c;
+}
 
 /// Register `tab` as a system console. Called from MD consinit().
 pub fn cn_attach(tab: Console) void {
@@ -61,7 +89,11 @@ pub fn cngetc() u8 {
 }
 
 /// Receive one character from the first console that has one ready, else null.
+/// Characters pushed by input drivers (cnInput) take priority.
 pub fn cngetcPoll() ?u8 {
+    if (inputPop()) |c| {
+        return c;
+    }
     var i: usize = 0;
     while (i < nconsoles) : (i += 1) {
         if (consoles[i].trygetc) |trygetc| {
@@ -71,6 +103,16 @@ pub fn cngetcPoll() ?u8 {
         }
     }
     return null;
+}
+
+/// Set the console foreground colour (RGB) on every console that supports it.
+pub fn cnSetColor(r: u8, g: u8, b: u8) void {
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].setfg) |setfg| {
+            setfg(r, g, b);
+        }
+    }
 }
 
 /// Emit a byte string on the console.

@@ -33,6 +33,7 @@ pub const SI_SUB_COPYRIGHT: u32 = 0x0800001; // first use of console
 pub const SI_SUB_VM: u32 = 0x1000000; // virtual memory system init
 pub const SI_SUB_INTR: u32 = 0x2800000; // interrupt threads
 pub const SI_SUB_CONFIGURE: u32 = 0x3800000; // configure devices
+pub const SI_SUB_DRIVERS: u32 = 0x3100000; // device drivers
 pub const SI_SUB_CLOCKS: u32 = 0x4800000; // real time and stat clocks
 pub const SI_SUB_LAST: u32 = 0xfffffff; // final initialization
 

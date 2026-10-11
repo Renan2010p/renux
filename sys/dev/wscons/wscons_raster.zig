@@ -53,7 +53,12 @@ pub fn attachWithFont(framebuffer: rasops.Raster, font: *const wsfont.Font) void
 
 /// The console descriptor for this device, for cons.cn_attach().
 pub fn console() cons.Console {
-    return .{ .putc = putc };
+    return .{ .putc = putc, .setfg = setForeground };
+}
+
+/// Set the foreground colour (RGB), which the text and the block cursor use.
+pub fn setForeground(r: u8, g: u8, b: u8) void {
+    rcons.fg = rasops.pixel(&rcons.raster, r, g, b);
 }
 
 /// Draw the cursor as a filled block over the current cell, as the BSD

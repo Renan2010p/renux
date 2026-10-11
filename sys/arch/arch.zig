@@ -52,6 +52,12 @@ pub const trap: type = machdep_impl.trap;
 /// Interrupt dispatch (legacy PIC).
 pub const intr: type = machdep_impl.intr;
 
+/// Legacy PIC (8259) driver.
+pub const pic: type = machdep_impl.pic;
+
+/// Interrupt vector definitions.
+pub const intrdefs: type = machdep_impl.intrdefs;
+
 /// System clock / periodic timer.
 pub const clock: type = machdep_impl.clock;
 

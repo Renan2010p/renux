@@ -12,6 +12,7 @@
 
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
+const cons: type = @import("../dev/cons.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_proc: type = @import("kern_proc.zig");
@@ -156,6 +157,10 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     prf.print("init: starting at ");
     prf.printHex(result.entry);
     prf.printLine("");
+
+    // From here on, output is userland: switch the console to the FreeBSD-like
+    // normal (light grey) foreground, cursor included.
+    cons.cnSetColor(0xc0, 0xc0, 0xc0);
 
     // Run the scheduler; it never returns.
     kern_sched.scheduler();

@@ -17,4 +17,5 @@ comptime {
     _ = @import("arch/arch.zig");
     _ = @import("kern/init_main.zig");
     _ = @import("uvm/uvm_init.zig");
+    _ = @import("dev/pckbport/pckbd.zig");
 }
