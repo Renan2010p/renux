@@ -20,14 +20,19 @@ pub const SYS_write: u64 = 4;
 pub const SYS_open: u64 = 5;
 pub const SYS_close: u64 = 6;
 pub const SYS_wait4: u64 = 7;
+pub const SYS_unlink: u64 = 10;
+pub const SYS_chdir: u64 = 12;
 pub const SYS_lseek: u64 = 19;
 pub const SYS_getpid: u64 = 20;
 pub const SYS_dup: u64 = 41;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;
+pub const SYS_mkdir: u64 = 136;
+pub const SYS_rmdir: u64 = 137;
 pub const SYS_stat: u64 = 188;
 pub const SYS_getdents: u64 = 390;
+pub const SYS_getcwd: u64 = 418;
 
 /// open(2) flags (the subset in use).
 pub const O_RDONLY: u64 = 0;
@@ -121,6 +126,36 @@ pub fn stat(path: [*:0]const u8, st: *Stat) i64 {
 /// Read directory entries into `buf`; returns the number of bytes read.
 pub fn getdents(fd: u64, buf: []u8) u64 {
     return syscall(SYS_getdents, .{ fd, @intFromPtr(buf.ptr), buf.len, 0, 0, 0 });
+}
+
+/// Change the working directory to `path`.
+pub fn chdir(path: [*:0]const u8) i64 {
+    const r: u64 = syscall(SYS_chdir, .{ @intFromPtr(path), 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Create directory `path` with permission bits `mode`.
+pub fn mkdir(path: [*:0]const u8, mode: u64) i64 {
+    const r: u64 = syscall(SYS_mkdir, .{ @intFromPtr(path), mode, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Remove the empty directory `path`.
+pub fn rmdir(path: [*:0]const u8) i64 {
+    const r: u64 = syscall(SYS_rmdir, .{ @intFromPtr(path), 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Remove the non-directory `path`.
+pub fn unlink(path: [*:0]const u8) i64 {
+    const r: u64 = syscall(SYS_unlink, .{ @intFromPtr(path), 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Copy the NUL-terminated working directory path into `buf`.
+pub fn getcwd(buf: []u8) i64 {
+    const r: u64 = syscall(SYS_getcwd, .{ @intFromPtr(buf.ptr), buf.len, 0, 0, 0, 0 });
+    return @bitCast(r);
 }
 
 /// Terminate the calling process.

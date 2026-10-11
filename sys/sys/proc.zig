@@ -8,6 +8,7 @@
 // map) and a kernel thread with a kernel stack and a saved user frame.
 
 const arch: type = @import("../arch/arch.zig");
+const param: type = @import("param.zig");
 const file: type = @import("file.zig");
 const vnode: type = @import("vnode.zig");
 
@@ -46,4 +47,8 @@ pub const Proc: type = struct {
     fds: [NFILE]?*file.File,
     /// Current working directory, or null before the root is mounted.
     cwd: ?*vnode.Vnode,
+    /// Path of the current working directory (for getcwd).
+    cwd_path: [param.MAXPATHLEN]u8,
+    /// Length of cwd_path.
+    cwd_len: usize,
 };

@@ -68,4 +68,24 @@ pub fn build(b: *Builder) !void {
     const cat: *Builder.Step.Compile = program(b, target, optimize, libc, "cat", "cat/main.zig");
     const install_cat: *Builder.Step.InstallArtifact = b.addInstallArtifact(cat, .{});
     b.getInstallStep().dependOn(&install_cat.step);
+
+    const echo: *Builder.Step.Compile = program(b, target, optimize, libc, "echo", "echo/main.zig");
+    const install_echo: *Builder.Step.InstallArtifact = b.addInstallArtifact(echo, .{});
+    b.getInstallStep().dependOn(&install_echo.step);
+
+    const pwd: *Builder.Step.Compile = program(b, target, optimize, libc, "pwd", "pwd/main.zig");
+    const install_pwd: *Builder.Step.InstallArtifact = b.addInstallArtifact(pwd, .{});
+    b.getInstallStep().dependOn(&install_pwd.step);
+
+    const mkdir: *Builder.Step.Compile = program(b, target, optimize, libc, "mkdir", "mkdir/main.zig");
+    const install_mkdir: *Builder.Step.InstallArtifact = b.addInstallArtifact(mkdir, .{});
+    b.getInstallStep().dependOn(&install_mkdir.step);
+
+    const rm: *Builder.Step.Compile = program(b, target, optimize, libc, "rm", "rm/main.zig");
+    const install_rm: *Builder.Step.InstallArtifact = b.addInstallArtifact(rm, .{});
+    b.getInstallStep().dependOn(&install_rm.step);
+
+    const rmdir: *Builder.Step.Compile = program(b, target, optimize, libc, "rmdir", "rmdir/main.zig");
+    const install_rmdir: *Builder.Step.InstallArtifact = b.addInstallArtifact(rmdir, .{});
+    b.getInstallStep().dependOn(&install_rmdir.step);
 }

@@ -110,10 +110,10 @@ fn vnodeClose(f: *file.File) i32 {
     return err;
 }
 
-/// Open `path` and return a new open-file entry, or null when the path cannot
-/// be resolved or opened.
-pub fn vn_open(path: []const u8, flags: i32) ?*file.File {
-    const vp: *vnode.Vnode = vfs_lookup.nameiLookup(path) orelse return null;
+/// Open `path` (relative to `start`, or absolute) and return a new open-file
+/// entry, or null when the path cannot be resolved or opened.
+pub fn vn_open(start: ?*vnode.Vnode, path: []const u8, flags: i32) ?*file.File {
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return null;
 
     // Character and block special files dispatch to their device driver.
     if (vp.v_type == .vchr or vp.v_type == .vblk) {
@@ -166,18 +166,69 @@ pub fn vn_open(path: []const u8, flags: i32) ?*file.File {
 }
 
 /// Create `path` with type `v_type` and permission bits `mode`, returning its
-/// vnode. Used while populating the root filesystem from the boot modules.
+/// vnode. Used while populating the root filesystem from the boot modules
+/// (paths are absolute).
 pub fn vn_create(path: []const u8, v_type: vnode.Vtype, mode: u16) ?*vnode.Vnode {
-    return createNode(path, v_type, mode, 0);
+    return createNode(null, path, v_type, mode, 0);
 }
 
 /// Create a device node `path` of type `v_type` with device number `rdev`.
 pub fn vn_mknod(path: []const u8, v_type: vnode.Vtype, mode: u16, rdev: u64) ?*vnode.Vnode {
-    return createNode(path, v_type, mode, rdev);
+    return createNode(null, path, v_type, mode, rdev);
+}
+
+/// Create directory `path` (relative to `start`, or absolute) with `mode`.
+pub fn vn_mkdir(start: ?*vnode.Vnode, path: []const u8, mode: u16) ?*vnode.Vnode {
+    return createNode(start, path, .vdir, mode, 0);
+}
+
+/// Remove `path`. When `require_dir` is set only an empty directory may be
+/// removed (rmdir); otherwise only a non-directory (unlink). Returns 0 or errno.
+pub fn vn_remove(start: ?*vnode.Vnode, path: []const u8, require_dir: bool) i32 {
+    var slash: ?usize = null;
+    var i: usize = 0;
+    while (i < path.len) : (i += 1) {
+        if (path[i] == '/') {
+            slash = i;
+        }
+    }
+    const parent_path: []const u8 = if (slash) |s| path[0..s] else "";
+    const name: []const u8 = if (slash) |s| path[s + 1 ..] else path;
+    if (name.len == 0) {
+        return errno.EISDIR;
+    }
+
+    const dvp: *vnode.Vnode = if (parent_path.len == 0)
+        (parentDir(start, path) orelse return errno.ENOENT)
+    else
+        (vfs_lookup.nameiAt(start, parent_path) orelse return errno.ENOENT);
+    if (dvp.v_type != .vdir) {
+        return errno.ENOTDIR;
+    }
+
+    var cnp: namei.Componentname = .{
+        .nameptr = name.ptr,
+        .namelen = name.len,
+        .nameiop = namei.DELETE,
+        .flags = namei.ISLASTCN,
+    };
+    if (require_dir) {
+        cnp.flags |= namei.REQUIREDIR;
+    }
+    return dvp.v_op.remove(dvp, &cnp);
+}
+
+/// The directory a path with no slash component starts from: the root for an
+/// absolute path, `start` (or the root) otherwise.
+fn parentDir(start: ?*vnode.Vnode, path: []const u8) ?*vnode.Vnode {
+    if (path.len > 0 and path[0] == '/') {
+        return vfs_mount.getRoot();
+    }
+    return start orelse vfs_mount.getRoot();
 }
 
 /// Create `path` in its parent directory, with attributes from the arguments.
-fn createNode(path: []const u8, v_type: vnode.Vtype, mode: u16, rdev: u64) ?*vnode.Vnode {
+fn createNode(start: ?*vnode.Vnode, path: []const u8, v_type: vnode.Vtype, mode: u16, rdev: u64) ?*vnode.Vnode {
     // Split the path into its parent directory and final component.
     var slash: ?usize = null;
     var i: usize = 0;
@@ -193,9 +244,9 @@ fn createNode(path: []const u8, v_type: vnode.Vtype, mode: u16, rdev: u64) ?*vno
     }
 
     const dvp: *vnode.Vnode = if (parent_path.len == 0)
-        (vfs_mount.getRoot() orelse return null)
+        (parentDir(start, path) orelse return null)
     else
-        (vfs_lookup.nameiLookup(parent_path) orelse return null);
+        (vfs_lookup.nameiAt(start, parent_path) orelse return null);
     if (dvp.v_type != .vdir) {
         return null;
     }

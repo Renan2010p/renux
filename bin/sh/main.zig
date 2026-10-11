@@ -19,7 +19,21 @@ comptime {
 
 const MAX_LINE: usize = 256;
 const MAX_NAME: usize = 128;
+const MAX_PATH: usize = 256;
 const MAX_ARGS: usize = 8;
+
+/// Copy `s` into `buf` and NUL-terminate it, returning the C string.
+fn cstr(s: []const u8, buf: []u8) ?[*:0]const u8 {
+    if (s.len + 1 > buf.len) {
+        return null;
+    }
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        buf[i] = s[i];
+    }
+    buf[s.len] = 0;
+    return @ptrCast(&buf[0]);
+}
 
 fn equal(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) {
@@ -148,7 +162,7 @@ fn execute(line: []const u8) void {
     const rest: []const u8 = if (i < cmd.len) trim(cmd[i..]) else "";
 
     if (equal(name, "help")) {
-        puts("builtins: help echo uname getpid exit");
+        puts("builtins: help echo uname getpid cd exit");
         puts("external commands are loaded from /bin");
     } else if (equal(name, "echo")) {
         puts(rest);
@@ -156,6 +170,19 @@ fn execute(line: []const u8) void {
         puts("ZenBSD 0.1 amd64");
     } else if (equal(name, "getpid")) {
         printf("pid %d\n", .{libc.syscall.getpid()});
+    } else if (equal(name, "cd")) {
+        if (rest.len == 0) {
+            puts("cd: missing operand");
+        } else {
+            var pb: [MAX_PATH]u8 = undefined;
+            const cpath: [*:0]const u8 = cstr(rest, &pb) orelse {
+                puts("cd: path too long");
+                return;
+            };
+            if (libc.syscall.chdir(cpath) < 0) {
+                printf("cd: %s: no such directory\n", .{rest});
+            }
+        }
     } else if (equal(name, "exit")) {
         libc.syscall.exit(0);
     } else {

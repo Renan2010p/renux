@@ -38,6 +38,7 @@ pub fn init() void {
             p.fds[fd] = null;
         }
         p.cwd = null;
+        p.cwd_len = 0;
     }
 }
 
@@ -66,6 +67,7 @@ pub fn alloc() ?*proc.Proc {
             p.fds[fd] = null;
         }
         p.cwd = null;
+        p.cwd_len = 0;
         p.state = .runnable;
         return p;
     }

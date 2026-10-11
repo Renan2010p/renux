@@ -48,10 +48,11 @@ fn vnodeRead(ctx: *anyopaque, offset: u64, buf: []u8) usize {
     return @intCast(n);
 }
 
-/// Load the program at `path` into page map `pmap`. Returns null when the path
-/// cannot be resolved, opened or interpreted.
-pub fn loadInto(pmap: arch.pmap.Pmap, path: []const u8) ?exec_elf.Result {
-    const vp: *vnode.Vnode = vfs_lookup.nameiLookup(path) orelse return null;
+/// Load the program at `path` (relative to `start`, or absolute) into page map
+/// `pmap`. Returns null when the path cannot be resolved, opened or
+/// interpreted.
+pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8) ?exec_elf.Result {
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return null;
 
     var vap: vnode.Vattr = .{
         .type = .vnone,
@@ -226,7 +227,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     const p: *proc.Proc = kern_proc.current;
 
     const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -1;
-    const loaded: exec_elf.Result = loadInto(newmap, path) orelse return -1;
+    const loaded: exec_elf.Result = loadInto(p.cwd, newmap, path) orelse return -1;
     if (!mapStack(newmap)) {
         return -1;
     }

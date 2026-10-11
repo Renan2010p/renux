@@ -14,8 +14,8 @@ const sys: type = @import("../sys/syscall.zig");
 /// register.
 pub fn syscall(number: u64, args: [sys.MAXARGS]u64) u64 {
     if (number >= syscalls.table.len) {
-        return syscalls.error_value;
+        return sys.ERROR;
     }
-    const handler = syscalls.table[number] orelse return syscalls.error_value;
+    const handler = syscalls.table[number] orelse return sys.ERROR;
     return handler(args);
 }

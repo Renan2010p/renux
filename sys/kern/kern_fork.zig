@@ -45,6 +45,13 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
         vfs_subr.vref(cwd);
     }
 
+    // Copy the working-directory path.
+    var k: usize = 0;
+    while (k < parent.cwd_len) : (k += 1) {
+        child.cwd_path[k] = parent.cwd_path[k];
+    }
+    child.cwd_len = parent.cwd_len;
+
     kern_sched.prepareContext(child);
     child.state = .runnable;
     return child.pid;

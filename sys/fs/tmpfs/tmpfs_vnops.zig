@@ -22,6 +22,7 @@ const vfs_subr: type = @import("../../kern/vfs_subr.zig");
 const tmpfs_vnodeops: vnode.VnodeOps = .{
     .lookup = tmpfsLookup,
     .create = tmpfsCreate,
+    .remove = tmpfsRemove,
     .open = tmpfsOpen,
     .close = tmpfsClose,
     .read = tmpfsRead,
@@ -113,6 +114,36 @@ fn tmpfsCreate(dvp: *vnode.Vnode, cnp: *const namei.Componentname, vap: *const v
     tmpfs_subr.dirAttach(dir, de);
 
     return getVnode(mp, node);
+}
+
+fn tmpfsRemove(dvp: *vnode.Vnode, cnp: *const namei.Componentname) i32 {
+    const dir: *tmpfs.Node = nodeOf(dvp);
+    if (dir.type != .vdir) {
+        return errno.ENOTDIR;
+    }
+    const require_dir: bool = (cnp.flags & namei.REQUIREDIR) != 0;
+
+    const de: *tmpfs.Dirent = tmpfs_subr.dirLookup(dir, cnp) orelse return errno.ENOENT;
+    const node: *tmpfs.Node = de.node;
+    if (require_dir) {
+        if (node.type != .vdir) {
+            return errno.ENOTDIR;
+        }
+        if (node.entries != null) {
+            return errno.ENOTEMPTY;
+        }
+    } else if (node.type == .vdir) {
+        return errno.EISDIR;
+    }
+
+    _ = tmpfs_subr.dirDetach(dir, de);
+    tmpfs_subr.freeDirent(de);
+    if (node.type == .vdir) {
+        dir.nlink -= 1;
+    }
+    node.nlink = 0;
+    // The node itself is left allocated: a cached vnode may still refer to it.
+    return 0;
 }
 
 fn tmpfsOpen(vp: *vnode.Vnode, mode: i32) i32 {

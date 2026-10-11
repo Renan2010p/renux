@@ -81,6 +81,24 @@ pub fn dirAttach(dir: *tmpfs.Node, de: *tmpfs.Dirent) void {
     }
 }
 
+/// Remove `de` from directory `dir`'s entry list; true when it was found.
+pub fn dirDetach(dir: *tmpfs.Node, de: *tmpfs.Dirent) bool {
+    var prev: ?*tmpfs.Dirent = null;
+    var p: ?*tmpfs.Dirent = dir.entries;
+    while (p) |cur| : (p = cur.next) {
+        if (cur == de) {
+            if (prev) |pv| {
+                pv.next = cur.next;
+            } else {
+                dir.entries = cur.next;
+            }
+            return true;
+        }
+        prev = cur;
+    }
+    return false;
+}
+
 /// Compare the component name in `cnp` with `name`.
 fn nameMatches(cnp: *const namei.Componentname, name: []const u8) bool {
     if (cnp.namelen != name.len) {

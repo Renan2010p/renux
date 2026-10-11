@@ -56,6 +56,8 @@ pub const VnodeOps: type = struct {
     lookup: *const fn (dvp: *Vnode, cnp: *const namei.Componentname) ?*Vnode,
     /// Create an entry `cnp` in directory `dvp` with attributes `vap`.
     create: *const fn (dvp: *Vnode, cnp: *const namei.Componentname, vap: *const Vattr) ?*Vnode,
+    /// Remove the entry `cnp` from directory `dvp`; returns 0 or errno.
+    remove: *const fn (dvp: *Vnode, cnp: *const namei.Componentname) i32,
     /// Open `vp` with the given access mode; called before reads or writes.
     open: *const fn (vp: *Vnode, mode: i32) i32,
     /// Called when the last reference to `vp` from an open file is dropped.

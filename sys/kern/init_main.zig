@@ -173,7 +173,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
         return;
     };
 
-    const result = kern_exec.loadInto(init.pmap, "/sbin/init") orelse {
+    const result = kern_exec.loadInto(null, init.pmap, "/sbin/init") orelse {
         prf.printLine("init: cannot load /sbin/init");
         return;
     };
@@ -223,6 +223,8 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     if (init.cwd) |cwd| {
         vfs_subr.vref(cwd);
     }
+    init.cwd_path[0] = '/';
+    init.cwd_len = 1;
 
     kern_sched.prepareContext(init);
     init.state = .runnable;

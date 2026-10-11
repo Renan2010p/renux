@@ -33,6 +33,11 @@ STAT="${STAT:-$ROOT/usr.bin/zig-out/bin/stat}"
 SH="${SH:-$ROOT/bin/zig-out/bin/sh}"
 LS="${LS:-$ROOT/bin/zig-out/bin/ls}"
 CAT="${CAT:-$ROOT/bin/zig-out/bin/cat}"
+ECHO="${ECHO:-$ROOT/bin/zig-out/bin/echo}"
+PWDCMD="${PWDCMD:-$ROOT/bin/zig-out/bin/pwd}"
+MKDIR="${MKDIR:-$ROOT/bin/zig-out/bin/mkdir}"
+RM="${RM:-$ROOT/bin/zig-out/bin/rm}"
+RMDIR="${RMDIR:-$ROOT/bin/zig-out/bin/rmdir}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -70,6 +75,11 @@ cp "$STAT" "$WORK/usr/bin/stat"
 cp "$SH" "$WORK/bin/sh"
 cp "$LS" "$WORK/bin/ls"
 cp "$CAT" "$WORK/bin/cat"
+cp "$ECHO" "$WORK/bin/echo"
+cp "$PWDCMD" "$WORK/bin/pwd"
+cp "$MKDIR" "$WORK/bin/mkdir"
+cp "$RM" "$WORK/bin/rm"
+cp "$RMDIR" "$WORK/bin/rmdir"
 cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \
