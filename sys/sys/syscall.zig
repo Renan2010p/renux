@@ -21,7 +21,7 @@ pub const SYS_wait4: u64 = 7;
 pub const SYS_unlink: u64 = 10;
 pub const SYS_chdir: u64 = 12;
 pub const SYS_brk: u64 = 17;
-pub const SYS_lseek: u64 = 19;
+pub const SYS_lseek: u64 = 478;
 pub const SYS_getpid: u64 = 20;
 pub const SYS_setuid: u64 = 23;
 pub const SYS_getuid: u64 = 24;
@@ -43,7 +43,9 @@ pub const SYS_issetugid: u64 = 253;
 pub const SYS_fstat: u64 = 189;
 pub const SYS_getdents: u64 = 272;
 pub const SYS_getcwd: u64 = 326;
-pub const SYS_klog: u64 = 500;
+/// Renux extension (FreeBSD numbers stop below 600): read the kernel message
+/// buffer. Not part of the FreeBSD ABI, so it lives outside its range.
+pub const SYS_klog: u64 = 600;
 pub const SYS_sigreturn: u64 = 417;
 pub const SYS_mmap: u64 = 477;
 pub const SYS___sysctl: u64 = 202;
