@@ -94,4 +94,6 @@ pub const Vnode: type = struct {
     v_usecount: u32,
     /// Number of internal references (name cache, parent links, ...).
     v_holdcnt: u32,
+    /// Inode number, unique within the filesystem (used by stat/fstat).
+    v_ino: u64,
 };

@@ -45,6 +45,9 @@ NANO="${NANO:-$ROOT/bin/zig-out/bin/nano}"
 DMESG="${DMESG:-$ROOT/bin/zig-out/bin/dmesg}"
 LOGGER="${LOGGER:-$ROOT/bin/zig-out/bin/logger}"
 SYSLOGD="${SYSLOGD:-$ROOT/bin/zig-out/bin/syslogd}"
+RTLD_SO="${RTLD_SO:-$ROOT/libexec/rtld-elf/zig-out/ld-elf.so.1}"
+LIBC_SO="${LIBC_SO:-$ROOT/lib/zig-out/libc.so.1}"
+DYNH="${DYNH:-$ROOT/examples/dynhello/zig-out/dynhello}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -61,6 +64,8 @@ fi
 [ -f "$GETTY" ] || ( cd "$ROOT/libexec" && zig build )
 [ -f "$SH" ] || ( cd "$ROOT/bin" && zig build )
 [ -f "$LOGIN" ] || ( cd "$ROOT/usr.bin" && zig build )
+# Build the dynamic linking pieces if they are missing.
+[ -f "$RTLD_SO" ] && [ -f "$LIBC_SO" ] && [ -f "$DYNH" ] || "$ROOT/tools/build-dyn.sh" >/dev/null
 
 command -v xorriso >/dev/null 2>&1 || {
     echo "mkiso: 'xorriso' is required to build the ISO" >&2
@@ -70,7 +75,7 @@ command -v xorriso >/dev/null 2>&1 || {
 rm -rf "$WORK"
 mkdir -p "$WORK/boot/limine" "$WORK/boot/renux" "$WORK/EFI/BOOT" \
     "$WORK/sbin" "$WORK/bin" "$WORK/usr/bin" "$WORK/usr/sbin" "$WORK/usr/libexec" \
-    "$WORK/etc" "$WORK/etc/rc.d"
+    "$WORK/etc" "$WORK/etc/rc.d" "$WORK/lib" "$WORK/libexec"
 
 cp "$LIMINE/limine-bios.sys" "$LIMINE/limine-bios-cd.bin" "$LIMINE/limine-uefi-cd.bin" "$WORK/boot/limine/"
 cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
@@ -98,6 +103,9 @@ cp "$LOGGER" "$WORK/usr/bin/logger"
 cp "$SYSLOGD" "$WORK/usr/sbin/syslogd"
 cp "$RC" "$WORK/etc/rc"
 cp "$ROOT/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
+cp "$RTLD_SO" "$WORK/libexec/ld-elf.so.1"
+cp "$LIBC_SO" "$WORK/lib/libc.so.1"
+cp "$DYNH" "$WORK/bin/dynhello"
 
 xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \

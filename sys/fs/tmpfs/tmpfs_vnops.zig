@@ -50,6 +50,7 @@ pub fn getVnode(mp: *mount.Mount, node: *tmpfs.Node) ?*vnode.Vnode {
         return v;
     }
     const vp: *vnode.Vnode = vfs_subr.allocVnode(node.type, &tmpfs_vnodeops, node, mp) orelse return null;
+    vp.v_ino = node.id;
     node.vnode = vp;
     return vp;
 }

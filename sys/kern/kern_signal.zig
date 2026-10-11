@@ -115,12 +115,12 @@ pub fn sysSigaction(args: [sys.MAXARGS]u64) u64 {
     const p: *proc.Proc = kern_proc.current;
 
     if (oact_ptr != 0) {
-        const oact: *Sigaction = @ptrFromInt(oact_ptr);
+        const oact: *align(1) Sigaction = @ptrFromInt(oact_ptr);
         oact.handler = p.sig_handler[sig];
         oact.mask = 0;
     }
     if (act_ptr != 0) {
-        const act: *const Sigaction = @ptrFromInt(act_ptr);
+        const act: *align(1) const Sigaction = @ptrFromInt(act_ptr);
         p.sig_handler[sig] = act.handler;
     }
     return 0;
@@ -133,11 +133,11 @@ pub fn sysSigprocmask(args: [sys.MAXARGS]u64) u64 {
     const p: *proc.Proc = kern_proc.current;
 
     if (oset_ptr != 0) {
-        const oset: *u64 = @ptrFromInt(oset_ptr);
+        const oset: *align(1) u64 = @ptrFromInt(oset_ptr);
         oset.* = p.sig_mask;
     }
     if (set_ptr != 0) {
-        const set: *const u64 = @ptrFromInt(set_ptr);
+        const set: *align(1) const u64 = @ptrFromInt(set_ptr);
         p.sig_mask = set.*;
     }
     return 0;

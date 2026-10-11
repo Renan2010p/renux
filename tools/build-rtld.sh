@@ -25,7 +25,7 @@ objs=""
 for f in rtld.c map_object.c rtld_malloc.c rtld_printf.c xmalloc.c debug.c \
 	libmap.c rtld_lock.c amd64/reloc.c rtld-libc/rtld_libc.c rtld_syscalls.c rtld_libc_min.c; do
 	o="$OUT/pic/$(basename "$f").o"
-	$CC -DIN_RTLD -fPIC -fno-sanitize=undefined -c "$RTLD/$f" $inc -o "$o"
+	$CC -DIN_RTLD -O2 -fPIC -fno-sanitize=undefined -c "$RTLD/$f" $inc -o "$o"
 	objs="$objs $o"
 done
 
@@ -37,7 +37,7 @@ objs="$objs $OUT/pic/rtld_start.o"
 # leading dot is FreeBSD's). zig cc refuses -shared on a freestanding target, so
 # the bundled lld is invoked directly.
 ld="${LD:-zig ld.lld}"
-$ld -shared -e .rtld_start -Bsymbolic --strip-debug \
+$ld -shared -e .rtld_start -Bsymbolic --strip-all \
 	-o "$OUT/ld-elf.so.1" $objs
 
 echo "built $OUT/ld-elf.so.1"

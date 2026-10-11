@@ -162,6 +162,8 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
         prf.printHex(readCr2());
         prf.print(" error ");
         prf.printHex(frame.error_code);
+        prf.print(" rip ");
+        prf.printHex(frame.rip);
         prf.printLine("");
         prf.panic("unhandled page fault", null);
     }

@@ -68,17 +68,23 @@ pub fn sysFstat(args: [sys.MAXARGS]u64) u64 {
     var st: stat.Stat = .{
         .dev = 0,
         .ino = 0,
-        .mode = 0,
         .nlink = 0,
+        .mode = 0,
+        .padding0 = 0,
         .uid = 0,
         .gid = 0,
+        .padding1 = 0,
         .rdev = 0,
+        .atim = .{ .sec = 0, .nsec = 0 },
+        .mtim = .{ .sec = 0, .nsec = 0 },
+        .ctim = .{ .sec = 0, .nsec = 0 },
         .size = 0,
-        .blksize = 0,
         .blocks = 0,
-        .atime = 0,
-        .mtime = 0,
-        .ctime = 0,
+        .blksize = 0,
+        .flags = 0,
+        .gen = 0,
+        .lspare = 0,
+        .birthtim = .{ .sec = 0, .nsec = 0 },
     };
     const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.ERROR;
     const err: i32 = f.f_ops.stat(f, &st);

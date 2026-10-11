@@ -131,20 +131,31 @@ pub const ECHO: u32 = 0x00000008;
 pub const ICANON: u32 = 0x00000100;
 
 /// File status, matching the kernel's struct stat (sys/sys/stat.h).
+pub const Timespec: type = extern struct {
+    sec: i64,
+    nsec: i64,
+};
+
 pub const Stat: type = extern struct {
     dev: u64,
     ino: u64,
-    mode: u32,
-    nlink: u32,
+    nlink: u64,
+    mode: u16,
+    padding0: i16,
     uid: u32,
     gid: u32,
+    padding1: i32,
     rdev: u64,
-    size: u64,
-    blksize: u64,
-    blocks: u64,
-    atime: i64,
-    mtime: i64,
-    ctime: i64,
+    atim: Timespec,
+    mtim: Timespec,
+    ctim: Timespec,
+    size: i64,
+    blocks: i64,
+    blksize: i32,
+    flags: u32,
+    gen: u32,
+    lspare: u32,
+    birthtim: Timespec,
 };
 
 /// Issue a system call with up to six arguments.

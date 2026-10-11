@@ -29,6 +29,7 @@ pub fn allocVnode(
     vp.v_mount = mp;
     vp.v_usecount = 1;
     vp.v_holdcnt = 0;
+    vp.v_ino = 0;
     return vp;
 }
 

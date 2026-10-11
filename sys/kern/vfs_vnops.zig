@@ -48,18 +48,24 @@ pub fn fillStat(vp: *vnode.Vnode, st: *stat.Stat) i32 {
     }
 
     st.dev = 0;
-    st.ino = 0;
-    st.mode = @as(u32, vap.mode) | typeBits(vap.type);
+    st.ino = vp.v_ino;
     st.nlink = vap.nlink;
+    st.mode = @truncate(@as(u32, vap.mode) | typeBits(vap.type));
+    st.padding0 = 0;
     st.uid = vap.uid;
     st.gid = vap.gid;
+    st.padding1 = 0;
     st.rdev = vap.rdev;
-    st.size = vap.size;
+    st.atim = .{ .sec = vap.atime, .nsec = 0 };
+    st.mtim = .{ .sec = vap.mtime, .nsec = 0 };
+    st.ctim = .{ .sec = vap.ctime, .nsec = 0 };
+    st.size = @intCast(vap.size);
+    st.blocks = @intCast((vap.size + 511) / 512);
     st.blksize = 4096;
-    st.blocks = (vap.size + 511) / 512;
-    st.atime = vap.atime;
-    st.mtime = vap.mtime;
-    st.ctime = vap.ctime;
+    st.flags = 0;
+    st.gen = 0;
+    st.lspare = 0;
+    st.birthtim = .{ .sec = vap.ctime, .nsec = 0 };
     return 0;
 }
 

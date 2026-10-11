@@ -15,13 +15,13 @@ struct stat {
 	struct timespec st_atim;
 	struct timespec st_mtim;
 	struct timespec st_ctim;
-	struct timespec st_birthtim;
 	off_t st_size;
 	blkcnt_t st_blocks;
 	blksize_t st_blksize;
 	uint32_t st_flags;
 	uint32_t st_gen;
-	int32_t __spare0[10];
+	uint32_t st_lspare;
+	struct timespec st_birthtim;
 };
 #define S_IFMT 0170000
 #define S_IFREG 0100000

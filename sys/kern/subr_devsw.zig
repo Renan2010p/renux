@@ -55,17 +55,23 @@ fn devStat(f: *file.File, st: *stat.Stat) i32 {
     const df: *DevFile = cast(f);
     st.dev = df.dev;
     st.ino = 0;
-    st.mode = stat.S_IFCHR | 0o620;
     st.nlink = 1;
+    st.mode = @truncate(stat.S_IFCHR | 0o620);
+    st.padding0 = 0;
     st.uid = 0;
     st.gid = 0;
+    st.padding1 = 0;
     st.rdev = df.dev;
+    st.atim = .{ .sec = 0, .nsec = 0 };
+    st.mtim = .{ .sec = 0, .nsec = 0 };
+    st.ctim = .{ .sec = 0, .nsec = 0 };
     st.size = 0;
-    st.blksize = 4096;
     st.blocks = 0;
-    st.atime = 0;
-    st.mtime = 0;
-    st.ctime = 0;
+    st.blksize = 4096;
+    st.flags = 0;
+    st.gen = 0;
+    st.lspare = 0;
+    st.birthtim = .{ .sec = 0, .nsec = 0 };
     return 0;
 }
 

@@ -220,15 +220,17 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
     if (!putU64(pmap, cursor, 0)) return null; // envp terminator
     cursor += 8;
 
+    // FreeBSD's Elf_Auxinfo is { a_un; a_type; }: the value comes first, then
+    // the type (as a 4-byte int, padded to 8).  rtld-elf reads this layout.
     for (auxv) |pair| {
-        if (!putU64(pmap, cursor, pair.type)) return null;
-        cursor += 8;
         if (!putU64(pmap, cursor, pair.val)) return null;
         cursor += 8;
+        if (!putU64(pmap, cursor, pair.type)) return null;
+        cursor += 8;
     }
-    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL
-    cursor += 8;
     if (!putU64(pmap, cursor, 0)) return null; // AT_NULL value
+    cursor += 8;
+    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL type
 
     return .{
         .rsp = base,
@@ -412,9 +414,18 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
 
     frame.rip = entry;
     frame.rsp = info.rsp;
-    frame.rdi = info.argc;
-    frame.rsi = info.argv;
-    frame.rdx = info.envp;
+    if (main.interp_len > 0) {
+        // A PT_INTERP image is entered through the dynamic linker, whose
+        // startup (rtld_start.S / _rtld) takes the initial stack pointer in
+        // %rdi, pointing at argc.  The linker passes it on to the program.
+        frame.rdi = info.rsp;
+        frame.rsi = 0;
+        frame.rdx = 0;
+    } else {
+        frame.rdi = info.argc;
+        frame.rsi = info.argv;
+        frame.rdx = info.envp;
+    }
     frame.rax = 0;
     return 0;
 }

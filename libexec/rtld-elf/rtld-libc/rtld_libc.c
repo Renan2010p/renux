@@ -74,7 +74,6 @@ sigprocmask(int how, const sigset_t *set, sigset_t *oset)
 }
 __strong_reference(sigprocmask, __libc_sigprocmask);
 
-#if defined DEBUG || !defined(NDEBUG)
 /* Provide an implementation of __assert that does not pull in fprintf() */
 void
 __assert(const char *func, const char *file, int line, const char *failedexpr)
@@ -91,7 +90,6 @@ __assert(const char *func, const char *file, int line, const char *failedexpr)
 	abort();
 	/* NOTREACHED */
 }
-#endif
 
 /*
  * Avoid pulling in all of pthreads from getpagesize().
