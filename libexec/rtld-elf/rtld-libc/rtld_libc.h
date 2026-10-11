@@ -54,6 +54,7 @@ int	__sys_openat(int, const char *, int, ...);
 int	__sys_sigprocmask(int, const sigset_t *, sigset_t *);
 int	__sys_thr_kill(long, int);
 int	__sys_thr_self(long *);
+int	__sys_sigfastblock(int, void *);
 __ssize_t	__sys_pread(int, void *, __size_t, __off_t);
 __ssize_t	__sys_read(int, void *, __size_t);
 __ssize_t	__sys_write(int, const void *, __size_t);

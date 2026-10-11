@@ -57,5 +57,7 @@ struct utrace_rtld {
 	int refcnt;			/* Used for 'mode' */
 	char name[MAXPATHLEN];
 };
+#include <stddef.h>
+void utrace(const void *trace, size_t len);
 
 #endif
