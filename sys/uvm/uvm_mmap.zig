@@ -66,7 +66,8 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
     const len: u64 = args[1];
     const protbits: u64 = args[2];
     const flags: u64 = args[3];
-    const fd: i64 = @bitCast(args[4]);
+    // FreeBSD's mmap takes an `int` fd; the caller may pass -1 zero-extended.
+    const fd: i64 = @as(i32, @bitCast(@as(u32, @truncate(args[4]))));
     const offset: u64 = args[5];
 
     if (len == 0) {

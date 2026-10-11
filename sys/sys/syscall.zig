@@ -38,9 +38,9 @@ pub const SYS_gettimeofday: u64 = 116;
 pub const SYS_sysarch: u64 = 165;
 pub const SYS_mkdir: u64 = 136;
 pub const SYS_rmdir: u64 = 137;
-pub const SYS_stat: u64 = 188;
+pub const SYS_stat: u64 = 552; // modern stat(2) is fstatat(2) (FreeBSD 14)
 pub const SYS_issetugid: u64 = 253;
-pub const SYS_fstat: u64 = 189;
+pub const SYS_fstat: u64 = 551;
 pub const SYS_getdents: u64 = 272;
 pub const SYS_getcwd: u64 = 326;
 /// Renux extension (FreeBSD numbers stop below 600): read the kernel message

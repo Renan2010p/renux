@@ -131,7 +131,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_fstat, .handler = vfs_syscalls.sysFstat },
     .{ .num = sys.SYS_mkdir, .handler = vfs_syscalls.sysMkdir },
     .{ .num = sys.SYS_rmdir, .handler = vfs_syscalls.sysRmdir },
-    .{ .num = sys.SYS_stat, .handler = vfs_syscalls.sysStat },
+    .{ .num = sys.SYS_stat, .handler = vfs_syscalls.sysFstatat },
     .{ .num = sys.SYS_getdents, .handler = vfs_syscalls.sysGetdents },
     .{ .num = sys.SYS_getcwd, .handler = vfs_getcwd.sysGetcwd },
     .{ .num = sys.SYS_klog, .handler = sys_generic.sysKlog },

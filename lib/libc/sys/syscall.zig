@@ -36,8 +36,9 @@ pub const SYS_munmap: u64 = 73;
 pub const SYS_gettimeofday: u64 = 116;
 pub const SYS_mkdir: u64 = 136;
 pub const SYS_rmdir: u64 = 137;
-pub const SYS_stat: u64 = 188;
-pub const SYS_fstat: u64 = 189;
+pub const SYS_stat: u64 = 552; // modern stat(2) is fstatat(2) (FreeBSD 14)
+pub const SYS_fstat: u64 = 551;
+pub const SYS_fstatat: u64 = 552;
 pub const SYS_getdents: u64 = 272;
 pub const SYS_getcwd: u64 = 326;
 pub const SYS_sigprocmask: u64 = 340;
@@ -203,9 +204,10 @@ pub fn fstat(fd: u64, st: *Stat) i64 {
     return @bitCast(r);
 }
 
-/// Fill in `st` for `path`.
+/// Fill in `st` for `path` (via fstatat(2) with AT_FDCWD, as FreeBSD's libc).
 pub fn stat(path: [*:0]const u8, st: *Stat) i64 {
-    const r: u64 = syscall(SYS_stat, .{ @intFromPtr(path), @intFromPtr(st), 0, 0, 0, 0 });
+    const at_fdcwd: u64 = @bitCast(@as(i64, -100));
+    const r: u64 = syscall(SYS_fstatat, .{ at_fdcwd, @intFromPtr(path), @intFromPtr(st), 0, 0, 0 });
     return @bitCast(r);
 }
 

@@ -51,6 +51,8 @@ DYNH="${DYNH:-$ROOT/examples/dynhello/zig-out/dynhello}"
 RC="${RC:-$ROOT/etc/rc}"
 # Optional: a real FreeBSD binary to include as /bin/rescue (bring-up testing).
 RESCUE="${RESCUE:-}"
+# Optional: a FreeBSD root tree (libc.so.7 and friends) to run FreeBSD programs.
+FBSDLIB="${FBSDLIB:-}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
@@ -115,6 +117,25 @@ if [ -n "$RESCUE" ] && [ -f "$RESCUE" ]; then
     mkdir -p "$WORK/rescue"
     cp "$RESCUE" "$WORK/rescue/echo"
     sed -i '/cmdline:/i\    module_path: boot():/rescue/echo' "$WORK/limine.conf"
+fi
+
+# A FreeBSD userland subset (optional): the real libc.so.7 and a dynamic
+# program, so a FreeBSD binary can run through ld-elf.so.1.
+if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
+    # Use FreeBSD's own interpreter when available.
+    if [ -f "$FBSDLIB/libexec/ld-elf.so.1" ]; then
+        cp "$FBSDLIB/libexec/ld-elf.so.1" "$WORK/libexec/ld-elf.so.1"
+    fi
+    for lib in libc.so.7 libthr.so.3 libncursesw.so.9 libcxxrt.so.1 libutil.so.9 libmd.so.6; do
+        if [ -f "$FBSDLIB/lib/$lib" ]; then
+            cp "$FBSDLIB/lib/$lib" "$WORK/lib/$lib"
+            sed -i "/cmdline:/i\\    module_path: boot():/lib/$lib" "$WORK/limine.conf"
+        fi
+    done
+    if [ -f "$FBSDLIB/bin/echo" ]; then
+        cp "$FBSDLIB/bin/echo" "$WORK/usr/bin/fbsd-echo"
+        sed -i '/cmdline:/i\    module_path: boot():/usr/bin/fbsd-echo' "$WORK/limine.conf"
+    fi
 fi
 
 xorriso -as mkisofs -R -r -J \

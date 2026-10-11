@@ -167,7 +167,7 @@ __sys_mprotect(void *addr, size_t len, int prot)
 int
 __sys_fstat(int fd, struct stat *st)
 {
-	return ((int)raw(189, fd, (long)st, 0, 0, 0, 0));
+	return ((int)raw(551, fd, (long)st, 0, 0, 0, 0));
 }
 
 int
