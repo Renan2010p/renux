@@ -24,6 +24,8 @@ comptime {
     _ = @import("gen/dirent.zig");
     _ = @import("gen/termios.zig");
     _ = @import("gen/getopt.zig");
+    _ = @import("termcap/termcap.zig");
+    _ = @import("curses/curses.zig");
     _ = getenv_;
     _ = errno_;
 }

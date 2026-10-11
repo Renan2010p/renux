@@ -148,4 +148,24 @@ pub fn build(b: *Builder) !void {
     wc.setLinkerScript(libc.path("libc/libc.ldscript"));
     const install_wc: *Builder.Step.InstallArtifact = b.addInstallArtifact(wc, .{});
     b.getInstallStep().dependOn(&install_wc.step);
+
+    const tui_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("tui/main.zig"),
+        .code_model = .default,
+    });
+    tui_mod.addImport("libc", libc.module("libc"));
+    tui_mod.addImport("csu", libc.module("csu"));
+    tui_mod.addIncludePath(libc.path("include"));
+    tui_mod.addCSourceFile(.{ .file = b.path("tui/main.c"), .flags = &.{} });
+    const tui: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "tui",
+        .root_module = tui_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    tui.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_tui: *Builder.Step.InstallArtifact = b.addInstallArtifact(tui, .{});
+    b.getInstallStep().dependOn(&install_tui.step);
 }
