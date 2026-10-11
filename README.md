@@ -49,10 +49,11 @@ Build from the repository root:
 
 ```sh
 zig build buildkernel     # kernel
+zig build buildlib        # C library
 zig build builduserland   # /sbin/init
 zig build iso             # bootable ISO (kernel + userland)
 zig build run             # boot the ISO in QEMU
-zig build all             # kernel + userland + ISO
+zig build all             # kernel + lib + userland + ISO
 ```
 
 The finished artifacts are collected in the root `zig-out/`:
@@ -79,17 +80,22 @@ The tree follows the NetBSD (and FreeBSD `x86/`) conventions so it is familiar
 to BSD developers:
 
 ```
-build.zig              top-level build (drives sys/ and sbin/)
+build.zig              top-level build (drives sys/, lib/ and sbin/)
 sys/                   kernel
   sys_root.zig         kernel root module
-  sys/, kern/, uvm/, dev/, stand/
+  kern/, uvm/, dev/, sys/
   arch/                machine-dependent code
     arch.zig           architecture dispatch (comptime switch)
     x86/               x86-family code shared by all ports
     amd64/             amd64 port (locore, gdt, vector, trap, conf/)
+lib/                   C library (a Zig package)
+  build.zig            exposes the "libc" module
+  libc/                arch/ (MD syscall primitive), sys/ (MI wrappers), stdio/
 sbin/                  userland
   build.zig            userland build definition
   init/main.zig        /sbin/init
+stand/                 boot support (Limine protocol bindings, config)
+tools/                 build helper scripts (get-limine.sh, mkiso.sh)
 ```
 
 ## Status

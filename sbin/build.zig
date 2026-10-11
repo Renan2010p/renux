@@ -28,6 +28,14 @@ pub fn build(b: *Builder) !void {
         .code_model = .default,
     });
 
+    // The C library lives in ../lib, a separate package; depend on it and add
+    // its "libc" module as an import.
+    const libc_dep: *Builder.Dependency = b.dependency("libc", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    init_mod.addImport("libc", libc_dep.module("libc"));
+
     const init_exec: *Builder.Step.Compile = b.addExecutable(.{
         .name = "init",
         .root_module = init_mod,

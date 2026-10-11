@@ -1,0 +1,11 @@
+.{
+    .name = .libc,
+    .version = "0.1.0",
+    .fingerprint = 0x94c25ecf954a968a,
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "libc",
+    },
+}

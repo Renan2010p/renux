@@ -38,6 +38,12 @@ pub fn build(b: *Builder) !void {
     install_kernel.step.dependOn(&buildkernel.step);
     buildkernel_step.dependOn(&install_kernel.step);
 
+    // zig build buildlib: the C library (lib/).
+    const buildlib_step: *Builder.Step = b.step("buildlib", "Build the ZenBSD C library");
+    const buildlib: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    buildlib.setCwd(b.path("lib"));
+    buildlib_step.dependOn(&buildlib.step);
+
     // zig build builduserland: run sbin/build.zig, then collect init.
     const builduserland_step: *Builder.Step = b.step("builduserland", "Build the ZenBSD userland");
     const builduserland: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
