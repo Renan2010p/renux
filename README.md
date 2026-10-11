@@ -1,10 +1,10 @@
-# ZenBSD
+# Renux
 
 > A modern, portable, Unix-like operating system written entirely in Zig —
 > inspired by NetBSD's clean design and portability, but without decades of
 > accumulated legacy.
 
-ZenBSD is a from-scratch reimagining of a BSD-style operating system. It keeps
+Renux is a from-scratch reimagining of a BSD-style operating system. It keeps
 what makes the BSDs great (a coherent, integrated base system; a clean and
 readable source tree; portability as a first-class goal) and drops the parts
 that only exist because of historical accident.
@@ -24,7 +24,7 @@ that only exist because of historical accident.
 
 ## License
 
-ZenBSD is distributed under the **GNU General Public License, version 2 only**
+Renux is distributed under the **GNU General Public License, version 2 only**
 (`GPL-2.0-only`). See [`LICENSE`](LICENSE) for the full text. Every source file
 carries an `SPDX-License-Identifier: GPL-2.0-only` header.
 
@@ -63,7 +63,7 @@ The finished artifacts are collected in the root `zig-out/`:
 ```
 zig-out/bin/kernel
 zig-out/bin/init
-zig-out/zenbsd.iso
+zig-out/renux.iso
 ```
 
 Each subproject keeps its own working `zig-out/` (`sys/zig-out`,

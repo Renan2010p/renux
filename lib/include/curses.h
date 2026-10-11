@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2026 The ZenBSD Project
+ * Copyright (C) 2026 The Renux Project
  *
  * A minimal curses.
  */
@@ -7,7 +7,7 @@
 #ifndef _ZENBSD_CURSES_H_
 #define _ZENBSD_CURSES_H_
 
-typedef struct __zenbsd_WINDOW WINDOW;
+typedef struct __renux_WINDOW WINDOW;
 
 extern WINDOW *stdscr;
 extern int LINES;

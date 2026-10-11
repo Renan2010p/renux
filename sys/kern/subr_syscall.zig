@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // System call argument helpers.
 //
 // NetBSD's generated syscalls.c extracts each handler's typed arguments from
-// the register array before calling it. ZenBSD's handlers are hand-written and
+// the register array before calling it. Renux's handlers are hand-written and
 // take the raw array, so the small helpers they share (reading a user string,
 // the size of an open file) live here.
 

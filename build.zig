@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // Top-level build.
 //
@@ -11,7 +11,7 @@
 //   zig-out/bin/kernel      the kernel image
 //   zig-out/bin/init        the first user process
 //   zig-out/bin/sh          the command shell
-//   zig-out/zenbsd.iso      the bootable ISO image
+//   zig-out/renux.iso      the bootable ISO image
 //
 // Targets:
 //   zig build buildkernel    build the kernel
@@ -33,7 +33,7 @@ fn zig(b: *Builder) []const u8 {
 
 pub fn build(b: *Builder) !void {
     // zig build buildkernel
-    const buildkernel_step: *Builder.Step = b.step("buildkernel", "Build the ZenBSD kernel");
+    const buildkernel_step: *Builder.Step = b.step("buildkernel", "Build the Renux kernel");
     const buildkernel: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildkernel.setCwd(b.path("sys"));
     const install_kernel: *Builder.Step.InstallFile =
@@ -42,13 +42,13 @@ pub fn build(b: *Builder) !void {
     buildkernel_step.dependOn(&install_kernel.step);
 
     // zig build buildlib
-    const buildlib_step: *Builder.Step = b.step("buildlib", "Build the ZenBSD C library");
+    const buildlib_step: *Builder.Step = b.step("buildlib", "Build the Renux C library");
     const buildlib: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildlib.setCwd(b.path("lib"));
     buildlib_step.dependOn(&buildlib.step);
 
     // zig build buildbin  (the shell)
-    const buildbin_step: *Builder.Step = b.step("buildbin", "Build the ZenBSD user programs (bin/)");
+    const buildbin_step: *Builder.Step = b.step("buildbin", "Build the Renux user programs (bin/)");
     const buildbin: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildbin.setCwd(b.path("bin"));
     const install_sh: *Builder.Step.InstallFile =
@@ -57,7 +57,7 @@ pub fn build(b: *Builder) !void {
     buildbin_step.dependOn(&install_sh.step);
 
     // zig build buildsbin  (init)
-    const buildsbin_step: *Builder.Step = b.step("buildsbin", "Build the ZenBSD system programs (sbin/)");
+    const buildsbin_step: *Builder.Step = b.step("buildsbin", "Build the Renux system programs (sbin/)");
     const buildsbin: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildsbin.setCwd(b.path("sbin"));
     const install_init: *Builder.Step.InstallFile =
@@ -66,7 +66,7 @@ pub fn build(b: *Builder) !void {
     buildsbin_step.dependOn(&install_init.step);
 
     // zig build buildlibexec  (getty)
-    const buildlibexec_step: *Builder.Step = b.step("buildlibexec", "Build the ZenBSD libexec programs (libexec/)");
+    const buildlibexec_step: *Builder.Step = b.step("buildlibexec", "Build the Renux libexec programs (libexec/)");
     const buildlibexec: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildlibexec.setCwd(b.path("libexec"));
     const install_getty: *Builder.Step.InstallFile =
@@ -75,7 +75,7 @@ pub fn build(b: *Builder) !void {
     buildlibexec_step.dependOn(&install_getty.step);
 
     // zig build buildusrbin  (login, stat)
-    const buildusrbin_step: *Builder.Step = b.step("buildusrbin", "Build the ZenBSD user commands (usr.bin/)");
+    const buildusrbin_step: *Builder.Step = b.step("buildusrbin", "Build the Renux user commands (usr.bin/)");
     const buildusrbin: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildusrbin.setCwd(b.path("usr.bin"));
     const install_login: *Builder.Step.InstallFile =
@@ -88,14 +88,14 @@ pub fn build(b: *Builder) !void {
     buildusrbin_step.dependOn(&install_stat.step);
 
     // zig build builduserland
-    const builduserland_step: *Builder.Step = b.step("builduserland", "Build the ZenBSD userland");
+    const builduserland_step: *Builder.Step = b.step("builduserland", "Build the Renux userland");
     builduserland_step.dependOn(buildbin_step);
     builduserland_step.dependOn(buildsbin_step);
     builduserland_step.dependOn(buildlibexec_step);
     builduserland_step.dependOn(buildusrbin_step);
 
     // zig build iso
-    const iso_step: *Builder.Step = b.step("iso", "Build a bootable ZenBSD ISO image");
+    const iso_step: *Builder.Step = b.step("iso", "Build a bootable Renux ISO image");
     const iso: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "iso" });
     iso.setCwd(b.path("sys"));
     iso.step.dependOn(&install_kernel.step);
@@ -104,12 +104,12 @@ pub fn build(b: *Builder) !void {
     iso.step.dependOn(buildlibexec_step);
     iso.step.dependOn(buildusrbin_step);
     const install_iso: *Builder.Step.InstallFile =
-        b.addInstallFileWithDir(b.path("sys/zig-out/zenbsd.iso"), .{ .custom = "." }, "zenbsd.iso");
+        b.addInstallFileWithDir(b.path("sys/zig-out/renux.iso"), .{ .custom = "." }, "renux.iso");
     install_iso.step.dependOn(&iso.step);
     iso_step.dependOn(&install_iso.step);
 
     // zig build run
-    const run_step: *Builder.Step = b.step("run", "Boot ZenBSD in QEMU");
+    const run_step: *Builder.Step = b.step("run", "Boot Renux in QEMU");
     const run: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "run" });
     run.setCwd(b.path("sys"));
     run.step.dependOn(buildbin_step);

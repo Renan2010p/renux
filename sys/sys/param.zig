@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // Machine-independent page constants.
 //
 // This is the Zig counterpart of the page-size part of NetBSD's
-// sys/sys/param.h. NetBSD sources these from <machine/param.h>; ZenBSD fixes
+// sys/sys/param.h. NetBSD sources these from <machine/param.h>; Renux fixes
 // them here because every supported port so far uses 4 KiB pages.
 
 /// log2 of the page size.

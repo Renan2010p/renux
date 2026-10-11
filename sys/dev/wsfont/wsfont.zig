@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // Kernel font support.
 //
 // This is the Zig counterpart of NetBSD's sys/dev/wsfont/wsfont.c, simplified:
 // NetBSD keeps a registry of fonts that can be looked up by geometry and
-// encoding, because fonts can be loaded at run time. ZenBSD currently ships a
+// encoding, because fonts can be loaded at run time. Renux currently ships a
 // single built-in font, so only the Font descriptor and a glyph accessor are
 // defined here; the registry will grow when fonts can be loaded.
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // /sbin/getty: open a terminal and run login.
 //
@@ -29,7 +29,7 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         }
     }
 
-    libc.stdio.printf("\nZenBSD (amd64) console\n\n", .{});
+    libc.stdio.printf("\nRenux (amd64) console\n\n", .{});
 
     var av: [2]?[*:0]const u8 = .{ "/usr/bin/login", null };
     _ = libc.syscall.execve("/usr/bin/login", @ptrCast(&av), envp);

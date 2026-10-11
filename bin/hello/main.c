@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2026 The ZenBSD Project
+ * Copyright (C) 2026 The Renux Project
  *
- * hello: exercise the ZenBSD C library.
+ * hello: exercise the Renux C library.
  */
 
 #include <stdio.h>
@@ -16,7 +16,7 @@ int main(int argc, char **argv, char **envp) {
 
     char *heap = malloc(64);
     strcpy(heap, "the C heap works");
-    printf("hello from C on ZenBSD: %s\n", heap);
+    printf("hello from C on Renux: %s\n", heap);
     free(heap);
 
     printf("isatty(0)=%d\n", isatty(0));

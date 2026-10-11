@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2026 The ZenBSD Project
+ * Copyright (C) 2026 The Renux Project
  *
  * Minimal directory-entry declarations.
  */
@@ -16,7 +16,7 @@ struct dirent {
     char d_name[256];
 };
 
-typedef struct __zenbsd_DIR DIR;
+typedef struct __renux_DIR DIR;
 
 DIR *opendir(const char *path);
 struct dirent *readdir(DIR *d);

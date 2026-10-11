@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // /bin build definition.
 //
@@ -169,23 +169,23 @@ pub fn build(b: *Builder) !void {
     const install_tui: *Builder.Step.InstallArtifact = b.addInstallArtifact(tui, .{});
     b.getInstallStep().dependOn(&install_tui.step);
 
-    const edit_mod: *Builder.Module = b.createModule(.{
+    const nano_mod: *Builder.Module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("edit/main.zig"),
+        .root_source_file = b.path("nano/main.zig"),
         .code_model = .default,
     });
-    edit_mod.addImport("libc", libc.module("libc"));
-    edit_mod.addImport("csu", libc.module("csu"));
-    edit_mod.addIncludePath(libc.path("include"));
-    edit_mod.addCSourceFile(.{ .file = b.path("edit/main.c"), .flags = &.{} });
-    const edit: *Builder.Step.Compile = b.addExecutable(.{
-        .name = "edit",
-        .root_module = edit_mod,
+    nano_mod.addImport("libc", libc.module("libc"));
+    nano_mod.addImport("csu", libc.module("csu"));
+    nano_mod.addIncludePath(libc.path("include"));
+    nano_mod.addCSourceFile(.{ .file = b.path("nano/main.c"), .flags = &.{} });
+    const nano: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "nano",
+        .root_module = nano_mod,
         .use_lld = true,
         .use_llvm = true,
     });
-    edit.setLinkerScript(libc.path("libc/libc.ldscript"));
-    const install_edit: *Builder.Step.InstallArtifact = b.addInstallArtifact(edit, .{});
-    b.getInstallStep().dependOn(&install_edit.step);
+    nano.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_nano: *Builder.Step.InstallArtifact = b.addInstallArtifact(nano, .{});
+    b.getInstallStep().dependOn(&install_nano.step);
 }

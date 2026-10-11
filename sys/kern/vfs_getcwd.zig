@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // getcwd.
 //
 // This is the Zig counterpart of NetBSD's sys/kern/vfs_getcwd.c. NetBSD walks
-// the vnode tree back to the mount root; ZenBSD keeps the working directory's
+// the vnode tree back to the mount root; Renux keeps the working directory's
 // path in the process (updated by chdir), so this simply copies it out.
 
 const sys: type = @import("../sys/syscall.zig");

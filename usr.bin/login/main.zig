@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // /sbin/login: prompt for a user and start a shell.
 //
@@ -65,7 +65,7 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         _ = libc.syscall.ioctl(0, libc.syscall.TIOCSETA, @intFromPtr(&old));
     }
 
-    libc.stdio.printf("\nWelcome to ZenBSD!\n", .{});
+    libc.stdio.printf("\nWelcome to Renux!\n", .{});
 
     var av: [2]?[*:0]const u8 = .{ "/bin/sh", null };
     _ = libc.syscall.execve("/bin/sh", @ptrCast(&av), envp);

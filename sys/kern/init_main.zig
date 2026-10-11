@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // Kernel main: system startup.
 //
@@ -29,18 +29,18 @@ const prf: type = @import("subr_prf.zig");
 
 /// Copyright notice (cf. FreeBSD's sys/conf/copyright).
 const copyright: []const u8 =
-    "Copyright (c) 2026 The ZenBSD Project.  All rights reserved.\n\n";
+    "Copyright (c) 2026 The Renux Project.  All rights reserved.\n\n";
 
 /// Trademark notice (cf. FreeBSD's sys/conf/trademark).
 const trademark: []const u8 =
-    "ZenBSD is a trademark of The ZenBSD Project.\n\n";
+    "Renux is a trademark of The Renux Project.\n\n";
 
 /// Build identification, printed as "version machine" then the compiler line,
 /// as FreeBSD's print_version() does.
 const version: []const u8 =
-    "ZenBSD 0.1 (GENERIC) #0: Sat Oct 10 12:00:00 UTC 2026\n" ++
-    "\tbuild@zenbsd:/usr/src/sys/amd64/compile/GENERIC amd64\n" ++
-    "ZenBSD clang version 22.1.8 (https://github.com/llvm/llvm-project.git)\n";
+    "Renux 0.1 (GENERIC) #0: Sat Oct 10 12:00:00 UTC 2026\n" ++
+    "\tbuild@renux:/usr/src/sys/amd64/compile/GENERIC amd64\n" ++
+    "Renux clang version 22.1.8 (https://github.com/llvm/llvm-project.git)\n";
 
 /// Build a machine-independent raster from the boot framebuffer.
 fn bootRaster() ?rasops.Raster {
@@ -95,7 +95,7 @@ fn configure(_: ?*const anyopaque) callconv(.c) void {
         prf.printDec(fb.bpp);
         prf.printLine("");
     }
-    prf.printLine("ZenBSD: enabling interrupts (PIT @ 100 Hz)");
+    prf.printLine("Renux: enabling interrupts (PIT @ 100 Hz)");
     arch.cpu.enable_interrupts();
 }
 

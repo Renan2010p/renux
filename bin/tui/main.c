@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2026 The ZenBSD Project
+ * Copyright (C) 2026 The Renux Project
  *
  * tui: a full-screen demo of the minimal curses.
  */
@@ -12,7 +12,7 @@ int main(void) {
     keypad(stdscr, 1);
 
     clear();
-    mvaddstr(3, 5, "ZenBSD curses demo");
+    mvaddstr(3, 5, "Renux curses demo");
     mvaddstr(5, 5, "Press x to exit.");
     refresh();
 

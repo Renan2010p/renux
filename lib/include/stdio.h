@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2026 The ZenBSD Project
+ * Copyright (C) 2026 The Renux Project
  *
  * Minimal stdio declarations.
  */
@@ -9,7 +9,7 @@
 
 #include <stddef.h>
 
-typedef struct __zenbsd_FILE FILE;
+typedef struct __renux_FILE FILE;
 
 extern FILE *stdin;
 extern FILE *stdout;

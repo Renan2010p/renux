@@ -1,5 +1,5 @@
 /*
- * ZenBSD kernel linker script -- amd64.
+ * Renux kernel linker script -- amd64.
  *
  * This is a modern rewrite of the NetBSD amd64 layout. It deliberately drops
  * the legacy bits (the CPP `#include "assym.h"`, the `COHERENCY_UNIT` magic,

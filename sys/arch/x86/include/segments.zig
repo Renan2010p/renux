@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // x86 segment and gate descriptor formats.
 //
 // This is the Zig counterpart of NetBSD's sys/arch/amd64/include/segments.h
 // (and the equivalent i386 header). NetBSD keeps one copy per x86 arch because
-// the descriptors are almost, but not entirely, identical; ZenBSD consolidates
+// the descriptors are almost, but not entirely, identical; Renux consolidates
 // them in the shared x86 tree.
 
 /// Segment descriptor type and access fields (the SDT_* values in NetBSD).

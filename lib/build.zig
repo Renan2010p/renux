@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // C library build definition.
 //
@@ -30,16 +30,16 @@ pub fn build(b: *Builder) !void {
         .abi = .none,
         .ofmt = .elf,
     });
-    const zenbsd_mod: *Builder.Module = b.createModule(.{
+    const renux_mod: *Builder.Module = b.createModule(.{
         .target = target,
         .optimize = builtin.OptimizeMode.ReleaseSmall,
-        .root_source_file = b.path("zenbsd.zig"),
+        .root_source_file = b.path("renux.zig"),
     });
-    zenbsd_mod.addImport("libc", libc_mod);
-    zenbsd_mod.addImport("csu", csu_mod);
+    renux_mod.addImport("libc", libc_mod);
+    renux_mod.addImport("csu", csu_mod);
     const libc_a: *Builder.Step.Compile = b.addLibrary(.{
         .name = "c",
-        .root_module = zenbsd_mod,
+        .root_module = renux_mod,
         .linkage = .static,
     });
     b.installArtifact(libc_a);

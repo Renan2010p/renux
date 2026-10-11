@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2026 The ZenBSD Project
+ * Copyright (C) 2026 The Renux Project
  *
- * edit: a small full-screen editor built on the minimal curses.
+ * nano: a small full-screen editor with a nano-like layout, built on the
+ * minimal curses.
  *
  *   arrows   move
- *   ^S       save
- *   ^Q       quit
+ *   ^O       write out (save)
+ *   ^X       exit
  */
 
 #include <curses.h>
@@ -18,7 +19,7 @@ static char text[MAXTEXT];
 static long tlen = 0;
 static long cur = 0;
 static int modified = 0;
-static const char *fname = "untitled";
+static const char *fname = "[ New File ]";
 
 static void load(const char *path) {
     FILE *f = fopen(path, "r");
@@ -30,14 +31,15 @@ static void load(const char *path) {
     fclose(f);
 }
 
-static void save(void) {
+static int save(void) {
     FILE *f = fopen(fname, "w");
     if (f == 0) {
-        return;
+        return -1;
     }
     fwrite(text, 1, (unsigned long)tlen, f);
     fclose(f);
     modified = 0;
+    return 0;
 }
 
 static void insert(char c) {
@@ -65,7 +67,6 @@ static void backspace(void) {
     modified = 1;
 }
 
-/* Column of the cursor within its line, and the line number (0-based). */
 static void cursorPos(int *line, int *col) {
     int l = 0;
     long ls = 0;
@@ -79,7 +80,16 @@ static void cursorPos(int *line, int *col) {
     *col = (int)(cur - ls);
 }
 
-/* Byte offset of the start of `line` (0-based). */
+static int totalLines(void) {
+    int l = 1;
+    for (long i = 0; i < tlen; i++) {
+        if (text[i] == '\n') {
+            l++;
+        }
+    }
+    return l;
+}
+
 static long lineStart(int line) {
     long p = 0;
     int l = 0;
@@ -115,17 +125,27 @@ static void render(void) {
     int line, col;
     cursorPos(&line, &col);
 
-    int rows = LINES - 1;
+    int rows = LINES - 3; /* title + two hint lines */
+    if (rows < 1) {
+        rows = 1;
+    }
     int top = 0;
     if (line >= rows) {
         top = line - rows + 1;
     }
 
     clear();
+
+    char title[160];
+    snprintf(title, sizeof(title), "  Renux nano%s     %s", modified ? " " : "",
+             fname);
+    move(0, 0);
+    addstr(title);
+
     long p = lineStart(top);
     int row = 0;
     while (row < rows && p <= tlen) {
-        move(row, 0);
+        move(1 + row, 0);
         long q = p;
         while (q < tlen && text[q] != '\n') {
             addch(text[q]);
@@ -139,13 +159,16 @@ static void render(void) {
         }
     }
 
+    move(LINES - 2, 0);
+    addstr("^O Write Out    ^X Exit    arrows Move");
+
     char status[160];
-    snprintf(status, sizeof(status), " %s%s  L%d C%d  ^S save  ^Q quit",
-             fname, modified ? " *" : "", line + 1, col + 1);
+    snprintf(status, sizeof(status), "                        [ line %d/%d, col %d ]",
+             line + 1, totalLines(), col + 1);
     move(LINES - 1, 0);
     addstr(status);
 
-    move(line - top, col);
+    move(1 + (line - top), col);
     refresh();
 }
 
@@ -165,10 +188,10 @@ int main(int argc, char **argv) {
         if (c == ERR) {
             continue;
         }
-        if (c == 0x11) {
-            break; /* ^Q */
-        } else if (c == 0x13) {
-            save(); /* ^S */
+        if (c == 0x18) { /* ^X exit */
+            break;
+        } else if (c == 0x0f || c == 0x13) { /* ^O / ^S write out */
+            save();
         } else if (c == KEY_LEFT) {
             if (cur > 0) {
                 cur--;

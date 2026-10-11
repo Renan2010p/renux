@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // System call dispatch table.
 //
@@ -95,7 +95,7 @@ const Entry: type = struct {
 };
 
 /// The implemented system calls. NetBSD generates this from syscalls.master;
-/// ZenBSD lists what it has and builds the table from it.
+/// Renux lists what it has and builds the table from it.
 const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_exit, .handler = sysExit },
     .{ .num = sys.SYS_fork, .handler = sysFork },

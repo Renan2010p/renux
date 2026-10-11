@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
-// /bin/sh: the ZenBSD command shell.
+// /bin/sh: the Renux command shell.
 //
 // A small shell in the spirit of the BSD sh: a prompt, line editing, a few
 // built-ins, and external commands run with fork + execve + wait.
@@ -181,7 +181,7 @@ fn execute(line: []const u8) void {
     } else if (equal(name, "echo")) {
         puts(rest);
     } else if (equal(name, "uname")) {
-        puts("ZenBSD 0.1 amd64");
+        puts("Renux 0.1 amd64");
     } else if (equal(name, "getpid")) {
         printf("pid %d\n", .{libc.syscall.getpid()});
     } else if (equal(name, "cd")) {
@@ -259,10 +259,10 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     // An interactive shell ignores SIGINT while reading commands.
     _ = libc.syscall.signal(libc.syscall.SIGINT, libc.syscall.SIG_IGN);
 
-    puts("ZenBSD sh -- type 'help'");
+    puts("Renux sh -- type 'help'");
     var buf: [MAX_LINE]u8 = undefined;
     while (true) {
-        printf("zenbsd> ", .{});
+        printf("renux> ", .{});
         const n: usize = readLine(&buf);
         execute(buf[0..n]);
     }

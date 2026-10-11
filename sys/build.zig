@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 
 const std: type = @import("std");
 const builtin: type = std.builtin;
@@ -56,7 +56,7 @@ pub fn build(b: *Builder) !void {
     b.getInstallStep().dependOn(&install_kernel.step);
 
     // `zig build iso` -> bootable hybrid BIOS/UEFI ISO image.
-    const iso_step: *Builder.Step = b.step("iso", "Build a bootable ZenBSD ISO image");
+    const iso_step: *Builder.Step = b.step("iso", "Build a bootable Renux ISO image");
 
     const mkiso: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "../tools/mkiso.sh" });
 
@@ -65,7 +65,7 @@ pub fn build(b: *Builder) !void {
     iso_step.dependOn(&mkiso.step);
 
     // `zig build run` -> boot the ISO in QEMU (BIOS, serial on stdio).
-    const run_step: *Builder.Step = b.step("run", "Boot ZenBSD in QEMU (BIOS)");
+    const run_step: *Builder.Step = b.step("run", "Boot Renux in QEMU (BIOS)");
 
     const qemu: *Builder.Step.Run = b.addSystemCommand(&.{
         "qemu-system-x86_64",
@@ -74,7 +74,7 @@ pub fn build(b: *Builder) !void {
         "-m",
         "512M",
         "-cdrom",
-        "zig-out/zenbsd.iso",
+        "zig-out/renux.iso",
         "-boot",
         "d",
         "-serial",

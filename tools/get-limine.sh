@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (C) 2026 The ZenBSD Project
+# Copyright (C) 2026 The Renux Project
 #
 # Fetch a pinned Limine release and build its host utility. The result lands in
 # tools/limine/ (git-ignored) and is reused by tools/mkiso.sh.

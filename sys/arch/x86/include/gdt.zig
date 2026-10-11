@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // GDT layout and selectors for the x86 family.
 //
 // This is the Zig counterpart of NetBSD's sys/arch/x86/include/gdt.h (which in
 // NetBSD declares the per-CPU GDT and TSS interfaces) combined with the GDT
-// selector definitions. ZenBSD currently has a single flat GDT, so only the
+// selector definitions. Renux currently has a single flat GDT, so only the
 // slot indices and the derived selectors are defined here.
 //
 // A future revision will add the per-CPU GDT and TSS, mirroring gdt_init_cpu()

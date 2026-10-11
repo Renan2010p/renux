@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // System call numbers.
 //
-// ZenBSD follows the FreeBSD x86-64 system call ABI, so programs built for
+// Renux follows the FreeBSD x86-64 system call ABI, so programs built for
 // FreeBSD run unchanged: the numbers below are FreeBSD's, the call is made with
 // the `syscall` instruction and an error is reported by setting the carry flag
 // with the errno in rax. (The legacy int 0x80 entry remains for bring-up.)
 //
-// NetBSD and FreeBSD both generate this from syscalls.master; ZenBSD lists the
+// NetBSD and FreeBSD both generate this from syscalls.master; Renux lists the
 // calls it implements.
 
 pub const SYS_exit: u64 = 1;

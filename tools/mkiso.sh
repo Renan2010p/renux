@@ -1,13 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (C) 2026 The ZenBSD Project
+# Copyright (C) 2026 The Renux Project
 #
-# Build a hybrid BIOS/UEFI bootable ISO for ZenBSD/amd64.
+# Build a hybrid BIOS/UEFI bootable ISO for Renux/amd64.
 #
 # Layout produced inside the ISO (paths as mounted at runtime):
 #   /limine.conf
 #   /boot/limine/{limine-bios.sys,limine-bios-cd.bin,limine-uefi-cd.bin}
-#   /boot/zenbsd/kernel
+#   /boot/renux/kernel
 #   /sbin/init
 #   /libexec/getty           (installed as /usr/libexec/getty)
 #   /usr/bin/login
@@ -24,7 +24,7 @@ SYS="$ROOT/sys"
 KERNEL="${KERNEL:-$SYS/zig-out/bin/kernel}"
 CONF="${CONF:-$ROOT/stand/amd64/conf/limine/limine.conf}"
 LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
-OUT="${OUT:-$SYS/zig-out/zenbsd.iso}"
+OUT="${OUT:-$SYS/zig-out/renux.iso}"
 WORK="${WORK:-$SYS/zig-out/iso}"
 INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
 GETTY="${GETTY:-$ROOT/libexec/zig-out/bin/getty}"
@@ -41,7 +41,7 @@ RMDIR="${RMDIR:-$ROOT/bin/zig-out/bin/rmdir}"
 HELLO="${HELLO:-$ROOT/bin/zig-out/bin/hello}"
 WC="${WC:-$ROOT/bin/zig-out/bin/wc}"
 TUI="${TUI:-$ROOT/bin/zig-out/bin/tui}"
-EDIT="${EDIT:-$ROOT/bin/zig-out/bin/edit}"
+NANO="${NANO:-$ROOT/bin/zig-out/bin/nano}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -65,13 +65,13 @@ command -v xorriso >/dev/null 2>&1 || {
 }
 
 rm -rf "$WORK"
-mkdir -p "$WORK/boot/limine" "$WORK/boot/zenbsd" "$WORK/EFI/BOOT" \
+mkdir -p "$WORK/boot/limine" "$WORK/boot/renux" "$WORK/EFI/BOOT" \
     "$WORK/sbin" "$WORK/bin" "$WORK/usr/bin" "$WORK/usr/libexec" "$WORK/etc"
 
 cp "$LIMINE/limine-bios.sys" "$LIMINE/limine-bios-cd.bin" "$LIMINE/limine-uefi-cd.bin" "$WORK/boot/limine/"
 cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
 cp "$CONF" "$WORK/limine.conf"
-cp "$KERNEL" "$WORK/boot/zenbsd/kernel"
+cp "$KERNEL" "$WORK/boot/renux/kernel"
 cp "$INIT" "$WORK/sbin/init"
 cp "$GETTY" "$WORK/usr/libexec/getty"
 cp "$LOGIN" "$WORK/usr/bin/login"
@@ -87,7 +87,8 @@ cp "$RMDIR" "$WORK/bin/rmdir"
 cp "$HELLO" "$WORK/bin/hello"
 cp "$WC" "$WORK/bin/wc"
 cp "$TUI" "$WORK/bin/tui"
-cp "$EDIT" "$WORK/bin/edit"
+cp "$NANO" "$WORK/bin/nano"
+cp "$NANO" "$WORK/bin/edit"
 cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \

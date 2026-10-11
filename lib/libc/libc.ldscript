@@ -1,5 +1,5 @@
 /*
- * ZenBSD userland linker script.
+ * Renux userland linker script.
  *
  * Produces a static, non-PIE ELF64 executable linked at a fixed low address so
  * the kernel's ELF loader can map it straight from the program headers.

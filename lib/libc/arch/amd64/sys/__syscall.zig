@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2026 The ZenBSD Project
+// Copyright (C) 2026 The Renux Project
 //
 // x86-64 system call primitive.
 //
 // The Zig counterpart of FreeBSD's lib/libc/amd64/SYS.h / NetBSD's
-// lib/libc/arch/x86_64/sys/__syscall.S. ZenBSD follows the FreeBSD ABI: the
+// lib/libc/arch/x86_64/sys/__syscall.S. Renux follows the FreeBSD ABI: the
 // call is made with the `syscall` instruction, number in rax and arguments in
 // rdi, rsi, rdx, r10, r8 and r9. On error the kernel sets the carry flag and
 // returns the errno in rax; this wrapper turns that into the negative errno the
