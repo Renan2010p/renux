@@ -186,6 +186,11 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
             vfs_subr.vrele(vp);
         }
     }
+    if (vfs_lookup.nameiLookup("/etc/rc.d") == null) {
+        if (vfs_vnops.vn_create("/etc/rc.d", .vdir, 0o755)) |vp| {
+            vfs_subr.vrele(vp);
+        }
+    }
 
     kern_proc.init();
 

@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 The Renux Project
+#
+# /etc/rc.d/syslogd -- start the system log daemon.
+
+/usr/sbin/syslogd &

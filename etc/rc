@@ -10,6 +10,9 @@
 echo /etc/rc: creating temporary directory
 mkdir /tmp
 
+echo /etc/rc: starting system services
+/etc/rc.d/syslogd
+
 echo /etc/rc: starting system logger
 logger rc: multi-user startup
 

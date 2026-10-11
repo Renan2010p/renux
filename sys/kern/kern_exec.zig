@@ -237,9 +237,40 @@ fn readVec(vec: u64, out: *[MAXARG][]const u8) ?usize {
     return n;
 }
 
+/// Read the first line of `vp`; when it is a "#! " line, point `interp` and
+/// `arg` at the interpreter and its optional argument (slices of `buf`) and
+/// return true.
+fn scriptInterp(vp: *vnode.Vnode, buf: []u8, interp: *[]const u8, arg: *?[]const u8) bool {
+    const n: isize = vp.v_op.read(vp, 0, buf);
+    if (n < 2) {
+        return false;
+    }
+    const len: usize = @intCast(n);
+    if (buf[0] != '#' or buf[1] != '!') {
+        return false;
+    }
+
+    var i: usize = 2;
+    while (i < len and (buf[i] == ' ' or buf[i] == '\t')) : (i += 1) {}
+    const istart: usize = i;
+    while (i < len and buf[i] != ' ' and buf[i] != '\t' and buf[i] != '\n') : (i += 1) {}
+    interp.* = buf[istart..i];
+
+    while (i < len and (buf[i] == ' ' or buf[i] == '\t')) : (i += 1) {}
+    if (i < len and buf[i] != '\n') {
+        const astart: usize = i;
+        while (i < len and buf[i] != ' ' and buf[i] != '\t' and buf[i] != '\n') : (i += 1) {}
+        arg.* = buf[astart..i];
+    } else {
+        arg.* = null;
+    }
+    return interp.*.len > 0;
+}
+
 /// Replace the current process's image with the program at `path`, started with
 /// the argument vector `argv_ptr` and environment `envp_ptr` (pointers into the
-/// caller's address space). On success the caller returns to ring 3.
+/// caller's address space). A "#!" script runs its interpreter. On success the
+/// caller returns to ring 3.
 pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64, envp_ptr: u64) i32 {
     // Read the caller's arguments while its address space is still current.
     var argbuf: [MAXARG][]const u8 = undefined;
@@ -249,15 +280,53 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
 
     const p: *proc.Proc = kern_proc.current;
 
+    // Resolve the target, following a #! interpreter.
+    var exe_path: []const u8 = path;
+    var final: [MAXARG][]const u8 = undefined;
+    var final_argc: usize = argc;
+    var k: usize = 0;
+    while (k < argc) : (k += 1) {
+        final[k] = argbuf[k];
+    }
+
+    var script_buf: [param.MAXPATHLEN]u8 = undefined;
+    var interp: []const u8 = undefined;
+    var sarg: ?[]const u8 = null;
+    {
+        const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return -1;
+        const is_script: bool = scriptInterp(vp, &script_buf, &interp, &sarg);
+        vfs_subr.vrele(vp);
+        if (is_script) {
+            exe_path = interp;
+            var tmp: [MAXARG][]const u8 = undefined;
+            var n: usize = 0;
+            tmp[n] = interp;
+            n += 1;
+            if (sarg) |a| {
+                tmp[n] = a;
+                n += 1;
+            }
+            tmp[n] = path; // argv[0] for the interpreter is the script
+            n += 1;
+            var j: usize = 1;
+            while (j < argc and n < MAXARG) : (j += 1) {
+                tmp[n] = argbuf[j];
+                n += 1;
+            }
+            final = tmp;
+            final_argc = n;
+        }
+    }
+
     const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -1;
-    const loaded: exec_elf.Result = loadInto(p.cwd, newmap, path) orelse return -1;
+    const loaded: exec_elf.Result = loadInto(p.cwd, newmap, exe_path) orelse return -1;
     if (!mapStack(newmap)) {
         return -1;
     }
     if (!mapTrampoline(newmap)) {
         return -1;
     }
-    const info: StartInfo = buildStack(newmap, argbuf[0..argc], envbuf[0..envc]) orelse return -1;
+    const info: StartInfo = buildStack(newmap, final[0..final_argc], envbuf[0..envc]) orelse return -1;
 
     p.brk = loaded.brk;
     p.mmap_next = param.USER_MMAP_BASE;

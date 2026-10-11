@@ -228,4 +228,24 @@ pub fn build(b: *Builder) !void {
     logger.setLinkerScript(libc.path("libc/libc.ldscript"));
     const install_logger: *Builder.Step.InstallArtifact = b.addInstallArtifact(logger, .{});
     b.getInstallStep().dependOn(&install_logger.step);
+
+    const syslogd_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("syslogd/main.zig"),
+        .code_model = .default,
+    });
+    syslogd_mod.addImport("libc", libc.module("libc"));
+    syslogd_mod.addImport("csu", libc.module("csu"));
+    syslogd_mod.addIncludePath(libc.path("include"));
+    syslogd_mod.addCSourceFile(.{ .file = b.path("syslogd/main.c"), .flags = &.{} });
+    const syslogd: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "syslogd",
+        .root_module = syslogd_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    syslogd.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_syslogd: *Builder.Step.InstallArtifact = b.addInstallArtifact(syslogd, .{});
+    b.getInstallStep().dependOn(&install_syslogd.step);
 }

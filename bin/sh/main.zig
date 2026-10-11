@@ -85,7 +85,7 @@ fn readLine(buf: []u8) usize {
 
 /// Run `name` with arguments `rest` as an external program found in /bin or
 /// /usr/bin, via fork + execve + wait. Arguments are split on spaces.
-fn runExternal(name: []const u8, rest: []const u8) void {
+fn runExternal(name: []const u8, rest: []const u8, background: bool) void {
     if (name.len + 1 > MAX_NAME) {
         puts("sh: command name too long");
         return;
@@ -130,15 +130,33 @@ fn runExternal(name: []const u8, rest: []const u8) void {
 
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {
-        tryExec("/bin", name, @ptrCast(&av), @ptrCast(&ep));
-        tryExec("/usr/bin", name, @ptrCast(&av), @ptrCast(&ep));
+        if (hasSlash(name)) {
+            // An explicit path: execute it directly.
+            _ = libc.syscall.execve(@ptrCast(&nbuf[0]), @ptrCast(&av), @ptrCast(&ep));
+        } else {
+            tryExec("/bin", name, @ptrCast(&av), @ptrCast(&ep));
+            tryExec("/usr/bin", name, @ptrCast(&av), @ptrCast(&ep));
+            tryExec("/usr/sbin", name, @ptrCast(&av), @ptrCast(&ep));
+        }
         printf("sh: %s: not found\n", .{name});
         libc.syscall.exit(127);
     } else if (pid > 0) {
-        _ = libc.syscall.wait(null);
+        if (!background) {
+            _ = libc.syscall.wait(null);
+        }
     } else {
         puts("sh: fork failed");
     }
+}
+
+/// True when `name` contains a slash (an explicit path).
+fn hasSlash(name: []const u8) bool {
+    for (name) |c| {
+        if (c == '/') {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// execve `dir/name`; returns only on failure.
@@ -175,6 +193,14 @@ fn execute(line: []const u8) void {
     const name: []const u8 = cmd[0..i];
     const rest: []const u8 = if (i < cmd.len) trim(cmd[i..]) else "";
 
+    // A trailing '&' runs the command in the background.
+    var background: bool = false;
+    var args: []const u8 = rest;
+    if (args.len > 0 and args[args.len - 1] == '&') {
+        background = true;
+        args = trim(args[0 .. args.len - 1]);
+    }
+
     if (equal(name, "help")) {
         puts("builtins: help echo uname getpid cd exit");
         puts("external commands are loaded from /bin");
@@ -200,7 +226,7 @@ fn execute(line: []const u8) void {
     } else if (equal(name, "exit")) {
         libc.syscall.exit(0);
     } else {
-        runExternal(name, rest);
+        runExternal(name, args, background);
     }
 }
 
