@@ -3,14 +3,12 @@
 # Copyright (C) 2026 The ZenBSD Project
 #
 # Fetch a pinned Limine release and build its host utility. The result lands in
-# sys/zig-out/limine/ (build output, git-ignored) and is reused by
-# stand/amd64/limine/mkiso.sh.
+# tools/limine/ (git-ignored) and is reused by tools/mkiso.sh.
 set -eu
 
 VERSION="12.9.3"
-HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # sys/stand/amd64/limine
-SYS="$(CDPATH= cd -- "$HERE/../../.." && pwd)"         # sys/
-DEST="${LIMINE_DIR:-$SYS/zig-out/limine}"
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
+DEST="${LIMINE_DIR:-$HERE/limine}"
 URL="https://github.com/Limine-Bootloader/Limine/releases/download/v${VERSION}/limine-binary.tar.xz"
 
 if [ -x "$DEST/limine" ] && [ -f "$DEST/limine-bios.sys" ]; then

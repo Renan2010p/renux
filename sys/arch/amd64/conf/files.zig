@@ -27,7 +27,7 @@ pub const trap: type = @import("../amd64/trap.zig");
 pub const vmparam: type = @import("../include/vmparam.zig");
 
 // Boot protocol bindings in use on this port (Limine).
-pub const boot: type = @import("../../../stand/amd64/limine/limine.zig");
+pub const boot: type = @import("limine");
 
 // Force every module (and its exports, e.g. the trap entry) to be analysed.
 comptime {
@@ -43,5 +43,5 @@ comptime {
     _ = @import("../amd64/vector.zig");
     _ = @import("../amd64/trap.zig");
     _ = @import("../include/vmparam.zig");
-    _ = @import("../../../stand/amd64/limine/limine.zig");
+    _ = @import("limine");
 }

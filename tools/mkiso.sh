@@ -8,16 +8,17 @@
 #   /limine.conf
 #   /boot/limine/{limine-bios.sys,limine-bios-cd.bin,limine-uefi-cd.bin}
 #   /boot/zenbsd/kernel
+#   /sbin/init
 #   /EFI/BOOT/BOOTX64.EFI
 set -eu
 
-HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # sys/stand/amd64/limine
-SYS="$(CDPATH= cd -- "$HERE/../../.." && pwd)"         # sys/
-ROOT="$(CDPATH= cd -- "$SYS/.." && pwd)"               # repository root
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
+ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
+SYS="$ROOT/sys"
 
 KERNEL="${KERNEL:-$SYS/zig-out/bin/kernel}"
-CONF="${CONF:-$SYS/stand/amd64/conf/limine/limine.conf}"
-LIMINE="${LIMINE_DIR:-$SYS/zig-out/limine}"
+CONF="${CONF:-$ROOT/stand/amd64/conf/limine/limine.conf}"
+LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
 OUT="${OUT:-$SYS/zig-out/zenbsd.iso}"
 WORK="${WORK:-$SYS/zig-out/iso}"
 INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
@@ -27,7 +28,7 @@ if [ ! -x "$LIMINE/limine" ]; then
 fi
 
 [ -f "$KERNEL" ] || {
-    echo "mkiso: kernel not built at $KERNEL (run 'zig build' first)" >&2
+    echo "mkiso: kernel not built at $KERNEL (run 'zig build buildkernel' first)" >&2
     exit 1
 }
 

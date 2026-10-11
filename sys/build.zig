@@ -31,6 +31,15 @@ pub fn build(b: *Builder) !void {
         .strip = false,
     });
 
+    // Boot protocol bindings live in stand/, outside sys/, so they are added as
+    // an importable module rather than a relative import.
+    const limine_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("../stand/amd64/limine/limine.zig"),
+    });
+    kern_mod.addImport("limine", limine_mod);
+
     const kern_exec: *Builder.Step.Compile = b.addExecutable(.{
         .name = "kernel",
         .root_module = kern_mod,
@@ -49,7 +58,7 @@ pub fn build(b: *Builder) !void {
     // `zig build iso` -> bootable hybrid BIOS/UEFI ISO image.
     const iso_step: *Builder.Step = b.step("iso", "Build a bootable ZenBSD ISO image");
 
-    const mkiso: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "stand/amd64/limine/mkiso.sh" });
+    const mkiso: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "../tools/mkiso.sh" });
 
     mkiso.step.dependOn(&install_kernel.step);
 

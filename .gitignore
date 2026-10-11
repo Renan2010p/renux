@@ -3,6 +3,9 @@
 zig-cache/
 zig-out/
 
+# Downloaded bootloader toolchain (see tools/get-limine.sh)
+tools/limine/
+
 # Compiled objects / images
 *.o
 *.a
