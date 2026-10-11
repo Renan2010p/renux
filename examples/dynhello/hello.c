@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: GPL-2.0-only
+ * SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 The Renux Project
  *
  * A dynamically linked hello: it is linked against libc.so.1 and started by

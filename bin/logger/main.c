@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-or-later
  * Copyright (C) 2026 The Renux Project
  *
  * logger: append its arguments to the system log.

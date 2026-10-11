@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
 // GDT layout and selectors for the x86 family.

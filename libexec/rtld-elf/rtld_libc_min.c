@@ -1,5 +1,5 @@
 /*-
- * SPDX-License-Identifier: GPL-2.0-only
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * A minimal libc for rtld-elf.
  *

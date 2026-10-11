@@ -20,16 +20,19 @@ that only exist because of historical accident.
   task.
 - **Modern where it counts.** Async-aware kernel interfaces, capability-style
   process isolation, reproducible builds, no accidental global state.
-- **Copyleft.** Free software that stays free: **GPL-2.0-only**.
+- **Copyleft.** Free software that stays free: **GPL-2.0-or-later**.
 
 ## License
 
-Renux is distributed under the **GNU General Public License, version 2 only**
-(`GPL-2.0-only`). See [`LICENSE`](LICENSE) for the full text. Every source file
-carries an `SPDX-License-Identifier: GPL-2.0-only` header.
+Renux is distributed under the **GNU General Public License, version 2 or (at
+your option) any later version** (`GPL-2.0-or-later`). See [`LICENSE`](LICENSE)
+for the full text. Every source file carries an
+`SPDX-License-Identifier: GPL-2.0-or-later` header.
 
-> If you would rather allow "version 2 or later", change the SPDX headers to
-> `GPL-2.0-or-later` and update this section accordingly.
+The "or later" wording keeps the project permanently open while allowing it to
+move to a future GPL version without asking every contributor for permission.
+Third-party code keeps its own license: the vendored FreeBSD `rtld-elf`, for
+instance, remains under its BSD-2-Clause terms.
 
 ## Status
 
@@ -128,4 +131,4 @@ Next:
 
 The project is at the stage where almost every piece is up for grabs. Open an
 issue to discuss a design before sending a large change, and keep all new code
-GPL-2.0-only with an SPDX header.
+GPL-2.0-or-later with an SPDX header.

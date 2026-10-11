@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2026 The Renux Project
 #
 # Build everything for a dynamically linked program on Renux: the shared libc,
