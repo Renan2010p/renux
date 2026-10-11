@@ -22,8 +22,10 @@ pub const SYS_close: u64 = 6;
 pub const SYS_wait4: u64 = 7;
 pub const SYS_lseek: u64 = 19;
 pub const SYS_getpid: u64 = 20;
+pub const SYS_dup: u64 = 41;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
+pub const SYS_dup2: u64 = 90;
 
 /// File status, matching the kernel's struct stat (sys/sys/stat.h).
 pub const Stat: type = extern struct {
@@ -72,6 +74,12 @@ pub fn close(fd: u64) i64 {
 /// Reposition the offset of file descriptor `fd`.
 pub fn lseek(fd: u64, off: i64, whence: u64) i64 {
     const r: u64 = syscall(SYS_lseek, .{ fd, @bitCast(off), whence, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Duplicate `oldfd` onto `newfd`.
+pub fn dup2(oldfd: u64, newfd: u64) i64 {
+    const r: u64 = syscall(SYS_dup2, .{ oldfd, newfd, 0, 0, 0, 0 });
     return @bitCast(r);
 }
 

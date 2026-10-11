@@ -18,5 +18,6 @@ comptime {
     _ = @import("kern/init_main.zig");
     _ = @import("uvm/uvm_init.zig");
     _ = @import("dev/pckbport/pckbd.zig");
+    _ = @import("dev/console.zig");
     _ = @import("fs/tmpfs/tmpfs_vfsops.zig");
 }

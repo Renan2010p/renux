@@ -54,6 +54,8 @@ pub const Node: type = struct {
     nlink: u32,
     uid: u32,
     gid: u32,
+    /// Device number, for VCHR/VBLK nodes.
+    rdev: u64,
     atime: i64,
     mtime: i64,
     ctime: i64,

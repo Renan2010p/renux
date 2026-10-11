@@ -22,6 +22,7 @@ pub fn allocNode(mnt: *tmpfs.TmpfsMount, v_type: vnode.Vtype) ?*tmpfs.Node {
     node.size = 0;
     node.mode = 0o644;
     node.nlink = 1;
+    node.rdev = 0;
     node.parent = null;
     node.entries = null;
     node.data_head = null;

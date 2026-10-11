@@ -13,8 +13,10 @@ const sys: type = @import("../sys/syscall.zig");
 const cons: type = @import("../dev/cons.zig");
 const arch: type = @import("../arch/arch.zig");
 const param: type = @import("../sys/param.zig");
+const proc: type = @import("../sys/proc.zig");
 const file: type = @import("../sys/file.zig");
 const stat: type = @import("../sys/stat.zig");
+const errno: type = @import("../sys/errno.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
@@ -55,16 +57,6 @@ fn sysWrite(args: [sys.MAXARGS]u64) u64 {
     const buf: u64 = args[1];
     const count: u64 = args[2];
 
-    // The console is written through descriptors 1 and 2.
-    if (fd == 1 or fd == 2) {
-        const bytes: [*]const u8 = @ptrFromInt(buf);
-        var i: u64 = 0;
-        while (i < count) : (i += 1) {
-            cons.cnputc(bytes[i]);
-        }
-        return count;
-    }
-
     const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
     if ((f.f_flag & file.FWRITE) == 0) {
         return error_value;
@@ -82,35 +74,28 @@ fn sysRead(args: [sys.MAXARGS]u64) u64 {
     const buf: u64 = args[1];
     const count: u64 = args[2];
 
-    // Descriptor 0 is the console. Wait for input, yielding the CPU (with
-    // interrupts enabled) so the timer and other processes keep running.
-    if (fd == 0) {
-        if (count == 0) {
-            return 0;
-        }
-        while (true) {
-            arch.cpu.enable_interrupts();
-            const maybe: ?u8 = cons.cngetcPoll();
-            arch.cpu.disable_interrupts();
-            if (maybe) |c| {
-                const dst: [*]u8 = @ptrFromInt(buf);
-                dst[0] = c;
-                return 1;
-            }
-            kern_sched.yield();
-        }
-    }
-
     const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
     if ((f.f_flag & file.FREAD) == 0) {
         return error_value;
     }
     const bytes: [*]u8 = @ptrFromInt(buf);
-    const n: isize = f.f_ops.read(f, bytes[0..@intCast(count)]);
-    if (n < 0) {
-        return error_value;
+    const again: isize = -@as(isize, errno.EAGAIN);
+
+    // A device that has nothing ready returns -EAGAIN; block until it does,
+    // yielding the CPU (with interrupts enabled) so the timer and other
+    // processes keep running.
+    while (true) {
+        arch.cpu.enable_interrupts();
+        const n: isize = f.f_ops.read(f, bytes[0..@intCast(count)]);
+        arch.cpu.disable_interrupts();
+        if (n != again) {
+            if (n < 0) {
+                return error_value;
+            }
+            return @intCast(n);
+        }
+        kern_sched.yield();
     }
-    return @intCast(n);
 }
 
 fn sysOpen(args: [sys.MAXARGS]u64) u64 {
@@ -204,16 +189,10 @@ fn sysFstat(args: [sys.MAXARGS]u64) u64 {
         .ctime = 0,
     };
 
-    if (fd <= 2) {
-        st.mode = stat.S_IFCHR | 0o620;
-        st.nlink = 1;
-        st.blksize = 4096;
-    } else {
-        const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
-        const err: i32 = f.f_ops.stat(f, &st);
-        if (err != 0) {
-            return error_value;
-        }
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return error_value;
+    const err: i32 = f.f_ops.stat(f, &st);
+    if (err != 0) {
+        return error_value;
     }
 
     const dst: [*]u8 = @ptrFromInt(statbuf);
@@ -247,6 +226,25 @@ fn sysGetpid(args: [sys.MAXARGS]u64) u64 {
     return @intCast(kern_proc.current.pid);
 }
 
+fn sysDup2(args: [sys.MAXARGS]u64) u64 {
+    const oldfd: u64 = args[0];
+    const newfd: u64 = args[1];
+    if (oldfd >= proc.NFILE or newfd >= proc.NFILE) {
+        return error_value;
+    }
+    const p: *proc.Proc = kern_proc.current;
+    const f: *file.File = kern_descrip.fdGetfile(p, @intCast(oldfd)) orelse return error_value;
+    if (oldfd == newfd) {
+        return newfd;
+    }
+    if (kern_descrip.fdGetfile(p, @intCast(newfd)) != null) {
+        _ = kern_descrip.fd_close(p, @intCast(newfd));
+    }
+    f.f_count += 1;
+    kern_descrip.fdAffix(p, @intCast(newfd), f);
+    return newfd;
+}
+
 fn sysExecve(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
     const argv_ptr: u64 = args[1];
@@ -256,70 +254,37 @@ fn sysExecve(args: [sys.MAXARGS]u64) u64 {
     return signed(kern_exec.execve(frame, path, argv_ptr, envp_ptr));
 }
 
+/// One entry of the dispatch table: a system call number and its handler.
+const Entry: type = struct {
+    num: usize,
+    handler: Handler,
+};
+
+/// The implemented system calls. NetBSD generates this from syscalls.master;
+/// ZenBSD lists what it has and builds the table from it.
+const syscall_list: []const Entry = &.{
+    .{ .num = sys.SYS_exit, .handler = sysExit },
+    .{ .num = sys.SYS_fork, .handler = sysFork },
+    .{ .num = sys.SYS_read, .handler = sysRead },
+    .{ .num = sys.SYS_write, .handler = sysWrite },
+    .{ .num = sys.SYS_open, .handler = sysOpen },
+    .{ .num = sys.SYS_close, .handler = sysClose },
+    .{ .num = sys.SYS_wait4, .handler = sysWait },
+    .{ .num = sys.SYS_lseek, .handler = sysLseek },
+    .{ .num = sys.SYS_getpid, .handler = sysGetpid },
+    .{ .num = sys.SYS_dup2, .handler = sysDup2 },
+    .{ .num = sys.SYS_execve, .handler = sysExecve },
+    .{ .num = sys.SYS_fstat, .handler = sysFstat },
+};
+
 /// Number-to-handler table, indexed by system call number.
-pub const table: [sys.MAXSYSCALL]?Handler = .{
-    null, // 0
-    sysExit, // 1
-    sysFork, // 2
-    sysRead, // 3
-    sysWrite, // 4
-    sysOpen, // 5
-    sysClose, // 6
-    sysWait, // 7
-    null, // 8
-    null, // 9
-    null, // 10
-    null, // 11
-    null, // 12
-    null, // 13
-    null, // 14
-    null, // 15
-    null, // 16
-    null, // 17
-    null, // 18
-    sysLseek, // 19
-    sysGetpid, // 20
-    null, // 21
-    null, // 22
-    null, // 23
-    null, // 24
-    null, // 25
-    null, // 26
-    null, // 27
-    null, // 28
-    null, // 29
-    null, // 30
-    null, // 31
-    null, // 32
-    null, // 33
-    null, // 34
-    null, // 35
-    null, // 36
-    null, // 37
-    null, // 38
-    null, // 39
-    null, // 40
-    null, // 41
-    null, // 42
-    null, // 43
-    null, // 44
-    null, // 45
-    null, // 46
-    null, // 47
-    null, // 48
-    null, // 49
-    null, // 50
-    null, // 51
-    null, // 52
-    null, // 53
-    null, // 54
-    null, // 55
-    null, // 56
-    null, // 57
-    null, // 58
-    sysExecve, // 59
-    null, // 60
-    null, // 61
-    sysFstat, // 62
-    null, // 63
+pub const table: [sys.MAXSYSCALL]?Handler = blk: {
+    var t: [sys.MAXSYSCALL]?Handler = undefined;
+    for (&t) |*slot| {
+        slot.* = null;
+    }
+    for (syscall_list) |entry| {
+        t[entry.num] = entry.handler;
+    }
+    break :blk t;
 };

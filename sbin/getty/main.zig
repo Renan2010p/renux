@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 The ZenBSD Project
+//
+// /sbin/getty: open a terminal and run login.
+//
+// The Zig counterpart of the BSD getty(8), reduced to the console: attach
+// /dev/console to standard input, output and error, print the login banner,
+// and hand over to login(8).
+
+const libc: type = @import("libc");
+
+export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
+    _ = argc;
+    _ = argv;
+
+    // Attach /dev/console as stdin, stdout and stderr.
+    const cfd: i64 = libc.syscall.open("/dev/console", 2, 0);
+    if (cfd >= 0) {
+        _ = libc.syscall.dup2(@intCast(cfd), 0);
+        _ = libc.syscall.dup2(@intCast(cfd), 1);
+        _ = libc.syscall.dup2(@intCast(cfd), 2);
+        if (cfd > 2) {
+            _ = libc.syscall.close(@intCast(cfd));
+        }
+    }
+
+    libc.stdio.printf("\nZenBSD (amd64) console\n\n", .{});
+
+    var av: [2]?[*:0]const u8 = .{ "/sbin/login", null };
+    _ = libc.syscall.execve("/sbin/login", @ptrCast(&av), envp);
+
+    libc.stdio.puts("getty: cannot exec /sbin/login");
+    return 1;
+}

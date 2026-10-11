@@ -14,6 +14,18 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     _ = argc;
     _ = argv;
 
+    // Attach the console as stdin, stdout and stderr: like the BSD init, open
+    // /dev/console and dup2() it onto 0, 1 and 2.
+    const cfd: i64 = libc.syscall.open("/dev/console", 2, 0);
+    if (cfd >= 0) {
+        _ = libc.syscall.dup2(@intCast(cfd), 0);
+        _ = libc.syscall.dup2(@intCast(cfd), 1);
+        _ = libc.syscall.dup2(@intCast(cfd), 2);
+        if (cfd > 2) {
+            _ = libc.syscall.close(@intCast(cfd));
+        }
+    }
+
     // Run /etc/rc in a child so init survives it, then wait for it to finish.
     libc.stdio.puts("init: running /etc/rc");
     const pid: i32 = libc.syscall.fork();
@@ -24,11 +36,16 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     }
     _ = libc.syscall.wait(null);
 
-    // Start the login shell. This replaces init for now.
-    libc.stdio.puts("init: starting /bin/sh");
-    var sh_argv: [2]?[*:0]const u8 = .{ "/bin/sh", null };
-    _ = libc.syscall.execve("/bin/sh", @ptrCast(&sh_argv), envp);
-
-    libc.stdio.puts("init: cannot exec /bin/sh");
-    return 1;
+    // Respawn getty on the console, like a real init(8): when the shell it
+    // started exits, a new getty (and so a new login) is started.
+    while (true) {
+        const gpid: i32 = libc.syscall.fork();
+        if (gpid == 0) {
+            var av: [2]?[*:0]const u8 = .{ "/sbin/getty", null };
+            _ = libc.syscall.execve("/sbin/getty", @ptrCast(&av), envp);
+            libc.syscall.exit(1);
+        }
+        _ = libc.syscall.wait(null);
+        libc.stdio.puts("init: getty exited; respawning");
+    }
 }

@@ -98,6 +98,7 @@ fn tmpfsCreate(dvp: *vnode.Vnode, cnp: *const namei.Componentname, vap: *const v
     const node: *tmpfs.Node = tmpfs_subr.allocNode(mnt, vap.type) orelse return null;
     node.mode = vap.mode;
     node.nlink = 1;
+    node.rdev = vap.rdev;
     node.parent = dir;
     if (vap.type == .vdir) {
         node.nlink = 2;
@@ -152,7 +153,7 @@ fn tmpfsGetattr(vp: *vnode.Vnode, vap: *vnode.Vattr) i32 {
     vap.size = node.size;
     vap.uid = node.uid;
     vap.gid = node.gid;
-    vap.rdev = 0;
+    vap.rdev = node.rdev;
     vap.atime = node.atime;
     vap.mtime = node.mtime;
     vap.ctime = node.ctime;

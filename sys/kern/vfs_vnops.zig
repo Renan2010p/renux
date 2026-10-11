@@ -17,6 +17,7 @@ const fcntl: type = @import("../sys/fcntl.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_mount: type = @import("vfs_mount.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
+const subr_devsw: type = @import("subr_devsw.zig");
 const kmem: type = @import("subr_kmem.zig");
 
 /// The FileOps used by every vnode-backed descriptor.
@@ -114,6 +115,28 @@ fn vnodeClose(f: *file.File) i32 {
 pub fn vn_open(path: []const u8, flags: i32) ?*file.File {
     const vp: *vnode.Vnode = vfs_lookup.nameiLookup(path) orelse return null;
 
+    // Character and block special files dispatch to their device driver.
+    if (vp.v_type == .vchr or vp.v_type == .vblk) {
+        var vap: vnode.Vattr = .{
+            .type = .vnone,
+            .mode = 0,
+            .nlink = 0,
+            .size = 0,
+            .uid = 0,
+            .gid = 0,
+            .rdev = 0,
+            .atime = 0,
+            .mtime = 0,
+            .ctime = 0,
+        };
+        const err: i32 = vp.v_op.getattr(vp, &vap);
+        vfs_subr.vrele(vp);
+        if (err != 0) {
+            return null;
+        }
+        return subr_devsw.cdevOpen(vap.rdev, flags);
+    }
+
     // Translate the access mode into the FREAD/FWRITE bits a filesystem sees.
     var mode: i32 = 0;
     const acc: i32 = flags & fcntl.O_ACCMODE;
@@ -145,6 +168,16 @@ pub fn vn_open(path: []const u8, flags: i32) ?*file.File {
 /// Create `path` with type `v_type` and permission bits `mode`, returning its
 /// vnode. Used while populating the root filesystem from the boot modules.
 pub fn vn_create(path: []const u8, v_type: vnode.Vtype, mode: u16) ?*vnode.Vnode {
+    return createNode(path, v_type, mode, 0);
+}
+
+/// Create a device node `path` of type `v_type` with device number `rdev`.
+pub fn vn_mknod(path: []const u8, v_type: vnode.Vtype, mode: u16, rdev: u64) ?*vnode.Vnode {
+    return createNode(path, v_type, mode, rdev);
+}
+
+/// Create `path` in its parent directory, with attributes from the arguments.
+fn createNode(path: []const u8, v_type: vnode.Vtype, mode: u16, rdev: u64) ?*vnode.Vnode {
     // Split the path into its parent directory and final component.
     var slash: ?usize = null;
     var i: usize = 0;
@@ -184,7 +217,7 @@ pub fn vn_create(path: []const u8, v_type: vnode.Vtype, mode: u16) ?*vnode.Vnode
         .size = 0,
         .uid = 0,
         .gid = 0,
-        .rdev = 0,
+        .rdev = rdev,
         .atime = 0,
         .mtime = 0,
         .ctime = 0,

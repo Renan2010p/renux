@@ -14,6 +14,7 @@ const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const cons: type = @import("../dev/cons.zig");
 const vnode: type = @import("../sys/vnode.zig");
+const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_proc: type = @import("kern_proc.zig");
@@ -153,6 +154,16 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     };
     vfs_mount.setRoot(mp);
     populateRoot();
+
+    // Create /dev and its console device node.
+    if (vfs_lookup.nameiLookup("/dev") == null) {
+        if (vfs_vnops.vn_create("/dev", .vdir, 0o755)) |vp| {
+            vfs_subr.vrele(vp);
+        }
+    }
+    if (vfs_vnops.vn_mknod("/dev/console", .vchr, 0o600, conf.makedev(0, 0))) |vp| {
+        vfs_subr.vrele(vp);
+    }
 
     kern_proc.init();
 
