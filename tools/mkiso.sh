@@ -119,19 +119,29 @@ if [ -n "$RESCUE" ] && [ -f "$RESCUE" ]; then
     sed -i '/cmdline:/i\    module_path: boot():/rescue/echo' "$WORK/limine.conf"
 fi
 
-# A FreeBSD userland subset (optional): the real libc.so.7 and a dynamic
-# program, so a FreeBSD binary can run through ld-elf.so.1.
+# A FreeBSD userland subset (optional): the real libc.so.7 and dynamic programs
+# (nano, echo), so FreeBSD binaries can run through ld-elf.so.1.
 if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     # Use FreeBSD's own interpreter when available.
     if [ -f "$FBSDLIB/libexec/ld-elf.so.1" ]; then
         cp "$FBSDLIB/libexec/ld-elf.so.1" "$WORK/libexec/ld-elf.so.1"
     fi
-    for lib in libc.so.7 libthr.so.3 libncursesw.so.9 libcxxrt.so.1 libutil.so.9 libmd.so.6; do
-        if [ -f "$FBSDLIB/lib/$lib" ]; then
-            cp "$FBSDLIB/lib/$lib" "$WORK/lib/$lib"
-            sed -i "/cmdline:/i\\    module_path: boot():/lib/$lib" "$WORK/limine.conf"
-        fi
+    for f in "$FBSDLIB"/lib/*; do
+        [ -f "$f" ] || continue
+        b="$(basename "$f")"
+        cp "$f" "$WORK/lib/$b"
+        sed -i "/cmdline:/i\\    module_path: boot():/lib/$b" "$WORK/limine.conf"
     done
+    mkdir -p "$WORK/usr/local/bin"
+    if [ -f "$FBSDLIB/usr/local/bin/nano" ]; then
+        cp "$FBSDLIB/usr/local/bin/nano" "$WORK/usr/local/bin/nano"
+        sed -i '/cmdline:/i\    module_path: boot():/usr/local/bin/nano' "$WORK/limine.conf"
+    fi
+    if [ -f "$FBSDLIB/usr/share/misc/termcap" ]; then
+        mkdir -p "$WORK/usr/share/misc"
+        cp "$FBSDLIB/usr/share/misc/termcap" "$WORK/usr/share/misc/termcap"
+        sed -i '/cmdline:/i\    module_path: boot():/usr/share/misc/termcap' "$WORK/limine.conf"
+    fi
     if [ -f "$FBSDLIB/bin/echo" ]; then
         cp "$FBSDLIB/bin/echo" "$WORK/usr/bin/fbsd-echo"
         sed -i '/cmdline:/i\    module_path: boot():/usr/bin/fbsd-echo' "$WORK/limine.conf"

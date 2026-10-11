@@ -216,9 +216,10 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
         return;
     }
 
-    // Build init's initial argument block: argv = ["/sbin/init"], envp empty.
+    // Build init's initial argument block: argv = ["/sbin/init"], envp has a
+    // default TERM so full-screen programs (ncurses) can start on the console.
     const args: []const []const u8 = &.{"/sbin/init"};
-    const env: []const []const u8 = &.{};
+    const env: []const []const u8 = &.{"TERM=xterm"};
     const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env, &.{}) orelse {
         prf.printLine("init: cannot build stack");
         return;

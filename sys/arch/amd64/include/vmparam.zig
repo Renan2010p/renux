@@ -25,4 +25,4 @@ pub const KERNEL_SCRATCH_BASE: u64 = 0xffffff0000000000;
 pub const USER_STACK_TOP: u64 = 0x0000_0000_8000_0000;
 
 /// Size of the initial user stack.
-pub const USER_STACK_SIZE: u64 = 0x0000_0000_0001_0000;
+pub const USER_STACK_SIZE: u64 = 0x0000_0000_0080_0000;
