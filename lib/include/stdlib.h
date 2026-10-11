@@ -16,4 +16,7 @@ int atoi(const char *s);
 void exit(int status) __attribute__((noreturn));
 void abort(void) __attribute__((noreturn));
 
+extern char **environ;
+char *getenv(const char *name);
+
 #endif /* _ZENBSD_STDLIB_H_ */

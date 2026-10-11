@@ -14,11 +14,14 @@ const stdio: type = @import("stdio/stdio.zig");
 const heap: type = @import("stdlib/malloc.zig");
 const string: type = @import("string/string.zig");
 const ctype: type = @import("ctype/ctype.zig");
+const getenv_: type = @import("stdlib/getenv.zig");
 
 comptime {
-    // The formatted output lives in its own file; reference it so printf is
-    // emitted for C callers.
+    // These files export their C symbols; reference them so they are emitted.
     _ = @import("stdio/cprintf.zig");
+    _ = @import("stdio/file.zig");
+    _ = @import("gen/dirent.zig");
+    _ = getenv_;
 }
 
 /// Length of a NUL-terminated C string.
@@ -198,4 +201,13 @@ pub export fn exit(status: c_int) noreturn {
 
 pub export fn abort() noreturn {
     syscall.exit(134);
+}
+
+/// Record the environment vector for getenv().
+pub fn setEnviron(envp: [*]?[*:0]const u8) void {
+    getenv_.setEnviron(envp);
+}
+
+pub export fn getenv(name: [*:0]const u8) ?[*:0]u8 {
+    return getenv_.getenvRaw(name);
 }

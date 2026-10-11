@@ -69,6 +69,7 @@ pub const O_RDONLY: u64 = 0;
 pub const O_WRONLY: u64 = 1;
 pub const O_RDWR: u64 = 2;
 pub const O_CREAT: u64 = 0x0200;
+pub const O_TRUNC: u64 = 0x0400;
 pub const O_DIRECTORY: u64 = 0x20000;
 
 /// Directory entry, matching the kernel's struct dirent (16 bytes of fields

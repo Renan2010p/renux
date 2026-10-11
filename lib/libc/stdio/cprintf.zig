@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 The ZenBSD Project
 //
-// A C printf.
+// Formatted output.
 //
 // The Zig counterpart of the formatted-output core of NetBSD's lib/libc/stdio,
-// reduced to the conversions the C programs built so far use. It reads the C
-// variable arguments with @cVaArg, so a C caller sees an ordinary printf.
+// reduced to the conversions the C programs built so far use. A single
+// formatter writes through a sink file descriptor, so printf and fprintf share
+// it; the C variable arguments are read with @cVaArg.
 
 const syscall: type = @import("../sys/syscall.zig");
+const file: type = @import("file.zig");
+const VaList: type = @import("std").builtin.VaList;
 
+var sink_fd: c_int = 1;
 var out_buf: [256]u8 = undefined;
 var out_len: usize = 0;
 
@@ -16,7 +20,7 @@ fn flush() void {
     if (out_len == 0) {
         return;
     }
-    _ = syscall.write(1, out_buf[0..out_len]);
+    _ = syscall.write(@intCast(sink_fd), out_buf[0..out_len]);
     out_len = 0;
 }
 
@@ -70,9 +74,7 @@ fn outSigned(v: i64) void {
     }
 }
 
-pub export fn printf(fmt: [*:0]const u8, ...) callconv(.c) c_int {
-    var ap = @cVaStart();
-
+fn formatLoop(fmt: [*:0]const u8, ap: *VaList) void {
     var i: usize = 0;
     while (fmt[i] != 0) : (i += 1) {
         if (fmt[i] != '%') {
@@ -88,42 +90,42 @@ pub export fn printf(fmt: [*:0]const u8, ...) callconv(.c) c_int {
         switch (fmt[i]) {
             'd', 'i' => {
                 if (is_long) {
-                    outSigned(@cVaArg(&ap, c_long));
+                    outSigned(@cVaArg(ap, c_long));
                 } else {
-                    outSigned(@cVaArg(&ap, c_int));
+                    outSigned(@cVaArg(ap, c_int));
                 }
             },
             'u' => {
                 if (is_long) {
-                    outUnsigned(@cVaArg(&ap, c_ulong), 10, false);
+                    outUnsigned(@cVaArg(ap, c_ulong), 10, false);
                 } else {
-                    outUnsigned(@cVaArg(&ap, c_uint), 10, false);
+                    outUnsigned(@cVaArg(ap, c_uint), 10, false);
                 }
             },
             'x' => {
                 if (is_long) {
-                    outUnsigned(@cVaArg(&ap, c_ulong), 16, false);
+                    outUnsigned(@cVaArg(ap, c_ulong), 16, false);
                 } else {
-                    outUnsigned(@cVaArg(&ap, c_uint), 16, false);
+                    outUnsigned(@cVaArg(ap, c_uint), 16, false);
                 }
             },
             'X' => {
                 if (is_long) {
-                    outUnsigned(@cVaArg(&ap, c_ulong), 16, true);
+                    outUnsigned(@cVaArg(ap, c_ulong), 16, true);
                 } else {
-                    outUnsigned(@cVaArg(&ap, c_uint), 16, true);
+                    outUnsigned(@cVaArg(ap, c_uint), 16, true);
                 }
             },
             'p' => {
                 out('0');
                 out('x');
-                outUnsigned(@cVaArg(&ap, usize), 16, false);
+                outUnsigned(@cVaArg(ap, usize), 16, false);
             },
             's' => {
-                outStr(@cVaArg(&ap, [*:0]const u8));
+                outStr(@cVaArg(ap, [*:0]const u8));
             },
             'c' => {
-                out(@intCast(@cVaArg(&ap, c_int) & 0xff));
+                out(@intCast(@cVaArg(ap, c_int) & 0xff));
             },
             '%' => out('%'),
             else => {
@@ -132,8 +134,22 @@ pub export fn printf(fmt: [*:0]const u8, ...) callconv(.c) c_int {
             },
         }
     }
+}
 
-    @cVaEnd(&ap);
+pub export fn printf(fmt: [*:0]const u8, ...) callconv(.c) c_int {
+    var ap = @cVaStart();
+    sink_fd = 1;
+    formatLoop(fmt, &ap);
     flush();
+    @cVaEnd(&ap);
+    return 0;
+}
+
+pub export fn fprintf(f: *file.File, fmt: [*:0]const u8, ...) callconv(.c) c_int {
+    var ap = @cVaStart();
+    sink_fd = f.fd;
+    formatLoop(fmt, &ap);
+    flush();
+    @cVaEnd(&ap);
     return 0;
 }

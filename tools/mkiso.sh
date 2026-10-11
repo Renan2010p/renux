@@ -39,6 +39,7 @@ MKDIR="${MKDIR:-$ROOT/bin/zig-out/bin/mkdir}"
 RM="${RM:-$ROOT/bin/zig-out/bin/rm}"
 RMDIR="${RMDIR:-$ROOT/bin/zig-out/bin/rmdir}"
 HELLO="${HELLO:-$ROOT/bin/zig-out/bin/hello}"
+WC="${WC:-$ROOT/bin/zig-out/bin/wc}"
 RC="${RC:-$ROOT/etc/rc}"
 
 if [ ! -x "$LIMINE/limine" ]; then
@@ -82,6 +83,7 @@ cp "$MKDIR" "$WORK/bin/mkdir"
 cp "$RM" "$WORK/bin/rm"
 cp "$RMDIR" "$WORK/bin/rmdir"
 cp "$HELLO" "$WORK/bin/hello"
+cp "$WC" "$WORK/bin/wc"
 cp "$RC" "$WORK/etc/rc"
 
 xorriso -as mkisofs -R -r -J \

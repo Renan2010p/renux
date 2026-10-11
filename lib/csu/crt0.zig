@@ -17,6 +17,7 @@ extern fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
 /// Process entry point (the ELF entry). Never returns.
 pub export fn _start(argc: u64, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) noreturn {
+    libc.c.setEnviron(envp);
     const status: i32 = main(@intCast(argc), argv, envp);
     libc.syscall.exit(@as(u64, @bitCast(@as(i64, status))));
     unreachable;

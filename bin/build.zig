@@ -111,4 +111,25 @@ pub fn build(b: *Builder) !void {
     hello.setLinkerScript(libc.path("libc/libc.ldscript"));
     const install_hello: *Builder.Step.InstallArtifact = b.addInstallArtifact(hello, .{});
     b.getInstallStep().dependOn(&install_hello.step);
+
+    const wc_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("wc/main.zig"),
+        .code_model = .default,
+    });
+    wc_mod.addImport("libc", libc.module("libc"));
+    wc_mod.addImport("csu", libc.module("csu"));
+    wc_mod.addIncludePath(libc.path("include"));
+    wc_mod.addCSourceFile(.{ .file = b.path("wc/main.c"), .flags = &.{} });
+
+    const wc: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "wc",
+        .root_module = wc_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    wc.setLinkerScript(libc.path("libc/libc.ldscript"));
+    const install_wc: *Builder.Step.InstallArtifact = b.addInstallArtifact(wc, .{});
+    b.getInstallStep().dependOn(&install_wc.step);
 }
