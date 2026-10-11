@@ -52,6 +52,8 @@ pub const Proc: type = struct {
     cwd_path: [param.MAXPATHLEN]u8,
     /// Length of cwd_path.
     cwd_len: usize,
+    /// Current program break (end of the heap).
+    brk: u64,
     /// Pending signal bits.
     sig_pending: u64,
     /// Blocked signal bits.

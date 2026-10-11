@@ -22,6 +22,7 @@ const kern_signal: type = @import("kern_signal.zig");
 const vfs_syscalls: type = @import("vfs_syscalls.zig");
 const sys_generic: type = @import("sys_generic.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
+const uvm_mmap: type = @import("../uvm/uvm_mmap.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
@@ -104,6 +105,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_wait4, .handler = sysWait },
     .{ .num = sys.SYS_unlink, .handler = vfs_syscalls.sysUnlink },
     .{ .num = sys.SYS_chdir, .handler = vfs_syscalls.sysChdir },
+    .{ .num = sys.SYS_brk, .handler = uvm_mmap.sysBrk },
     .{ .num = sys.SYS_lseek, .handler = sys_generic.sysLseek },
     .{ .num = sys.SYS_getpid, .handler = sysGetpid },
     .{ .num = sys.SYS_dup2, .handler = sysDup2 },

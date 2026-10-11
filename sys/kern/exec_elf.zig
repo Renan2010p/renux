@@ -35,6 +35,9 @@ pub const Source: type = struct {
 pub const Result: type = struct {
     /// Entry point virtual address.
     entry: u64,
+    /// First free virtual address after the loaded segments (the initial
+    /// program break).
+    brk: u64,
 };
 
 /// Read exactly `buf.len` bytes, or fewer only at end of file.
@@ -124,6 +127,7 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
 
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
 
+    var max_end: u64 = 0;
     var i: u16 = 0;
     while (i < ehdr.e_phnum) : (i += 1) {
         var ph: elf.Phdr = undefined;
@@ -133,6 +137,10 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
             return null;
         }
         if (ph.p_type == elf.PT_LOAD) {
+            const vend: u64 = param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
+            if (vend > max_end) {
+                max_end = vend;
+            }
             if (!loadSegment(pmap, src, &ph, hhdm)) {
                 prf.printLine("exec_elf: out of memory");
                 return null;
@@ -140,5 +148,5 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source) ?Result {
         }
     }
 
-    return .{ .entry = ehdr.e_entry };
+    return .{ .entry = ehdr.e_entry, .brk = max_end };
 }

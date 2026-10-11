@@ -233,6 +233,12 @@ pub fn ioctl(fd: u64, cmd: u64, arg: u64) i64 {
     return @bitCast(r);
 }
 
+/// Set the program break; returns the new break or a negative errno.
+pub fn brkRaw(addr: u64) i64 {
+    const r: u64 = syscall(SYS_brk, .{ addr, 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
 /// Set the action for signal `sig`, returning the previous handler.
 pub fn signal(sig: u64, handler: u64) u64 {
     var act: Sigaction = .{ .handler = handler, .mask = 0 };

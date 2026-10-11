@@ -10,5 +10,6 @@
 int puts(const char *s);
 int putchar(int c);
 int getchar(void);
+int printf(const char *fmt, ...);
 
 #endif /* _ZENBSD_STDIO_H_ */
