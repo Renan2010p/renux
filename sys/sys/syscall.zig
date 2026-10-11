@@ -22,11 +22,14 @@ pub const SYS_ioctl: u64 = 54;
 pub const SYS_execve: u64 = 59;
 pub const SYS_fstat: u64 = 62;
 pub const SYS_dup2: u64 = 90;
+pub const SYS_kill: u64 = 37;
+pub const SYS_sigaction: u64 = 46;
 pub const SYS_mkdir: u64 = 136;
 pub const SYS_rmdir: u64 = 137;
 pub const SYS_stat: u64 = 188;
 pub const SYS_getdents: u64 = 390;
 pub const SYS_getcwd: u64 = 418;
+pub const SYS_sigreturn: u64 = 417;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;

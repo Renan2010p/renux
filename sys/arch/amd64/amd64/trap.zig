@@ -10,6 +10,7 @@
 // anything that cannot be recovered is reported and halts the machine.
 
 const trap: type = @import("../include/trap.zig");
+const gdt_defs: type = @import("../../x86/include/gdt.zig");
 const intr: type = @import("../../x86/x86/intr.zig");
 const intrdefs: type = @import("../../x86/include/intrdefs.zig");
 const pmap: type = @import("../../x86/x86/pmap.zig");
@@ -18,6 +19,7 @@ const vector: type = @import("vector.zig");
 const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
 const kern_sched: type = @import("../../../kern/kern_sched.zig");
+const kern_signal: type = @import("../../../kern/kern_signal.zig");
 const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
@@ -92,6 +94,16 @@ fn handlePageFault(frame: *trap.TrapFrame) bool {
 
 /// Trap dispatcher, called by trap_common().
 export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
+    dispatchTrap(frame);
+
+    // Deliver a pending signal when control is about to return to user mode.
+    if (frame.cs == gdt_defs.UCODE_SEL) {
+        kern_signal.deliver(frame);
+    }
+}
+
+/// Handle the trap, possibly adjusting `frame` on the way out.
+fn dispatchTrap(frame: *trap.TrapFrame) void {
     trap_frame = frame;
 
     if (frame.vector == vector.SYSCALL_VECTOR) {

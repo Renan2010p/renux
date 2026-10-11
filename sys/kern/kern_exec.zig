@@ -16,6 +16,7 @@
 const exec_elf: type = @import("exec_elf.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const proc: type = @import("../sys/proc.zig");
+const signal: type = @import("../sys/signal.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const arch: type = @import("../arch/arch.zig");
@@ -84,6 +85,28 @@ fn mapStack(pmap: arch.pmap.Pmap) bool {
         const pa: u64 = uvm_page.physalloc() orelse return false;
         arch.pmap.enterUser(pmap, va, pa, .user_rw);
     }
+    return true;
+}
+
+/// Virtual address of the sigreturn trampoline, just below the user stack.
+pub fn trampolineVa() u64 {
+    return arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
+}
+
+/// Map the sigreturn trampoline: a page whose first bytes execute the
+/// sigreturn system call, used as the return address of a signal handler.
+pub fn mapTrampoline(pmap: arch.pmap.Pmap) bool {
+    const pa: u64 = uvm_page.physalloc() orelse return false;
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
+
+    // mov eax, SYS_sigreturn (417); int 0x80
+    const stub: [7]u8 = .{ 0xb8, 0xa1, 0x01, 0x00, 0x00, 0xcd, 0x80 };
+    const dst: [*]u8 = @ptrFromInt(pa + hhdm);
+    var i: usize = 0;
+    while (i < stub.len) : (i += 1) {
+        dst[i] = stub[i];
+    }
+    arch.pmap.enterUser(pmap, trampolineVa(), pa, .user_rx);
     return true;
 }
 
@@ -231,7 +254,17 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     if (!mapStack(newmap)) {
         return -1;
     }
+    if (!mapTrampoline(newmap)) {
+        return -1;
+    }
     const info: StartInfo = buildStack(newmap, argbuf[0..argc], envbuf[0..envc]) orelse return -1;
+
+    // Caught signals revert to their default action across exec.
+    var sg: usize = 0;
+    while (sg < signal.NSIG) : (sg += 1) {
+        p.sig_handler[sg] = signal.SIG_DFL;
+    }
+    p.sig_pending = 0;
 
     arch.pmap.activate(newmap);
     p.pmap = newmap;

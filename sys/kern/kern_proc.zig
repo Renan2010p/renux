@@ -8,6 +8,7 @@
 
 const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
+const signal: type = @import("../sys/signal.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
 const descrip: type = @import("kern_descrip.zig");
@@ -39,6 +40,12 @@ pub fn init() void {
         }
         p.cwd = null;
         p.cwd_len = 0;
+        p.sig_pending = 0;
+        p.sig_mask = 0;
+        var s: usize = 0;
+        while (s < signal.NSIG) : (s += 1) {
+            p.sig_handler[s] = 0;
+        }
     }
 }
 
@@ -68,6 +75,12 @@ pub fn alloc() ?*proc.Proc {
         }
         p.cwd = null;
         p.cwd_len = 0;
+        p.sig_pending = 0;
+        p.sig_mask = 0;
+        var s: usize = 0;
+        while (s < signal.NSIG) : (s += 1) {
+            p.sig_handler[s] = 0;
+        }
         p.state = .runnable;
         return p;
     }

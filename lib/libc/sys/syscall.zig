@@ -34,6 +34,32 @@ pub const SYS_rmdir: u64 = 137;
 pub const SYS_stat: u64 = 188;
 pub const SYS_getdents: u64 = 390;
 pub const SYS_getcwd: u64 = 418;
+pub const SYS_kill: u64 = 37;
+pub const SYS_sigaction: u64 = 46;
+pub const SYS_sigreturn: u64 = 417;
+
+/// Signals (NetBSD numbers).
+pub const SIGHUP: u64 = 1;
+pub const SIGINT: u64 = 2;
+pub const SIGQUIT: u64 = 3;
+pub const SIGKILL: u64 = 9;
+pub const SIGPIPE: u64 = 13;
+pub const SIGALRM: u64 = 14;
+pub const SIGTERM: u64 = 15;
+pub const SIGCHLD: u64 = 20;
+pub const SIGWINCH: u64 = 28;
+pub const SIGUSR1: u64 = 30;
+pub const SIGUSR2: u64 = 31;
+
+/// Special handler values.
+pub const SIG_DFL: u64 = 0;
+pub const SIG_IGN: u64 = 1;
+
+/// An installed signal action.
+pub const Sigaction: type = extern struct {
+    handler: u64,
+    mask: u64,
+};
 
 /// open(2) flags (the subset in use).
 pub const O_RDONLY: u64 = 0;
@@ -201,6 +227,36 @@ pub fn getcwd(buf: []u8) i64 {
 /// Perform the control request `cmd` on descriptor `fd`.
 pub fn ioctl(fd: u64, cmd: u64, arg: u64) i64 {
     const r: u64 = syscall(SYS_ioctl, .{ fd, cmd, arg, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Set the action for signal `sig`, returning the previous handler.
+pub fn signal(sig: u64, handler: u64) u64 {
+    var act: Sigaction = .{ .handler = handler, .mask = 0 };
+    var old: Sigaction = .{ .handler = 0, .mask = 0 };
+    const r: u64 = syscall(SYS_sigaction, .{ sig, @intFromPtr(&act), @intFromPtr(&old), 0, 0, 0 });
+    if (r != 0) {
+        return SIG_DFL;
+    }
+    return old.handler;
+}
+
+/// Query and/or set the action for signal `sig`.
+pub fn sigaction(sig: u64, act: ?*const Sigaction, oact: ?*Sigaction) i64 {
+    const r: u64 = syscall(SYS_sigaction, .{
+        sig,
+        if (act) |a| @intFromPtr(a) else 0,
+        if (oact) |o| @intFromPtr(o) else 0,
+        0,
+        0,
+        0,
+    });
+    return @bitCast(r);
+}
+
+/// Send signal `sig` to process `pid`.
+pub fn kill(pid: i64, sig: u64) i64 {
+    const r: u64 = syscall(SYS_kill, .{ @bitCast(pid), sig, 0, 0, 0, 0 });
     return @bitCast(r);
 }
 

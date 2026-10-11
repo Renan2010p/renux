@@ -12,7 +12,11 @@
 
 const termios: type = @import("../sys/termios.zig");
 const ttycom: type = @import("../sys/ttycom.zig");
+const signal: type = @import("../sys/signal.zig");
+const errno: type = @import("../sys/errno.zig");
 const cons: type = @import("../dev/cons.zig");
+const kern_proc: type = @import("kern_proc.zig");
+const kern_signal: type = @import("kern_signal.zig");
 
 /// Longest canonical line.
 pub const LINE_MAX: usize = 256;
@@ -31,6 +35,8 @@ pub const Tty: type = struct {
     ready_len: usize,
     ready_pos: usize,
     have_line: bool,
+    /// A control character asked the reader to interrupt its read.
+    interrupt: bool,
     /// Process last attached, to receive generated signals.
     fg_pid: i32,
 };
@@ -43,6 +49,7 @@ pub fn init(t: *Tty) void {
     t.ready_len = 0;
     t.ready_pos = 0;
     t.have_line = false;
+    t.interrupt = false;
     t.fg_pid = 0;
 }
 
@@ -57,12 +64,17 @@ pub fn input(t: *Tty, c: u8) void {
     const lflag: u32 = t.termios.c_lflag;
 
     if ((lflag & termios.ISIG) != 0 and c == t.termios.c_cc[termios.VINTR]) {
-        // ^C: discard the line. (A SIGINT to fg_pid is added by the signal
-        // layer.)
+        // ^C: discard the line and post SIGINT to the reading process, unless
+        // it ignores the signal.
         t.line_len = 0;
         echo(t, '^');
         echo(t, 'C');
         echo(t, '\n');
+        const p: *@import("../sys/proc.zig").Proc = kern_proc.current;
+        if (kern_signal.handler(p, signal.SIGINT) != signal.SIG_IGN) {
+            kern_signal.psignal(p, signal.SIGINT);
+            t.interrupt = true;
+        }
         return;
     }
 
@@ -125,8 +137,12 @@ pub fn read(t: *Tty, buf: []u8) isize {
     while (cons.cngetcPoll()) |c| {
         input(t, c);
     }
+    if (t.interrupt) {
+        t.interrupt = false;
+        return -errno.EINTR;
+    }
     if (!t.have_line) {
-        return -@as(isize, @import("../sys/errno.zig").EAGAIN);
+        return -errno.EAGAIN;
     }
 
     var n: usize = 0;

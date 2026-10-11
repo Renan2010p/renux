@@ -40,7 +40,9 @@ fn cat(path: [*:0]const u8) void {
 export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
     _ = envp;
     if (argc < 2) {
-        return 1;
+        // No arguments: copy standard input.
+        copy(0);
+        return 0;
     }
     var i: usize = 1;
     while (i < @as(usize, @intCast(argc))) : (i += 1) {
@@ -48,4 +50,16 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         cat(path);
     }
     return 0;
+}
+
+/// Copy descriptor `fd` to standard output.
+fn copy(fd: u64) void {
+    var buf: [256]u8 = undefined;
+    while (true) {
+        const n: u64 = libc.syscall.read(fd, &buf);
+        if (n == 0 or n > buf.len) {
+            break;
+        }
+        _ = libc.syscall.write(1, buf[0..@intCast(n)]);
+    }
 }

@@ -239,6 +239,9 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         }
     }
 
+    // An interactive shell ignores SIGINT while reading commands.
+    _ = libc.syscall.signal(libc.syscall.SIGINT, libc.syscall.SIG_IGN);
+
     puts("ZenBSD sh -- type 'help'");
     var buf: [MAX_LINE]u8 = undefined;
     while (true) {

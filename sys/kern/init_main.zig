@@ -187,6 +187,10 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
         const pa: u64 = uvm_page.physalloc() orelse return;
         arch.pmap.enterUser(init.pmap, va, pa, .user_rw);
     }
+    if (!kern_exec.mapTrampoline(init.pmap)) {
+        prf.printLine("init: cannot map trampoline");
+        return;
+    }
 
     // Build init's initial argument block: argv = ["/sbin/init"], envp empty.
     const args: []const []const u8 = &.{"/sbin/init"};

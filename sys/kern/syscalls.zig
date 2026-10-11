@@ -18,6 +18,7 @@ const kern_fork: type = @import("kern_fork.zig");
 const kern_exit: type = @import("kern_exit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
+const kern_signal: type = @import("kern_signal.zig");
 const vfs_syscalls: type = @import("vfs_syscalls.zig");
 const sys_generic: type = @import("sys_generic.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
@@ -107,6 +108,9 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_getpid, .handler = sysGetpid },
     .{ .num = sys.SYS_dup2, .handler = sysDup2 },
     .{ .num = sys.SYS_ioctl, .handler = sys_generic.sysIoctl },
+    .{ .num = sys.SYS_kill, .handler = kern_signal.sysKill },
+    .{ .num = sys.SYS_sigaction, .handler = kern_signal.sysSigaction },
+    .{ .num = sys.SYS_sigreturn, .handler = kern_signal.sysSigreturn },
     .{ .num = sys.SYS_execve, .handler = sysExecve },
     .{ .num = sys.SYS_fstat, .handler = vfs_syscalls.sysFstat },
     .{ .num = sys.SYS_mkdir, .handler = vfs_syscalls.sysMkdir },

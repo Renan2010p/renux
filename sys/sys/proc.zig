@@ -9,6 +9,7 @@
 
 const arch: type = @import("../arch/arch.zig");
 const param: type = @import("param.zig");
+const signal: type = @import("signal.zig");
 const file: type = @import("file.zig");
 const vnode: type = @import("vnode.zig");
 
@@ -51,4 +52,10 @@ pub const Proc: type = struct {
     cwd_path: [param.MAXPATHLEN]u8,
     /// Length of cwd_path.
     cwd_len: usize,
+    /// Pending signal bits.
+    sig_pending: u64,
+    /// Blocked signal bits.
+    sig_mask: u64,
+    /// Handler per signal (SIG_DFL/SIG_IGN or a user address).
+    sig_handler: [signal.NSIG]u64,
 };

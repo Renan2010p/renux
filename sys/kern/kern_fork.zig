@@ -9,6 +9,7 @@
 
 const arch: type = @import("../arch/arch.zig");
 const proc: type = @import("../sys/proc.zig");
+const signal: type = @import("../sys/signal.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
@@ -51,6 +52,14 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
         child.cwd_path[k] = parent.cwd_path[k];
     }
     child.cwd_len = parent.cwd_len;
+
+    // Inherit the signal handlers; pending signals are not inherited.
+    var sg: usize = 0;
+    while (sg < signal.NSIG) : (sg += 1) {
+        child.sig_handler[sg] = parent.sig_handler[sg];
+    }
+    child.sig_pending = 0;
+    child.sig_mask = parent.sig_mask;
 
     kern_sched.prepareContext(child);
     child.state = .runnable;
