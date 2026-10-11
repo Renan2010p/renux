@@ -33,6 +33,7 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
     // Run /etc/rc in a child so init survives it, then wait for it to finish.
     libc.stdio.puts("init: running /etc/rc");
+    libc.syslog.msg("init", "startup: running /etc/rc");
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {
         var rc_argv: [3]?[*:0]const u8 = .{ "/bin/sh", "/etc/rc", null };
@@ -40,6 +41,7 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         libc.syscall.exit(1);
     }
     _ = libc.syscall.wait(null);
+    libc.syslog.msg("init", "multi-user startup complete");
 
     // Respawn getty on the console, like a real init(8): when the shell it
     // started exits, a new getty (and so a new login) is started.
@@ -51,6 +53,6 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
             libc.syscall.exit(1);
         }
         _ = libc.syscall.wait(null);
-        libc.stdio.puts("init: getty exited; respawning");
+        libc.syslog.msg("init", "getty exited, respawning");
     }
 }

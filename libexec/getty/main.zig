@@ -31,6 +31,19 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
     libc.stdio.printf("\nRenux (amd64) console\n\n", .{});
 
+    // FreeBSD-style banner: the date/time, then the terminal name.
+    var tv: libc.syscall.Timeval = .{ .tv_sec = 0, .tv_usec = 0 };
+    _ = libc.syscall.gettimeofdayRaw(&tv);
+    if (libc.time.ctime(&tv.tv_sec)) |p| {
+        var i: usize = 0;
+        while (p[i] != 0) : (i += 1) {}
+        _ = libc.syscall.write(1, p[0..i]);
+    }
+    libc.stdio.puts("Renux/amd64 (renux) (ttyv0)");
+    libc.stdio.putchar('\n');
+
+    libc.syslog.msg("getty", "started on /dev/tty");
+
     var av: [2]?[*:0]const u8 = .{ "/usr/bin/login", null };
     _ = libc.syscall.execve("/usr/bin/login", @ptrCast(&av), envp);
 

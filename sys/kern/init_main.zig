@@ -85,12 +85,12 @@ fn printVersion(_: ?*const anyopaque) callconv(.c) void {
 /// SI_SUB_CONFIGURE; NetBSD's configure()).
 fn configure(_: ?*const anyopaque) callconv(.c) void {
     prf.printLine("isa0 at mainbus0");
+    prf.printLine("i8259: legacy PIC, master at 0x20 slave at 0xa0");
+    prf.printLine("apic: not present, using the legacy PIC");
     prf.printLine("com0 at isa0 port 0x3f8-0x3ff irq 4: ns16550a, 16-byte fifo");
     prf.printLine("attimer0 at isa0 port 0x40-0x43");
-    prf.printLine("pcib0 at mainbus0");
-    prf.printLine("vga0 at isa0 port 0x3c0-0x3df");
     if (arch.boot.framebuffer(0)) |fb| {
-        prf.print("wsdisplay0 at vga0: console (");
+        prf.print("wsdisplay0 at mainbus0: console (");
         prf.printDec(fb.width);
         prf.print("x");
         prf.printDec(fb.height);
@@ -98,8 +98,8 @@ fn configure(_: ?*const anyopaque) callconv(.c) void {
         prf.printDec(fb.bpp);
         prf.printLine("bpp)");
     }
-    prf.printLine("Event timer \"i8254\" frequency 1193182 Hz quality 0");
     prf.printLine("Timecounter \"i8254\" frequency 1193182 Hz quality 0");
+    prf.printLine("syscall: fast system call (syscall/sysret) enabled");
     prf.printLine("Renux: enabling interrupts (PIT @ 100 Hz)");
     arch.cpu.enable_interrupts();
 }
@@ -153,11 +153,13 @@ fn populateRoot() void {
 /// boot modules, load /sbin/init from it, set up its stack, and enter ring 3
 /// (NetBSD's start_init()).
 fn start_init(_: ?*const anyopaque) callconv(.c) void {
+    prf.printLine("Trying to mount root from tmpfs []...");
     const mp = vfs_mount.mountFs("tmpfs", null) orelse {
         prf.printLine("init: cannot mount root filesystem");
         return;
     };
     vfs_mount.setRoot(mp);
+    prf.printLine("tmpfs: mounted on /");
     populateRoot();
 
     // Create /dev and its console device node.
@@ -263,6 +265,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     // normal (light grey) foreground, cursor included.
     cons.cnSetColor(0xc0, 0xc0, 0xc0);
 
+    prf.printLine("sched: starting the scheduler (preemptive, PIT @ 100 Hz)");
     // Run the scheduler; it never returns.
     kern_sched.scheduler();
 }

@@ -13,6 +13,7 @@ const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
 const descrip: type = @import("kern_descrip.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// Maximum number of processes.
 pub const NPROC: usize = 16;
@@ -50,6 +51,7 @@ pub fn init() void {
             p.sig_handler[s] = 0;
         }
     }
+    prf.printLine("proc: process table, 16 slots");
 }
 
 /// Allocate a process with a fresh address space and kernel stack.
@@ -62,7 +64,6 @@ pub fn alloc() ?*proc.Proc {
         }
         const map = arch.pmap.create() orelse return null;
         const kpage = uvm_page.physalloc() orelse return null;
-
         p.pid = next_pid;
         next_pid += 1;
         p.parent = null;

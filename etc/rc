@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (C) 2026 The ZenBSD Project
+# Copyright (C) 2026 The Renux Project
 #
-# /etc/rc -- ZenBSD system startup script.
+# /etc/rc -- Renux system startup script.
 #
-# Like the BSD rc files, this is the sequence init runs once the root
-# filesystem is up: it starts the system programs that bring the rest of the
-# system to life. Only the shell is started so far.
+# Like the BSD rc files, this runs once the root filesystem is up. It performs
+# the actions this system actually supports and records them in the system log;
+# there are no placeholders for services that do not exist.
 
-echo ZenBSD: running /etc/rc
+echo /etc/rc: creating temporary directory
+mkdir /tmp
+
+echo /etc/rc: starting system logger
+logger rc: multi-user startup
+
+echo /etc/rc: done

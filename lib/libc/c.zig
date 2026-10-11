@@ -25,6 +25,7 @@ comptime {
     _ = @import("gen/termios.zig");
     _ = @import("gen/getopt.zig");
     _ = @import("gen/syslog.zig");
+    _ = @import("gen/time.zig");
     _ = @import("termcap/termcap.zig");
     _ = @import("curses/curses.zig");
     _ = getenv_;

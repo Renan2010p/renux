@@ -16,5 +16,6 @@ typedef long time_t;
 
 time_t time(time_t *t);
 int gettimeofday(struct timeval *tv, void *tz);
+char *ctime(const time_t *t);
 
 #endif /* _ZENBSD_TIME_H_ */

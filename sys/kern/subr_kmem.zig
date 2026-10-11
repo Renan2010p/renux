@@ -17,6 +17,7 @@
 
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// Bytes reserved at the start of every object for the size-class header.
 pub const HEADER: usize = 8;
@@ -40,6 +41,7 @@ pub fn init(offset: u64) void {
     while (i < CLASSES.len) : (i += 1) {
         freelist[i] = 0;
     }
+    prf.printLine("kmem: bucket allocator, size classes 16..4096 bytes");
 }
 
 /// Index of the smallest class that can hold `total` bytes, or null when the
