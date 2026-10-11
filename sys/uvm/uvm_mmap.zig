@@ -44,3 +44,35 @@ pub fn sysBrk(args: [sys.MAXARGS]u64) u64 {
     p.brk = addr;
     return p.brk;
 }
+
+/// mmap(2): map anonymous memory. Only the anonymous case is implemented:
+/// `addr`, `fd` and `offset` are ignored and the region is placed at the next
+/// free address. Returns the mapped address or an error.
+pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
+    const len: u64 = args[1];
+    if (len == 0) {
+        return sys.ERROR;
+    }
+    const p: *proc.Proc = kern_proc.current;
+
+    const limit: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
+    const size: u64 = param.alignUp(len, param.PAGE_SIZE);
+    const base: u64 = param.alignUp(p.mmap_next, param.PAGE_SIZE);
+    if (base + size > limit) {
+        return sys.ERROR;
+    }
+
+    var va: u64 = base;
+    while (va < base + size) : (va += param.PAGE_SIZE) {
+        const pa: u64 = uvm_page.physalloc() orelse return sys.ERROR;
+        arch.pmap.enterUser(p.pmap, va, pa, .user_rw);
+    }
+    p.mmap_next = base + size;
+    return base;
+}
+
+/// munmap(2): anonymous regions are left in place; just report success.
+pub fn sysMunmap(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}

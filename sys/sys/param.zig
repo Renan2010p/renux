@@ -19,6 +19,9 @@ pub const PAGE_MASK: u64 = PAGE_SIZE - 1;
 /// Maximum length of a pathname, NUL not included (NetBSD's MAXPATHLEN).
 pub const MAXPATHLEN: usize = 1024;
 
+/// Base of the region anonymous mmap() allocates from.
+pub const USER_MMAP_BASE: u64 = 0x0000_0000_4000_0000;
+
 /// Round `value` up to the next multiple of `alignment` (a power of two).
 pub fn alignUp(value: u64, alignment: u64) u64 {
     return (value + alignment - 1) & ~(alignment - 1);

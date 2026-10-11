@@ -31,6 +31,7 @@ int ferror(FILE *f);
 
 int printf(const char *fmt, ...);
 int fprintf(FILE *f, const char *fmt, ...);
+int sprintf(char *buf, const char *fmt, ...);
 int puts(const char *s);
 int putchar(int c);
 int getchar(void);

@@ -260,6 +260,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     const info: StartInfo = buildStack(newmap, argbuf[0..argc], envbuf[0..envc]) orelse return -1;
 
     p.brk = loaded.brk;
+    p.mmap_next = param.USER_MMAP_BASE;
 
     // Caught signals revert to their default action across exec.
     var sg: usize = 0;

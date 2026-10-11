@@ -19,6 +19,7 @@ const kern_exit: type = @import("kern_exit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
 const kern_signal: type = @import("kern_signal.zig");
+const kern_time: type = @import("kern_time.zig");
 const vfs_syscalls: type = @import("vfs_syscalls.zig");
 const sys_generic: type = @import("sys_generic.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
@@ -106,6 +107,9 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_unlink, .handler = vfs_syscalls.sysUnlink },
     .{ .num = sys.SYS_chdir, .handler = vfs_syscalls.sysChdir },
     .{ .num = sys.SYS_brk, .handler = uvm_mmap.sysBrk },
+    .{ .num = sys.SYS_mmap, .handler = uvm_mmap.sysMmap },
+    .{ .num = sys.SYS_munmap, .handler = uvm_mmap.sysMunmap },
+    .{ .num = sys.SYS_gettimeofday, .handler = kern_time.sysGettimeofday },
     .{ .num = sys.SYS_lseek, .handler = sys_generic.sysLseek },
     .{ .num = sys.SYS_getpid, .handler = sysGetpid },
     .{ .num = sys.SYS_dup2, .handler = sysDup2 },

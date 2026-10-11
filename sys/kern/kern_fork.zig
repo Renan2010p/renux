@@ -46,6 +46,7 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
         vfs_subr.vref(cwd);
     }
     child.brk = parent.brk;
+    child.mmap_next = parent.mmap_next;
 
     // Copy the working-directory path.
     var k: usize = 0;

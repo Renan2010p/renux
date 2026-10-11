@@ -22,5 +22,10 @@ int main(int argc, char **argv, char **envp) {
     printf("hello from C on ZenBSD: %s\n", buf);
     printf("1024 = %d, 0x%x, %lu\n", 1024, 255, 4096UL);
     free(buf);
+
+    char b[64];
+    sprintf(b, "sprintf:%s=%d", "x", 42);
+    printf("[%s]\n", b);
+    printf("[%8lu]\n", 4096UL);
     return 0;
 }

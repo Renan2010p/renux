@@ -61,7 +61,23 @@ pub fn build(b: *Builder) !void {
     const install_sh: *Builder.Step.InstallArtifact = b.addInstallArtifact(sh, .{});
     b.getInstallStep().dependOn(&install_sh.step);
 
-    const ls: *Builder.Step.Compile = program(b, target, optimize, libc, "ls", "ls/main.zig");
+    const ls_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("ls/main.zig"),
+        .code_model = .default,
+    });
+    ls_mod.addImport("libc", libc.module("libc"));
+    ls_mod.addImport("csu", libc.module("csu"));
+    ls_mod.addIncludePath(libc.path("include"));
+    ls_mod.addCSourceFile(.{ .file = b.path("ls/main.c"), .flags = &.{} });
+    const ls: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "ls",
+        .root_module = ls_mod,
+        .use_lld = true,
+        .use_llvm = true,
+    });
+    ls.setLinkerScript(libc.path("libc/libc.ldscript"));
     const install_ls: *Builder.Step.InstallArtifact = b.addInstallArtifact(ls, .{});
     b.getInstallStep().dependOn(&install_ls.step);
 

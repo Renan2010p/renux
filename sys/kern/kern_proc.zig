@@ -41,6 +41,7 @@ pub fn init() void {
         p.cwd = null;
         p.cwd_len = 0;
         p.brk = 0;
+        p.mmap_next = 0;
         p.sig_pending = 0;
         p.sig_mask = 0;
         var s: usize = 0;
@@ -77,6 +78,7 @@ pub fn alloc() ?*proc.Proc {
         p.cwd = null;
         p.cwd_len = 0;
         p.brk = 0;
+        p.mmap_next = 0;
         p.sig_pending = 0;
         p.sig_mask = 0;
         var s: usize = 0;

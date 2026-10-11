@@ -19,4 +19,14 @@ void abort(void) __attribute__((noreturn));
 extern char **environ;
 char *getenv(const char *name);
 
+#include <stddef.h>
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off);
+int munmap(void *addr, size_t len);
+
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4
+#define MAP_PRIVATE 0x0002
+#define MAP_ANON 0x1000
+
 #endif /* _ZENBSD_STDLIB_H_ */

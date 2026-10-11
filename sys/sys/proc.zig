@@ -54,6 +54,8 @@ pub const Proc: type = struct {
     cwd_len: usize,
     /// Current program break (end of the heap).
     brk: u64,
+    /// Next address anonymous mmap() will hand out.
+    mmap_next: u64,
     /// Pending signal bits.
     sig_pending: u64,
     /// Blocked signal bits.

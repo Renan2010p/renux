@@ -233,6 +233,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.cwd_path[0] = '/';
     init.cwd_len = 1;
     init.brk = result.brk;
+    init.mmap_next = param.USER_MMAP_BASE;
 
     kern_sched.prepareContext(init);
     init.state = .runnable;

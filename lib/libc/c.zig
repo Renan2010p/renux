@@ -211,3 +211,45 @@ pub fn setEnviron(envp: [*]?[*:0]const u8) void {
 pub export fn getenv(name: [*:0]const u8) ?[*:0]u8 {
     return getenv_.getenvRaw(name);
 }
+
+pub export fn mmap(addr: u64, len: usize, prot: c_int, flags: c_int, fd: c_int, off: i64) ?*anyopaque {
+    const r: i64 = syscall.mmapRaw(addr, @intCast(len), @intCast(prot), @intCast(flags), @intCast(fd), @bitCast(off));
+    if (r < 0) {
+        return null;
+    }
+    return @ptrFromInt(@as(u64, @intCast(r)));
+}
+
+pub export fn munmap(addr: ?*anyopaque, len: usize) c_int {
+    const a: u64 = if (addr) |p| @intFromPtr(p) else 0;
+    return @intCast(syscall.munmap(a, @intCast(len)));
+}
+
+pub export fn time(t: ?*i64) i64 {
+    var tv: syscall.Timeval = .{ .tv_sec = 0, .tv_usec = 0 };
+    _ = syscall.gettimeofdayRaw(&tv);
+    if (t) |p| {
+        p.* = tv.tv_sec;
+    }
+    return tv.tv_sec;
+}
+
+pub export fn gettimeofday(tv: ?*syscall.Timeval, tz: ?*anyopaque) c_int {
+    _ = tz;
+    if (tv) |p| {
+        return @intCast(syscall.gettimeofdayRaw(p));
+    }
+    return 0;
+}
+
+pub export fn stat(path: [*:0]const u8, buf: *syscall.Stat) c_int {
+    return @intCast(syscall.stat(path, buf));
+}
+
+pub export fn fstat(fd: c_int, buf: *syscall.Stat) c_int {
+    return @intCast(syscall.fstat(@intCast(fd), buf));
+}
+
+pub export fn signal(sig: c_int, handler: usize) usize {
+    return syscall.signal(@intCast(sig), handler);
+}

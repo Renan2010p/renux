@@ -30,6 +30,8 @@ pub const SYS_dup: u64 = 41;
 pub const SYS_ioctl: u64 = 54;
 pub const SYS_execve: u64 = 59;
 pub const SYS_dup2: u64 = 90;
+pub const SYS_munmap: u64 = 73;
+pub const SYS_gettimeofday: u64 = 116;
 pub const SYS_mkdir: u64 = 136;
 pub const SYS_rmdir: u64 = 137;
 pub const SYS_stat: u64 = 188;
@@ -237,6 +239,30 @@ pub fn ioctl(fd: u64, cmd: u64, arg: u64) i64 {
 /// Set the program break; returns the new break or a negative errno.
 pub fn brkRaw(addr: u64) i64 {
     const r: u64 = syscall(SYS_brk, .{ addr, 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// A time value (struct timeval).
+pub const Timeval: type = extern struct {
+    tv_sec: i64,
+    tv_usec: i64,
+};
+
+/// Map memory; only anonymous mappings are implemented by the kernel.
+pub fn mmapRaw(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, off: u64) i64 {
+    const r: u64 = syscall(SYS_mmap, .{ addr, len, prot, flags, fd, off });
+    return @bitCast(r);
+}
+
+/// Unmap memory.
+pub fn munmap(addr: u64, len: u64) i64 {
+    const r: u64 = syscall(SYS_munmap, .{ addr, len, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// Fill in the current time.
+pub fn gettimeofdayRaw(tv: *Timeval) i64 {
+    const r: u64 = syscall(SYS_gettimeofday, .{ @intFromPtr(tv), 0, 0, 0, 0, 0 });
     return @bitCast(r);
 }
 
