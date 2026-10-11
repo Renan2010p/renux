@@ -167,3 +167,30 @@ pub export fn feof(f: *File) c_int {
 pub export fn ferror(f: *File) c_int {
     return @intFromBool(f.err);
 }
+
+pub export fn fileno(f: *File) c_int {
+    return f.fd;
+}
+
+pub export fn fseek(f: *File, off: c_long, whence: c_int) c_int {
+    // Seeking discards the read buffer.
+    f.rlen = 0;
+    f.rpos = 0;
+    const r: i64 = syscall.lseek(@intCast(f.fd), off, @intCast(whence));
+    if (r < 0) {
+        f.err = true;
+        return -1;
+    }
+    f.eof = false;
+    return 0;
+}
+
+pub export fn ftell(f: *File) c_long {
+    const pos: i64 = syscall.lseek(@intCast(f.fd), 0, 1);
+    const buffered: usize = f.rlen - f.rpos;
+    return @intCast(pos - @as(i64, @intCast(buffered)));
+}
+
+pub export fn rewind(f: *File) void {
+    _ = fseek(f, 0, 0);
+}

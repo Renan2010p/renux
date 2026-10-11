@@ -9,6 +9,7 @@
 // registry is per-process.
 
 const sys: type = @import("../sys/syscall.zig");
+const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
 const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
@@ -29,14 +30,14 @@ pub fn sysBrk(args: [sys.MAXARGS]u64) u64 {
 
     const limit: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
     if (addr >= limit) {
-        return sys.ERROR;
+        return sys.signed(-errno.ENOMEM);
     }
 
     if (addr > p.brk) {
         var va: u64 = param.alignUp(p.brk, param.PAGE_SIZE);
         const end: u64 = param.alignUp(addr, param.PAGE_SIZE);
         while (va < end) : (va += param.PAGE_SIZE) {
-            const pa: u64 = uvm_page.physalloc() orelse return sys.ERROR;
+            const pa: u64 = uvm_page.physalloc() orelse return sys.signed(-errno.ENOMEM);
             arch.pmap.enterUser(p.pmap, va, pa, .user_rw);
         }
     }
@@ -51,7 +52,7 @@ pub fn sysBrk(args: [sys.MAXARGS]u64) u64 {
 pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
     const len: u64 = args[1];
     if (len == 0) {
-        return sys.ERROR;
+        return sys.signed(-errno.ENOMEM);
     }
     const p: *proc.Proc = kern_proc.current;
 
@@ -59,12 +60,12 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
     const size: u64 = param.alignUp(len, param.PAGE_SIZE);
     const base: u64 = param.alignUp(p.mmap_next, param.PAGE_SIZE);
     if (base + size > limit) {
-        return sys.ERROR;
+        return sys.signed(-errno.ENOMEM);
     }
 
     var va: u64 = base;
     while (va < base + size) : (va += param.PAGE_SIZE) {
-        const pa: u64 = uvm_page.physalloc() orelse return sys.ERROR;
+        const pa: u64 = uvm_page.physalloc() orelse return sys.signed(-errno.ENOMEM);
         arch.pmap.enterUser(p.pmap, va, pa, .user_rw);
     }
     p.mmap_next = base + size;

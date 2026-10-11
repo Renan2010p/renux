@@ -37,5 +37,12 @@ int rmdir(const char *path);
 int unlink(const char *path);
 int getpid(void);
 void _exit(int status) __attribute__((noreturn));
+int isatty(int fd);
+
+extern int optind;
+extern char *optarg;
+extern int optopt;
+extern int opterr;
+int getopt(int argc, char *const argv[], const char *optstring);
 
 #endif /* _ZENBSD_UNISTD_H_ */

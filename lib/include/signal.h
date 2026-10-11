@@ -9,6 +9,11 @@
 
 typedef void (*sighandler_t)(int);
 
+struct sigaction {
+    sighandler_t sa_handler;
+    unsigned long sa_mask;
+};
+
 #define SIG_DFL ((sighandler_t)0)
 #define SIG_IGN ((sighandler_t)1)
 
@@ -25,5 +30,6 @@ typedef void (*sighandler_t)(int);
 #define SIGUSR2 31
 
 sighandler_t signal(int sig, sighandler_t handler);
+int sigaction(int sig, const struct sigaction *act, struct sigaction *oact);
 
 #endif /* _ZENBSD_SIGNAL_H_ */

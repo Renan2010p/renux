@@ -15,13 +15,23 @@ const heap: type = @import("stdlib/malloc.zig");
 const string: type = @import("string/string.zig");
 const ctype: type = @import("ctype/ctype.zig");
 const getenv_: type = @import("stdlib/getenv.zig");
+const errno_: type = @import("gen/errno.zig");
 
 comptime {
     // These files export their C symbols; reference them so they are emitted.
     _ = @import("stdio/cprintf.zig");
     _ = @import("stdio/file.zig");
     _ = @import("gen/dirent.zig");
+    _ = @import("gen/termios.zig");
+    _ = @import("gen/getopt.zig");
     _ = getenv_;
+    _ = errno_;
+}
+
+/// Record the errno from a failing syscall (which returned a negative errno)
+/// and return -1.
+fn cerr(neg: i64) c_int {
+    return errno_.set(@intCast(-neg));
 }
 
 /// Length of a NUL-terminated C string.
@@ -33,22 +43,34 @@ fn span(p: [*:0]const u8) []const u8 {
 
 pub export fn write(fd: c_int, buf: [*]const u8, n: usize) isize {
     const r: i64 = @bitCast(syscall.write(@intCast(fd), buf[0..n]));
+    if (r < 0) {
+        return @intCast(cerr(r));
+    }
     return @intCast(r);
 }
 
 pub export fn read(fd: c_int, buf: [*]u8, n: usize) isize {
     const r: i64 = @bitCast(syscall.read(@intCast(fd), buf[0..n]));
+    if (r < 0) {
+        return @intCast(cerr(r));
+    }
     return @intCast(r);
 }
 
 pub export fn open(path: [*:0]const u8, flags: c_int, mode: c_int) c_int {
     _ = mode;
     const r: i64 = syscall.open(path, @intCast(flags), 0);
+    if (r < 0) {
+        return cerr(r);
+    }
     return @intCast(r);
 }
 
 pub export fn close(fd: c_int) c_int {
     const r: i64 = syscall.close(@intCast(fd));
+    if (r < 0) {
+        return cerr(r);
+    }
     return @intCast(r);
 }
 
@@ -243,13 +265,29 @@ pub export fn gettimeofday(tv: ?*syscall.Timeval, tz: ?*anyopaque) c_int {
 }
 
 pub export fn stat(path: [*:0]const u8, buf: *syscall.Stat) c_int {
-    return @intCast(syscall.stat(path, buf));
+    const r: i64 = syscall.stat(path, buf);
+    if (r < 0) {
+        return cerr(r);
+    }
+    return 0;
 }
 
 pub export fn fstat(fd: c_int, buf: *syscall.Stat) c_int {
-    return @intCast(syscall.fstat(@intCast(fd), buf));
+    const r: i64 = syscall.fstat(@intCast(fd), buf);
+    if (r < 0) {
+        return cerr(r);
+    }
+    return 0;
 }
 
 pub export fn signal(sig: c_int, handler: usize) usize {
     return syscall.signal(@intCast(sig), handler);
+}
+
+pub export fn sigaction(sig: c_int, act: ?*const syscall.Sigaction, oact: ?*syscall.Sigaction) c_int {
+    const r: i64 = syscall.sigaction(@intCast(sig), act, oact);
+    if (r < 0) {
+        return cerr(r);
+    }
+    return 0;
 }

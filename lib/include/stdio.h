@@ -32,8 +32,14 @@ int ferror(FILE *f);
 int printf(const char *fmt, ...);
 int fprintf(FILE *f, const char *fmt, ...);
 int sprintf(char *buf, const char *fmt, ...);
+int snprintf(char *buf, size_t size, const char *fmt, ...);
+int sscanf(const char *str, const char *fmt, ...);
 int puts(const char *s);
 int putchar(int c);
 int getchar(void);
+int fseek(FILE *f, long off, int whence);
+long ftell(FILE *f);
+void rewind(FILE *f);
+int fileno(FILE *f);
 
 #endif /* _ZENBSD_STDIO_H_ */

@@ -15,6 +15,7 @@ const VaList: type = @import("std").builtin.VaList;
 var sink_fd: c_int = 1;
 var sink_buf: ?[*]u8 = null;
 var sink_pos: usize = 0;
+var sink_limit: usize = 0;
 var out_buf: [256]u8 = undefined;
 var out_len: usize = 0;
 
@@ -28,7 +29,9 @@ fn flush() void {
 
 fn out(c: u8) void {
     if (sink_buf) |b| {
-        b[sink_pos] = c;
+        if (sink_limit == 0 or sink_pos + 1 < sink_limit) {
+            b[sink_pos] = c;
+        }
         sink_pos += 1;
         return;
     }
@@ -204,10 +207,129 @@ pub export fn sprintf(buf: [*]u8, fmt: [*:0]const u8, ...) callconv(.c) c_int {
     var ap = @cVaStart();
     sink_buf = buf;
     sink_pos = 0;
+    sink_limit = 0;
     formatLoop(fmt, &ap);
     buf[sink_pos] = 0;
     const n: usize = sink_pos;
     sink_buf = null;
     @cVaEnd(&ap);
     return @intCast(n);
+}
+
+pub export fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) callconv(.c) c_int {
+    var ap = @cVaStart();
+    sink_buf = buf;
+    sink_pos = 0;
+    sink_limit = size;
+    formatLoop(fmt, &ap);
+    if (size > 0) {
+        const at: usize = if (sink_pos < size) sink_pos else size - 1;
+        buf[at] = 0;
+    }
+    const n: usize = sink_pos;
+    sink_buf = null;
+    sink_limit = 0;
+    @cVaEnd(&ap);
+    return @intCast(n);
+}
+
+/// Read conversions from a string (a small sscanf: %d, %u, %x, %s, %c).
+pub export fn sscanf(str: [*:0]const u8, fmt: [*:0]const u8, ...) callconv(.c) c_int {
+    var ap = @cVaStart();
+    var si: usize = 0;
+    var fi: usize = 0;
+    var count: c_int = 0;
+
+    while (fmt[fi] != 0) {
+        const fch: u8 = fmt[fi];
+        if (fch == ' ' or fch == '\t') {
+            fi += 1;
+            continue;
+        }
+        if (fch != '%') {
+            if (str[si] != fch) {
+                break;
+            }
+            si += 1;
+            fi += 1;
+            continue;
+        }
+
+        fi += 1;
+        var is_long: bool = false;
+        while (fmt[fi] == 'l') : (fi += 1) {
+            is_long = true;
+        }
+        switch (fmt[fi]) {
+            'd', 'i' => {
+                while (str[si] == ' ') : (si += 1) {}
+                var neg: bool = false;
+                if (str[si] == '-') {
+                    neg = true;
+                    si += 1;
+                } else if (str[si] == '+') {
+                    si += 1;
+                }
+                var v: i64 = 0;
+                while (str[si] >= '0' and str[si] <= '9') : (si += 1) {
+                    v = v * 10 + (str[si] - '0');
+                }
+                if (neg) {
+                    v = -v;
+                }
+                if (is_long) {
+                    @cVaArg(&ap, *i64).* = v;
+                } else {
+                    @cVaArg(&ap, *c_int).* = @intCast(v);
+                }
+                count += 1;
+            },
+            'u', 'x' => {
+                while (str[si] == ' ') : (si += 1) {}
+                const base: u64 = if (fmt[fi] == 'x') 16 else 10;
+                var v: u64 = 0;
+                while (true) {
+                    const d: u8 = str[si];
+                    const val: u8 = if (d >= '0' and d <= '9') d - '0' else if (d >= 'a' and d <= 'f') d - 'a' + 10 else if (d >= 'A' and d <= 'F') d - 'A' + 10 else 255;
+                    if (val == 255 or val >= base) {
+                        break;
+                    }
+                    v = v * base + val;
+                    si += 1;
+                }
+                if (is_long) {
+                    @cVaArg(&ap, *u64).* = v;
+                } else {
+                    @cVaArg(&ap, *c_uint).* = @intCast(v);
+                }
+                count += 1;
+            },
+            's' => {
+                while (str[si] == ' ') : (si += 1) {}
+                const p: [*]u8 = @cVaArg(&ap, [*]u8);
+                var k: usize = 0;
+                while (str[si] != 0 and str[si] != ' ' and str[si] != '\t') : (si += 1) {
+                    p[k] = str[si];
+                    k += 1;
+                }
+                p[k] = 0;
+                count += 1;
+            },
+            'c' => {
+                const p: [*]u8 = @cVaArg(&ap, [*]u8);
+                p[0] = str[si];
+                if (str[si] != 0) {
+                    si += 1;
+                }
+                count += 1;
+            },
+            else => {},
+        }
+        if (fmt[fi] != 0) {
+            fi += 1;
+        }
+    }
+
+    @cVaEnd(&ap);
+    return count;
 }

@@ -141,8 +141,15 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
             frame.rax = @intCast(errno.EINVAL);
             frame.rflags |= 1;
         } else {
-            frame.rax = result;
-            frame.rflags &= ~@as(u64, 1);
+            const signed_result: i64 = @bitCast(result);
+            if (signed_result < 0) {
+                // The handler returned a negative errno.
+                frame.rax = @intCast(-signed_result);
+                frame.rflags |= 1;
+            } else {
+                frame.rax = result;
+                frame.rflags &= ~@as(u64, 1);
+            }
         }
         return;
     }

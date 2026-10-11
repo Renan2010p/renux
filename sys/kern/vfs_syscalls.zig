@@ -9,6 +9,7 @@
 // directory before reaching the VFS layer.
 
 const sys: type = @import("../sys/syscall.zig");
+const errno: type = @import("../sys/errno.zig");
 const param: type = @import("../sys/param.zig");
 const file: type = @import("../sys/file.zig");
 const stat: type = @import("../sys/stat.zig");
@@ -29,12 +30,12 @@ pub fn sysOpen(args: [sys.MAXARGS]u64) u64 {
     const flags: i32 = @bitCast(@as(u32, @truncate(args[1])));
 
     const p: *proc.Proc = kern_proc.current;
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
-    const f: *file.File = vfs_vnops.vn_open(p.cwd, path, flags) orelse return sys.ERROR;
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    const f: *file.File = vfs_vnops.vn_open(p.cwd, path, flags) orelse return sys.signed(-errno.ENOENT);
 
     const fd: usize = kern_descrip.fdalloc(p, 3) orelse {
         _ = kern_descrip.closeFile(f);
-        return sys.ERROR;
+        return sys.signed(-errno.ENFILE);
     };
     kern_descrip.fdAffix(p, fd, f);
     return @intCast(fd);
@@ -45,14 +46,14 @@ pub fn sysStat(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
     const statbuf: u64 = args[1];
 
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
-    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.ERROR;
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
 
     var st: stat.Stat = undefined;
     const err: i32 = vfs_vnops.fillStat(vp, &st);
     vfs_subr.vrele(vp);
     if (err != 0) {
-        return sys.ERROR;
+        return sys.signed(-err);
     }
     copyOut(statbuf, @ptrCast(&st), @sizeOf(stat.Stat));
     return 0;
@@ -131,18 +132,18 @@ pub fn sysGetdents(args: [sys.MAXARGS]u64) u64 {
 /// chdir(2): change the working directory and remember its path.
 pub fn sysChdir(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
 
     const p: *proc.Proc = kern_proc.current;
-    const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return sys.ERROR;
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return sys.signed(-errno.ENOENT);
     if (vp.v_type != .vdir) {
         vfs_subr.vrele(vp);
-        return sys.ERROR;
+        return sys.signed(-errno.ENOTDIR);
     }
 
     const newlen: usize = normPath(p.cwd_path[0..p.cwd_len], path, &p.cwd_path) orelse {
         vfs_subr.vrele(vp);
-        return sys.ERROR;
+        return sys.signed(-errno.ENAMETOOLONG);
     };
     p.cwd_len = newlen;
 
@@ -157,8 +158,8 @@ pub fn sysChdir(args: [sys.MAXARGS]u64) u64 {
 pub fn sysMkdir(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
     const mode: u16 = @truncate(args[1] & 0o777);
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
-    const vp: *vnode.Vnode = vfs_vnops.vn_mkdir(kern_proc.current.cwd, path, mode) orelse return sys.ERROR;
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    const vp: *vnode.Vnode = vfs_vnops.vn_mkdir(kern_proc.current.cwd, path, mode) orelse return sys.signed(-errno.EEXIST);
     vfs_subr.vrele(vp);
     return 0;
 }
@@ -166,10 +167,10 @@ pub fn sysMkdir(args: [sys.MAXARGS]u64) u64 {
 /// rmdir(2): remove an empty directory.
 pub fn sysRmdir(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
     const err: i32 = vfs_vnops.vn_remove(kern_proc.current.cwd, path, true);
     if (err != 0) {
-        return sys.ERROR;
+        return sys.signed(-err);
     }
     return 0;
 }
@@ -177,10 +178,10 @@ pub fn sysRmdir(args: [sys.MAXARGS]u64) u64 {
 /// unlink(2): remove a non-directory.
 pub fn sysUnlink(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
     const err: i32 = vfs_vnops.vn_remove(kern_proc.current.cwd, path, false);
     if (err != 0) {
-        return sys.ERROR;
+        return sys.signed(-err);
     }
     return 0;
 }
