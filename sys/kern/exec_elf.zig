@@ -48,7 +48,7 @@ fn protFor(flags: u32) arch.pmap.Prot {
 /// map), not through its user virtual address: the segment is already mapped
 /// with its final protection (read-only for text), so the kernel must not write
 /// through that mapping.
-fn loadSegment(bytes: []const u8, ph: *const elf.Phdr, hhdm: u64) bool {
+fn loadSegment(pmap: arch.pmap.Pmap, bytes: []const u8, ph: *const elf.Phdr, hhdm: u64) bool {
     const vstart: u64 = ph.p_vaddr & ~param.PAGE_MASK;
     const vend: u64 = param.alignUp(ph.p_vaddr + ph.p_memsz, param.PAGE_SIZE);
     const prot: arch.pmap.Prot = protFor(ph.p_flags);
@@ -57,7 +57,7 @@ fn loadSegment(bytes: []const u8, ph: *const elf.Phdr, hhdm: u64) bool {
     var va: u64 = vstart;
     while (va < vend) : (va += param.PAGE_SIZE) {
         const pa: u64 = uvm_page.physalloc() orelse return false;
-        arch.pmap.enterUser(va, pa, prot);
+        arch.pmap.enterUser(pmap, va, pa, prot);
     }
 
     // Copy the file-backed part over the zero-filled pages.
@@ -67,15 +67,15 @@ fn loadSegment(bytes: []const u8, ph: *const elf.Phdr, hhdm: u64) bool {
         if (src >= bytes.len) {
             break;
         }
-        const dst_pa: u64 = arch.pmap.extract(ph.p_vaddr + i) orelse return false;
+        const dst_pa: u64 = arch.pmap.extract(pmap, ph.p_vaddr + i) orelse return false;
         const dst: *u8 = @ptrFromInt(dst_pa + hhdm);
         dst.* = bytes[@intCast(src)];
     }
     return true;
 }
 
-/// Load an ELF64 executable image.
-pub fn load(bytes: []const u8) ?Result {
+/// Load an ELF64 executable image into page map `pmap`.
+pub fn load(pmap: arch.pmap.Pmap, bytes: []const u8) ?Result {
     if (bytes.len < @sizeOf(elf.Ehdr) or !isElf(bytes)) {
         return null;
     }
@@ -98,7 +98,7 @@ pub fn load(bytes: []const u8) ?Result {
         }
         const ph: *const elf.Phdr = @ptrFromInt(@intFromPtr(bytes.ptr) + off);
         if (ph.p_type == elf.PT_LOAD) {
-            if (!loadSegment(bytes, ph, hhdm)) {
+            if (!loadSegment(pmap, bytes, ph, hhdm)) {
                 prf.printLine("exec_elf: out of memory");
                 return null;
             }

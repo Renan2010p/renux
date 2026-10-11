@@ -3,12 +3,13 @@
 //
 // x86-64 pmap implementation.
 //
-// This is the Zig counterpart of NetBSD's sys/arch/x86/x86/pmap.c, limited to
-// what early bring-up needs. It manages the kernel's page tables: it walks the
-// current top-level table (the one the bootloader installed, read from CR3) and
-// installs mappings, allocating intermediate tables from the physical page
-// allocator as required. Page tables are reached through the higher-half direct
-// map offset supplied by the bootloader.
+// This is the Zig counterpart of NetBSD's sys/arch/x86/x86/pmap.c. A page map
+// is identified by the physical address of its top-level (PML4) table, which is
+// what CR3 holds. The kernel lives in the higher half (PML4 slots 256..511) and
+// is shared by every page map; the lower half is the process's own user space.
+//
+// Page tables are reached through the higher-half direct map offset supplied by
+// the bootloader.
 
 const pte: type = @import("../include/pte.zig");
 const iface: type = @import("../include/pmap.zig");
@@ -16,25 +17,67 @@ const uvm_page: type = @import("../../../uvm/uvm_page.zig");
 
 pub const Prot: type = iface.Prot;
 
+/// A page map: the physical address of a top-level (PML4) table.
+pub const Pmap: type = u64;
+
 const INDEX_MASK: u64 = 0x1ff;
 
-var hhdm: u64 = 0;
+/// First PML4 slot belonging to the kernel half.
+const KERNEL_PML4_START: usize = 256;
 
-/// Prepare the pmap with the direct-map offset used to reach page tables.
+/// Number of PML4 slots.
+const PML4_SLOTS: usize = 512;
+
+var hhdm: u64 = 0;
+var kernel_pmap: Pmap = 0;
+
+/// Prepare the pmap with the direct-map offset, and remember the boot page map
+/// as the kernel's.
 pub fn bootstrap(offset: u64) void {
     hhdm = offset;
+    kernel_pmap = readCr3() & pte.FRAME_MASK;
 }
 
-/// Read CR3 (the physical address of the top-level page table).
+/// The kernel's page map (the one the bootloader installed).
+pub fn kernelPmap() Pmap {
+    return kernel_pmap;
+}
+
+/// The page map currently loaded on this CPU.
+pub fn current() Pmap {
+    return readCr3() & pte.FRAME_MASK;
+}
+
+/// Read CR3.
 fn readCr3() u64 {
     return asm volatile ("mov %%cr3, %[value]"
         : [value] "=r" (-> u64),
     );
 }
 
+/// Load `p` into CR3.
+pub fn activate(p: Pmap) void {
+    asm volatile ("mov %[value], %%cr3"
+        :
+        : [value] "r" (p),
+        : .{ .memory = true });
+}
+
 /// Virtual address at which a page table page is reachable via the direct map.
 fn table(pa: u64) [*]u64 {
     return @ptrFromInt((pa & pte.FRAME_MASK) + hhdm);
+}
+
+/// Create a page map with the kernel half shared and an empty user half.
+pub fn create() ?Pmap {
+    const pa: u64 = uvm_page.physalloc() orelse return null; // zeroed
+    const dst: [*]u64 = table(pa);
+    const src: [*]u64 = table(kernel_pmap);
+    var i: usize = KERNEL_PML4_START;
+    while (i < PML4_SLOTS) : (i += 1) {
+        dst[i] = src[i];
+    }
+    return pa;
 }
 
 fn flagsFor(prot: Prot) u64 {
@@ -66,33 +109,35 @@ fn descend(parent: [*]u64, i: usize) ?[*]u64 {
     return table(entry);
 }
 
-/// Install a leaf mapping for `va` -> `pa` with the given protection.
-fn map(va: u64, pa: u64, prot: Prot) void {
-    const pml4 = table(readCr3());
+/// Install a leaf mapping `va` -> `pa` in page map `p`.
+pub fn map(p: Pmap, va: u64, pa: u64, prot: Prot) void {
+    const pml4 = table(p);
     const pdp = descend(pml4, index(va, pte.L4_SHIFT)) orelse return;
     const pd = descend(pdp, index(va, pte.L3_SHIFT)) orelse return;
     const pt = descend(pd, index(va, pte.L2_SHIFT)) orelse return;
     pt[index(va, pte.L1_SHIFT)] = (pa & pte.FRAME_MASK) | flagsFor(prot);
 
-    asm volatile ("invlpg (%[p])"
-        :
-        : [p] "r" (va),
-        : .{ .memory = true });
+    if (p == current()) {
+        asm volatile ("invlpg (%[p])"
+            :
+            : [p] "r" (va),
+            : .{ .memory = true });
+    }
 }
 
-/// Map physical page `pa` at kernel virtual address `va`.
+/// Map a kernel page in the kernel page map.
 pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
-    map(va, pa, prot);
+    map(kernel_pmap, va, pa, prot);
 }
 
-/// Map physical page `pa` at user virtual address `va` (leaf with the US bit).
-pub fn enterUser(va: u64, pa: u64, prot: Prot) void {
-    map(va, pa, prot);
+/// Map a user page in page map `p`.
+pub fn enterUser(p: Pmap, va: u64, pa: u64, prot: Prot) void {
+    map(p, va, pa, prot);
 }
 
-/// Translate `va` to a physical address, or null if it is not mapped.
-pub fn extract(va: u64) ?u64 {
-    const pml4 = table(readCr3());
+/// Translate `va` to a physical address in page map `p`, or null if unmapped.
+pub fn extract(p: Pmap, va: u64) ?u64 {
+    const pml4 = table(p);
     const e4: u64 = pml4[index(va, pte.L4_SHIFT)];
     if ((e4 & pte.P) == 0) return null;
 

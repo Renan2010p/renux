@@ -103,7 +103,13 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     };
     const image: []const u8 = @as([*]const u8, @ptrCast(address))[0..@intCast(module.size)];
 
-    const result = kern_exec.exec(image) orelse {
+    // Each process gets its own address space (its own CR3).
+    const pmap: arch.pmap.Pmap = arch.pmap.create() orelse {
+        prf.printLine("init: cannot create address space");
+        return;
+    };
+
+    const result = kern_exec.exec(pmap, image) orelse {
         prf.printLine("init: not an executable image");
         return;
     };
@@ -112,7 +118,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
     while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
         const pa: u64 = uvm_page.physalloc() orelse return;
-        arch.pmap.enterUser(va, pa, .user_rw);
+        arch.pmap.enterUser(pmap, va, pa, .user_rw);
     }
 
     // Kernel stack the CPU switches to when control returns from ring 3.
@@ -124,8 +130,10 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     prf.printHex(result.entry);
     prf.printLine("");
 
-    // The SysV ABI expects rsp % 16 == 8 at function entry (a call has pushed
-    // the return address). iretq pushes no such word, so bias the stack by 8.
+    // Load the process's page map and enter ring 3. The SysV ABI expects
+    // rsp % 16 == 8 at function entry (a call has pushed the return address);
+    // iretq pushes no such word, so bias the stack by 8.
+    arch.pmap.activate(pmap);
     arch.locore.enterUser(result.entry, arch.vmparam.USER_STACK_TOP - 8);
 }
 

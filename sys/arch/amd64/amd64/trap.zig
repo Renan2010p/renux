@@ -82,7 +82,7 @@ fn handlePageFault(frame: *trap.TrapFrame) bool {
         return false;
     }
     const pa: u64 = uvm_page.physalloc() orelse return false;
-    pmap.kenterPa(va & ~param.PAGE_MASK, pa, .kernel_rw);
+    pmap.enterUser(pmap.current(), va & ~param.PAGE_MASK, pa, .user_rw);
     return true;
 }
 
