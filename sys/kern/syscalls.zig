@@ -11,6 +11,7 @@ const sys: type = @import("../sys/syscall.zig");
 const cons: type = @import("../dev/cons.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const kern_sched: type = @import("kern_sched.zig");
 const kern_fork: type = @import("kern_fork.zig");
 const kern_exit: type = @import("kern_exit.zig");
 const kern_exec: type = @import("kern_exec.zig");
@@ -48,12 +49,19 @@ fn sysRead(args: [sys.MAXARGS]u64) u64 {
     if (fd != 0 or count == 0) {
         return 0;
     }
-    // Block for one byte; the console read leaves interrupts enabled so the
-    // scheduler can run other processes.
-    const c: u8 = cons.cngetc();
-    const dst: [*]u8 = @ptrFromInt(buf);
-    dst[0] = c;
-    return 1;
+    // Wait for input, yielding the CPU (with interrupts enabled) so the timer
+    // and other processes keep running while this process blocks.
+    while (true) {
+        arch.cpu.enable_interrupts();
+        const maybe: ?u8 = cons.cngetcPoll();
+        arch.cpu.disable_interrupts();
+        if (maybe) |c| {
+            const dst: [*]u8 = @ptrFromInt(buf);
+            dst[0] = c;
+            return 1;
+        }
+        kern_sched.yield();
+    }
 }
 
 fn sysExit(args: [sys.MAXARGS]u64) u64 {

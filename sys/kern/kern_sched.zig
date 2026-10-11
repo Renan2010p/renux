@@ -67,9 +67,10 @@ pub fn scheduler() noreturn {
         }
 
         if (!found) {
-            // Nothing runnable: idle until a process becomes runnable again.
-            // (No timer-driven wakeup yet, so a busy spin with interrupts off
-            // is enough for cooperative scheduling.)
+            // Nothing runnable: idle until an interrupt arrives.
+            arch.gdt.setKernelStack(schedStackTop());
+            arch.cpu.enable_interrupts();
+            arch.cpu.halt();
             arch.cpu.disable_interrupts();
         }
     }

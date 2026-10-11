@@ -17,8 +17,10 @@ pub const MAX_CONSOLES: usize = 4;
 pub const Console: type = struct {
     /// Emit one character.
     putc: *const fn (c: u8) void,
-    /// Receive one character, if the device can.
+    /// Receive one character, blocking, if the device can.
     getc: ?*const fn () u8 = null,
+    /// Receive one character without blocking, if one is available.
+    trygetc: ?*const fn () ?u8 = null,
 };
 
 var consoles: [MAX_CONSOLES]Console = undefined;
@@ -56,6 +58,19 @@ pub fn cngetc() u8 {
         }
     }
     return 0;
+}
+
+/// Receive one character from the first console that has one ready, else null.
+pub fn cngetcPoll() ?u8 {
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].trygetc) |trygetc| {
+            if (trygetc()) |c| {
+                return c;
+            }
+        }
+    }
+    return null;
 }
 
 /// Emit a byte string on the console.

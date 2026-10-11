@@ -17,6 +17,7 @@ const syscall: type = @import("../../x86/x86/syscall.zig");
 const vector: type = @import("vector.zig");
 const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
@@ -120,8 +121,10 @@ export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
 
     if (intrdefs.isPicVector(frame.vector)) {
         intr.dispatch(frame.vector);
-        // Preemption is disabled for now; switching happens cooperatively at
-        // yield()/sleep() points.
+        // Preempt the running process on device interrupts.
+        if (!kern_sched.in_scheduler) {
+            kern_sched.yield();
+        }
         return;
     }
 

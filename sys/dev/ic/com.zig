@@ -79,7 +79,7 @@ pub fn putc(c: u8) void {
 
 /// The console descriptor for this driver, for cons.cn_attach().
 pub fn console() cons.Console {
-    return .{ .putc = putc, .getc = getc };
+    return .{ .putc = putc, .getc = getc, .trygetc = tryGetc };
 }
 
 fn receiverReady() bool {
@@ -90,4 +90,12 @@ fn receiverReady() bool {
 pub fn getc() u8 {
     while (!receiverReady()) {}
     return readReg(REG_DATA);
+}
+
+/// Receive one character without blocking, or null if none is ready.
+pub fn tryGetc() ?u8 {
+    if (receiverReady()) {
+        return readReg(REG_DATA);
+    }
+    return null;
 }
