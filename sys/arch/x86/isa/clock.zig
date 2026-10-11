@@ -43,9 +43,13 @@ pub fn tickCount() u64 {
     return ticks;
 }
 
+/// Set true to print one heartbeat dot per second. It is handy while bringing
+/// up the timer, but off by default: it corrupts interactive input.
+const heartbeat: bool = false;
+
 fn tick() void {
     ticks += 1;
-    if (ticks % HZ == 0) {
+    if (heartbeat and ticks % HZ == 0) {
         prf.print(".");
     }
 }
