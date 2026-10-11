@@ -12,6 +12,11 @@ const puts = libc.stdio.puts;
 const putchar = libc.stdio.putchar;
 const getchar = libc.stdio.getchar;
 
+comptime {
+    // The C startup provides _start (the ELF entry point) and calls main().
+    _ = @import("csu").crt0;
+}
+
 const MAX_LINE: usize = 256;
 const MAX_NAME: usize = 128;
 const MAX_ARGS: usize = 8;

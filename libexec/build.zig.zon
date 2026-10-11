@@ -1,0 +1,14 @@
+.{
+    .name = .libexec,
+    .version = "0.1.0",
+    .fingerprint = 0x875812897a9e07b0,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .libc = .{ .path = "../lib" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "getty",
+    },
+}

@@ -10,6 +10,11 @@
 
 const libc: type = @import("libc");
 
+comptime {
+    // The C startup provides _start (the ELF entry point) and calls main().
+    _ = @import("csu").crt0;
+}
+
 /// Read one line, echoing it when `echo` is set.
 fn readLine(buf: []u8, echo: bool) usize {
     var len: usize = 0;

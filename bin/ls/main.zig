@@ -10,6 +10,11 @@
 const libc: type = @import("libc");
 const Dirent: type = libc.syscall.Dirent;
 
+comptime {
+    // The C startup provides _start (the ELF entry point) and calls main().
+    _ = @import("csu").crt0;
+}
+
 const MAX_PATH: usize = 256;
 
 /// A NUL-terminated string as a slice.

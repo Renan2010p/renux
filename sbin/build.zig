@@ -28,6 +28,7 @@ fn program(
         .code_model = .default,
     });
     mod.addImport("libc", libc.module("libc"));
+    mod.addImport("csu", libc.module("csu"));
 
     const exe: *Builder.Step.Compile = b.addExecutable(.{
         .name = name,
@@ -59,12 +60,4 @@ pub fn build(b: *Builder) !void {
     const init: *Builder.Step.Compile = program(b, target, optimize, libc, "init", "init/main.zig");
     const install_init: *Builder.Step.InstallArtifact = b.addInstallArtifact(init, .{});
     b.getInstallStep().dependOn(&install_init.step);
-
-    const getty: *Builder.Step.Compile = program(b, target, optimize, libc, "getty", "getty/main.zig");
-    const install_getty: *Builder.Step.InstallArtifact = b.addInstallArtifact(getty, .{});
-    b.getInstallStep().dependOn(&install_getty.step);
-
-    const login: *Builder.Step.Compile = program(b, target, optimize, libc, "login", "login/main.zig");
-    const install_login: *Builder.Step.InstallArtifact = b.addInstallArtifact(login, .{});
-    b.getInstallStep().dependOn(&install_login.step);
 }

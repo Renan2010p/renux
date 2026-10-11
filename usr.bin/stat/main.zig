@@ -8,6 +8,11 @@
 
 const libc: type = @import("libc");
 
+comptime {
+    // The C startup provides _start (the ELF entry point) and calls main().
+    _ = @import("csu").crt0;
+}
+
 /// A NUL-terminated string as a slice.
 fn zspan(p: [*:0]const u8) []const u8 {
     var n: usize = 0;

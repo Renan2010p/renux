@@ -9,6 +9,11 @@
 
 const libc: type = @import("libc");
 
+comptime {
+    // The C startup provides _start (the ELF entry point) and calls main().
+    _ = @import("csu").crt0;
+}
+
 export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
     _ = argc;
     _ = argv;
@@ -26,8 +31,8 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
 
     libc.stdio.printf("\nZenBSD (amd64) console\n\n", .{});
 
-    var av: [2]?[*:0]const u8 = .{ "/sbin/login", null };
-    _ = libc.syscall.execve("/sbin/login", @ptrCast(&av), envp);
+    var av: [2]?[*:0]const u8 = .{ "/usr/bin/login", null };
+    _ = libc.syscall.execve("/usr/bin/login", @ptrCast(&av), envp);
 
     libc.stdio.puts("getty: cannot exec /sbin/login");
     return 1;

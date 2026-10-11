@@ -14,7 +14,13 @@ const std: type = @import("std");
 const Builder: type = std.Build;
 
 pub fn build(b: *Builder) !void {
-    _ = b.addModule("libc", .{
+    const libc_mod: *Builder.Module = b.addModule("libc", .{
         .root_source_file = b.path("libc/libc.zig"),
     });
+    // The C startup lives in lib/csu, as in NetBSD/FreeBSD, and depends on the
+    // C library for exit().
+    const csu_mod: *Builder.Module = b.addModule("csu", .{
+        .root_source_file = b.path("csu/csu.zig"),
+    });
+    csu_mod.addImport("libc", libc_mod);
 }

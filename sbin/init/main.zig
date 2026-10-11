@@ -10,6 +10,11 @@
 
 const libc: type = @import("libc");
 
+comptime {
+    // The C startup provides _start (the ELF entry point) and calls main().
+    _ = @import("csu").crt0;
+}
+
 export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
     _ = argc;
     _ = argv;
@@ -41,8 +46,8 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     while (true) {
         const gpid: i32 = libc.syscall.fork();
         if (gpid == 0) {
-            var av: [2]?[*:0]const u8 = .{ "/sbin/getty", null };
-            _ = libc.syscall.execve("/sbin/getty", @ptrCast(&av), envp);
+            var av: [2]?[*:0]const u8 = .{ "/usr/libexec/getty", null };
+            _ = libc.syscall.execve("/usr/libexec/getty", @ptrCast(&av), envp);
             libc.syscall.exit(1);
         }
         _ = libc.syscall.wait(null);

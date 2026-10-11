@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2026 The ZenBSD Project
 //
-// MI console switch.
+// MI console switch and the console device.
 //
-// Mirrors the role of sys/dev/cons.c in NetBSD: it is the single place through
-// which the kernel writes to (and later reads from) the system console. Any
-// number of drivers register here; output is broadcast to all of them, so the
-// kernel can print to serial and to a screen at the same time. Nothing above
-// this layer knows which devices are installed.
+// This mirrors NetBSD's sys/dev/cons.c: the single place through which the
+// kernel writes to (and reads from) the system console, plus the /dev/console
+// character device (cons_cdevsw) built on those same routines. Any number of
+// drivers register here; output is broadcast to all of them, so the kernel can
+// print to serial and to a screen at the same time. Nothing above this layer
+// knows which devices are installed.
+
+const conf: type = @import("../sys/conf.zig");
+const errno: type = @import("../sys/errno.zig");
+const sysinit: type = @import("../sys/sysinit.zig");
 
 /// Maximum number of attached consoles.
 pub const MAX_CONSOLES: usize = 4;
@@ -120,4 +125,56 @@ pub fn cnwrite(s: []const u8) void {
     for (s) |c| {
         cnputc(c);
     }
+}
+
+/// Major number of the console device.
+pub const CONSOLE_MAJOR: usize = 0;
+
+/// Open the console device.
+fn cnopen(dev: u64, flags: i32) ?*anyopaque {
+    _ = dev;
+    _ = flags;
+    return null;
+}
+
+/// Close the console device.
+fn cnclose(ctx: ?*anyopaque) i32 {
+    _ = ctx;
+    return 0;
+}
+
+/// Read one byte from the console; -EAGAIN when nothing is ready (the read
+/// system call turns that into a blocking wait).
+fn cnread(ctx: ?*anyopaque, buf: []u8) isize {
+    _ = ctx;
+    if (buf.len == 0) {
+        return 0;
+    }
+    const c: u8 = cngetcPoll() orelse return -errno.EAGAIN;
+    buf[0] = c;
+    return 1;
+}
+
+/// Write a byte string to the console.
+fn cnwriteDev(ctx: ?*anyopaque, buf: []const u8) isize {
+    _ = ctx;
+    cnwrite(buf);
+    return @intCast(buf.len);
+}
+
+/// The /dev/console character device switch.
+const cons_cdevsw: conf.Cdevsw = .{
+    .name = "console",
+    .open = cnopen,
+    .read = cnread,
+    .write = cnwriteDev,
+    .close = cnclose,
+};
+
+fn consAttachDev(_: ?*const anyopaque) callconv(.c) void {
+    conf.registerCdev(CONSOLE_MAJOR, &cons_cdevsw);
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_consdev", sysinit.SI_SUB_DRIVERS, sysinit.SI_ORDER_FIRST, consAttachDev, null);
 }

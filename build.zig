@@ -65,10 +65,34 @@ pub fn build(b: *Builder) !void {
     install_init.step.dependOn(&buildsbin.step);
     buildsbin_step.dependOn(&install_init.step);
 
+    // zig build buildlibexec  (getty)
+    const buildlibexec_step: *Builder.Step = b.step("buildlibexec", "Build the ZenBSD libexec programs (libexec/)");
+    const buildlibexec: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    buildlibexec.setCwd(b.path("libexec"));
+    const install_getty: *Builder.Step.InstallFile =
+        b.addInstallFileWithDir(b.path("libexec/zig-out/bin/getty"), .bin, "getty");
+    install_getty.step.dependOn(&buildlibexec.step);
+    buildlibexec_step.dependOn(&install_getty.step);
+
+    // zig build buildusrbin  (login, stat)
+    const buildusrbin_step: *Builder.Step = b.step("buildusrbin", "Build the ZenBSD user commands (usr.bin/)");
+    const buildusrbin: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    buildusrbin.setCwd(b.path("usr.bin"));
+    const install_login: *Builder.Step.InstallFile =
+        b.addInstallFileWithDir(b.path("usr.bin/zig-out/bin/login"), .bin, "login");
+    install_login.step.dependOn(&buildusrbin.step);
+    const install_stat: *Builder.Step.InstallFile =
+        b.addInstallFileWithDir(b.path("usr.bin/zig-out/bin/stat"), .bin, "stat");
+    install_stat.step.dependOn(&buildusrbin.step);
+    buildusrbin_step.dependOn(&install_login.step);
+    buildusrbin_step.dependOn(&install_stat.step);
+
     // zig build builduserland
     const builduserland_step: *Builder.Step = b.step("builduserland", "Build the ZenBSD userland");
     builduserland_step.dependOn(buildbin_step);
     builduserland_step.dependOn(buildsbin_step);
+    builduserland_step.dependOn(buildlibexec_step);
+    builduserland_step.dependOn(buildusrbin_step);
 
     // zig build iso
     const iso_step: *Builder.Step = b.step("iso", "Build a bootable ZenBSD ISO image");
@@ -77,6 +101,8 @@ pub fn build(b: *Builder) !void {
     iso.step.dependOn(&install_kernel.step);
     iso.step.dependOn(buildbin_step);
     iso.step.dependOn(buildsbin_step);
+    iso.step.dependOn(buildlibexec_step);
+    iso.step.dependOn(buildusrbin_step);
     const install_iso: *Builder.Step.InstallFile =
         b.addInstallFileWithDir(b.path("sys/zig-out/zenbsd.iso"), .{ .custom = "." }, "zenbsd.iso");
     install_iso.step.dependOn(&iso.step);
@@ -99,4 +125,6 @@ pub fn build(b: *Builder) !void {
     b.default_step.dependOn(buildlib_step);
     b.default_step.dependOn(buildbin_step);
     b.default_step.dependOn(buildsbin_step);
+    b.default_step.dependOn(buildlibexec_step);
+    b.default_step.dependOn(buildusrbin_step);
 }

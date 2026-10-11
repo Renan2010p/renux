@@ -1,0 +1,15 @@
+.{
+    .name = .usr_bin,
+    .version = "0.1.0",
+    .fingerprint = 0xeb907039f9ba4209,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .libc = .{ .path = "../lib" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "login",
+        "stat",
+    },
+}
