@@ -3,10 +3,16 @@
 //
 // Top-level build.
 //
-// The kernel (sys/) and the userland (sbin/) each have their own build.zig.
-// This file is the entry point at the root of the tree, so the common targets
-// can be driven from here:
+// The kernel (sys/) and the userland (sbin/) each have their own build.zig and
+// their own working zig-out/. This file is the entry point at the root of the
+// tree: it drives those sub-builds and collects the final artifacts into the
+// root zig-out/, so the finished products live in one place:
 //
+//   zig-out/bin/kernel      the kernel image
+//   zig-out/bin/init        the first user process
+//   zig-out/zenbsd.iso      the bootable ISO image
+//
+// Targets:
 //   zig build buildkernel    build the kernel
 //   zig build builduserland  build the userland
 //   zig build iso            build a bootable ISO (kernel + userland)
@@ -22,26 +28,40 @@ fn zig(b: *Builder) []const u8 {
 }
 
 pub fn build(b: *Builder) !void {
-    // zig build buildkernel
+    // zig build buildkernel: run sys/build.zig, then collect the kernel image.
     const buildkernel_step: *Builder.Step = b.step("buildkernel", "Build the ZenBSD kernel");
     const buildkernel: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     buildkernel.setCwd(b.path("sys"));
-    buildkernel_step.dependOn(&buildkernel.step);
 
-    // zig build builduserland
+    const install_kernel: *Builder.Step.InstallFile =
+        b.addInstallFileWithDir(b.path("sys/zig-out/bin/kernel"), .bin, "kernel");
+    install_kernel.step.dependOn(&buildkernel.step);
+    buildkernel_step.dependOn(&install_kernel.step);
+
+    // zig build builduserland: run sbin/build.zig, then collect init.
     const builduserland_step: *Builder.Step = b.step("builduserland", "Build the ZenBSD userland");
     const builduserland: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
     builduserland.setCwd(b.path("sbin"));
-    builduserland_step.dependOn(&builduserland.step);
 
-    // zig build iso
+    const install_init: *Builder.Step.InstallFile =
+        b.addInstallFileWithDir(b.path("sbin/zig-out/bin/init"), .bin, "init");
+    install_init.step.dependOn(&builduserland.step);
+    builduserland_step.dependOn(&install_init.step);
+
+    // zig build iso: run sys' iso target (which builds the kernel) and collect
+    // the image.
     const iso_step: *Builder.Step = b.step("iso", "Build a bootable ZenBSD ISO image");
     const iso: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "iso" });
     iso.setCwd(b.path("sys"));
-    iso.step.dependOn(&builduserland.step);
-    iso_step.dependOn(&iso.step);
+    iso.step.dependOn(&install_kernel.step);
+    iso.step.dependOn(&install_init.step);
 
-    // zig build run
+    const install_iso: *Builder.Step.InstallFile =
+        b.addInstallFileWithDir(b.path("sys/zig-out/zenbsd.iso"), .{ .custom = "." }, "zenbsd.iso");
+    install_iso.step.dependOn(&iso.step);
+    iso_step.dependOn(&install_iso.step);
+
+    // zig build run: boot the ISO in QEMU (sys' run target builds it first).
     const run_step: *Builder.Step = b.step("run", "Boot ZenBSD in QEMU");
     const run: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "run" });
     run.setCwd(b.path("sys"));
@@ -50,9 +70,9 @@ pub fn build(b: *Builder) !void {
 
     // zig build all
     const all_step: *Builder.Step = b.step("all", "Build the kernel, userland and ISO");
-    all_step.dependOn(&iso.step);
+    all_step.dependOn(iso_step);
 
     // A plain `zig build` builds the kernel and the userland.
-    b.default_step.dependOn(&buildkernel.step);
-    b.default_step.dependOn(&builduserland.step);
+    b.default_step.dependOn(buildkernel_step);
+    b.default_step.dependOn(builduserland_step);
 }

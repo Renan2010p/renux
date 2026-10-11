@@ -42,54 +42,77 @@ handling yet — see the roadmap below.
 Requirements:
 
 - Zig **0.17.0-dev** (see `.zigversion`)
+- `gcc` (optionally, to build the Limine host tool once)
+- `xorriso` (to build the ISO image)
+
+Build from the repository root:
 
 ```sh
-cd sys
-zig build -Drelease=true   # optimized kernel -> sys/zig-out/bin/kernel
+zig build buildkernel     # kernel
+zig build builduserland   # /sbin/init
+zig build iso             # bootable ISO (kernel + userland)
+zig build run             # boot the ISO in QEMU
+zig build all             # kernel + userland + ISO
 ```
+
+The finished artifacts are collected in the root `zig-out/`:
+
+```
+zig-out/bin/kernel
+zig-out/bin/init
+zig-out/zenbsd.iso
+```
+
+Each subproject keeps its own working `zig-out/` (`sys/zig-out`,
+`sbin/zig-out`).
 
 Notes:
 
-- Plain `zig build` produces a **debug** kernel (large, with full debug info).
-  Add `-Drelease=true` for an optimized image.
-- The build targets `x86_64-freestanding-none` with `abi=none`,
+- Plain `zig build` (root or `sys/`) produces a **debug** kernel (large, with
+  full debug info). In `sys/`, add `-Drelease=true` for an optimized image.
+- The kernel targets `x86_64-freestanding-none` with `abi=none`,
   `code_model=kernel`, `red_zone=false`, and `pic=false`.
 
 ## Repository layout
 
-The tree deliberately mirrors the NetBSD layout so it is familiar to BSD
-developers:
+The tree follows the NetBSD (and FreeBSD `x86/`) conventions so it is familiar
+to BSD developers:
 
 ```
-sys/
-  build.zig            kernel build definition
-  index.zig            kernel root module (wires everything together)
+build.zig              top-level build (drives sys/ and sbin/)
+sys/                   kernel
+  sys_root.zig         kernel root module
+  sys/, kern/, uvm/, dev/, stand/
   arch/                machine-dependent code
     arch.zig           architecture dispatch (comptime switch)
-    amd64/             amd64 port
-      machdep.zig      per-arch module aggregation
-      amd64/           NetBSD-style machine directory
-        cpu.zig        CPU primitives (halt, interrupt flags, ...)
-        locore.zig     low-level entry point
-  kern/                machine-independent kernel core
-    init_main.zig      kernel entry (main -> idle)
-  dev/                 device drivers
-    ic/vga/vga.zig     ISA/VGA console driver (stub)
-  conf/                kernel configuration
-  sys/                 kernel headers / shared interfaces
+    x86/               x86-family code shared by all ports
+    amd64/             amd64 port (locore, gdt, vector, trap, conf/)
+sbin/                  userland
+  build.zig            userland build definition
+  init/main.zig        /sbin/init
 ```
 
-## Roadmap
+## Status
 
-1. **Boot.** Limine (or Multiboot2) header, linker script, long-mode entry,
-   minimal GDT/IDT, and a bootable ISO.
-2. **Memory.** Physical page allocator, virtual memory / paging, kernel heap.
-3. **Interrupts & time.** IDT + exception handling, APIC, timers.
-4. **Scheduling & processes.** Threads, context switching, syscall ABI.
-5. **Drivers.** Console, serial, storage, input.
-6. **Userland & libc.** Minimal libc, init, shell.
-7. **Portability.** Bring-up of a second architecture to validate the
-   `sys/arch` abstractions.
+Working today:
+
+- **Boot:** Limine (higher half), explicit linker script, GDT + TSS, IDT with
+  trap handling.
+- **Console:** serial plus a graphical raster console (wsfont / rasops / rcons)
+  with a block cursor.
+- **Memory:** physical page allocator, x86 pmap with user mappings, demand-zero
+  page faults.
+- **Interrupts:** legacy 8259 PIC and the 8254 PIT at 100 Hz.
+- **Init:** FreeBSD-style SYSINIT / mi_startup with a FreeBSD-format boot log.
+- **Userland:** ring 3 entry, `int 0x80` system calls, an ELF64 loader, and a
+  `/sbin/init` that prints and exits.
+
+Next:
+
+- Processes/LWPs with their own address space (own CR3), `fork`/`exec`, and a
+  scheduler.
+- `syscall`/`sysret`, a minimal libc, and a shell.
+- Drivers (storage, input) and a second architecture to validate `sys/arch`.
 
 ## Contributing
 
