@@ -56,16 +56,19 @@ pub fn console() cons.Console {
     return .{ .putc = putc };
 }
 
-/// Draw the cursor as an underline in the bottom pixel row of the current cell.
+/// Draw the cursor as a filled block over the current cell, as the BSD
+/// consoles do.
 fn drawCursor() void {
-    const y: u32 = rcons.cy * @as(u32, rcons.font.height) + @as(u32, rcons.font.height) - 1;
-    rasops32.fillRect(&rcons.raster, rcons.cx * @as(u32, rcons.font.width), y, rcons.font.width, 1, rcons.fg);
+    const cw: u32 = rcons.font.width;
+    const ch: u32 = rcons.font.height;
+    rasops32.fillRect(&rcons.raster, rcons.cx * cw, rcons.cy * ch, cw, ch, rcons.fg);
 }
 
-/// Erase the cursor underline by repainting the row in the background colour.
+/// Erase the cursor block by repainting the cell in the background colour.
 fn eraseCursor() void {
-    const y: u32 = rcons.cy * @as(u32, rcons.font.height) + @as(u32, rcons.font.height) - 1;
-    rasops32.fillRect(&rcons.raster, rcons.cx * @as(u32, rcons.font.width), y, rcons.font.width, 1, rcons.bg);
+    const cw: u32 = rcons.font.width;
+    const ch: u32 = rcons.font.height;
+    rasops32.fillRect(&rcons.raster, rcons.cx * cw, rcons.cy * ch, cw, ch, rcons.bg);
 }
 
 /// Move to the next line, scrolling when the bottom is reached.
