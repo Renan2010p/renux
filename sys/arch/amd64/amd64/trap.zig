@@ -18,6 +18,8 @@ const syscall: type = @import("../../x86/x86/syscall.zig");
 const vector: type = @import("vector.zig");
 const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
 const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const sys: type = @import("../../../sys/syscall.zig");
+const errno: type = @import("../../../sys/errno.zig");
 const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const kern_signal: type = @import("../../../kern/kern_signal.zig");
 const param: type = @import("../../../sys/param.zig");
@@ -25,6 +27,10 @@ const prf: type = @import("../../../kern/subr_prf.zig");
 
 /// The trap frame of the trap currently being handled (used by fork()).
 var trap_frame: ?*trap.TrapFrame = null;
+
+/// Synthetic vector the `syscall` entry pushes so the dispatcher can apply the
+/// FreeBSD error convention (carry flag + errno).
+pub const FASTSYSCALL_VECTOR: u64 = 0x81;
 
 /// The trap frame being handled on this CPU, if any.
 pub fn currentFrame() ?*trap.TrapFrame {
@@ -116,6 +122,28 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
             frame.r8,
             frame.r9,
         );
+        return;
+    }
+
+    if (frame.vector == FASTSYSCALL_VECTOR) {
+        // FreeBSD convention: on error, set the carry flag and put the errno in
+        // rax; on success clear the carry flag.
+        const result: u64 = syscall.dispatch(
+            frame.rax,
+            frame.rdi,
+            frame.rsi,
+            frame.rdx,
+            frame.r10,
+            frame.r8,
+            frame.r9,
+        );
+        if (result == sys.ERROR) {
+            frame.rax = @intCast(errno.EINVAL);
+            frame.rflags |= 1;
+        } else {
+            frame.rax = result;
+            frame.rflags &= ~@as(u64, 1);
+        }
         return;
     }
 

@@ -61,6 +61,7 @@ pub fn scheduler() noreturn {
             p.state = .running;
             kern_proc.current = p;
             arch.gdt.setKernelStack(p.kstack_top);
+            arch.syscall_entry.setKernelStack(p.kstack_top);
             arch.pmap.activate(p.pmap);
             in_scheduler = false;
             arch.swtch.swtch(&sched_ctx, &p.context);
@@ -69,6 +70,7 @@ pub fn scheduler() noreturn {
         if (!found) {
             // Nothing runnable: idle until an interrupt arrives.
             arch.gdt.setKernelStack(schedStackTop());
+            arch.syscall_entry.setKernelStack(schedStackTop());
             arch.cpu.enable_interrupts();
             arch.cpu.halt();
             arch.cpu.disable_interrupts();

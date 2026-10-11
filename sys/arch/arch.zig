@@ -43,6 +43,9 @@ pub const pmap: type = machdep_impl.pmap;
 pub const proc_md: type = machdep_impl.proc_md;
 pub const swtch: type = machdep_impl.swtch;
 
+/// Machine-dependent `syscall` instruction entry.
+pub const syscall_entry: type = machdep_impl.syscall_entry;
+
 /// Machine-dependent trap frame layout.
 pub const trapframe: type = machdep_impl.trapframe;
 

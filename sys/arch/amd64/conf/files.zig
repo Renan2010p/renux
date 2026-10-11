@@ -28,6 +28,7 @@ pub const gdt: type = @import("../amd64/gdt.zig");
 pub const vector: type = @import("../amd64/vector.zig");
 pub const trap: type = @import("../amd64/trap.zig");
 pub const swtch: type = @import("../amd64/swtch.zig");
+pub const syscall_entry: type = @import("../amd64/syscall_entry.zig");
 pub const proc_md: type = @import("../include/proc.zig");
 pub const trapframe: type = @import("../include/trap.zig");
 pub const vmparam: type = @import("../include/vmparam.zig");
@@ -51,6 +52,7 @@ comptime {
     _ = @import("../amd64/vector.zig");
     _ = @import("../amd64/trap.zig");
     _ = @import("../amd64/swtch.zig");
+    _ = @import("../amd64/syscall_entry.zig");
     _ = @import("../include/proc.zig");
     _ = @import("../include/trap.zig");
     _ = @import("../include/vmparam.zig");
