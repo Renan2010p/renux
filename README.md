@@ -34,11 +34,27 @@ move to a future GPL version without asking every contributor for permission.
 Third-party code keeps its own license: the vendored FreeBSD `rtld-elf`, for
 instance, remains under its BSD-2-Clause terms.
 
+## ABI
+
+Renux's native system-call and C ABI is the **FreeBSD/amd64 ABI**: the same
+system-call numbers, the `syscall` instruction with carry-flag error reporting,
+the `Elf_Auxinfo` layout, the process-entry convention (`%rdi` points at argc),
+and the structures programs see (`stat`, `dirent`, `rlimit`, `timespec`, ...).
+The dynamic linker is FreeBSD's own `rtld-elf`.
+
+A binary built for FreeBSD/amd64 should therefore run on Renux unchanged. That
+is what lets the project reuse the FreeBSD userland, and it is the road to
+running large programs such as Xorg:
+
+1. FreeBSD **static** binaries — done (`/rescue/echo` runs).
+2. FreeBSD **dynamic** binaries (real `ld-elf.so.1` + `libc.so.7`).
+3. Threads (`thr_self`, `_umtx_op`, `thr_wake`) and `kqueue`.
+4. Sockets and shared memory.
+5. The drivers a graphical stack needs (input, DRM/KMS).
+
 ## Status
 
-Very early, pre-boot bring-up. The tree currently builds a freestanding kernel
-image for `amd64`. There is no bootloader integration, paging, or interrupt
-handling yet — see the roadmap below.
+See the status section near the end of this file.
 
 ## Building
 
@@ -110,22 +126,25 @@ tools/                 build helper scripts (get-limine.sh, mkiso.sh)
 Working today:
 
 - **Boot:** Limine (higher half), explicit linker script, GDT + TSS, IDT with
-  trap handling.
+  trap handling; FreeBSD-style SYSINIT / mi_startup and boot log.
 - **Console:** serial plus a graphical raster console (wsfont / rasops / rcons)
   with a block cursor.
-- **Memory:** physical page allocator, x86 pmap with user mappings, demand-zero
-  page faults.
-- **Interrupts:** legacy 8259 PIC and the 8254 PIT at 100 Hz.
-- **Init:** FreeBSD-style SYSINIT / mi_startup with a FreeBSD-format boot log.
-- **Userland:** ring 3 entry, `int 0x80` system calls, an ELF64 loader, and a
-  `/sbin/init` that prints and exits.
+- **Memory:** physical page allocator, x86 pmap with per-process address spaces,
+  demand-zero page faults, `brk` and file-backed `mmap`.
+- **Interrupts:** legacy 8259 PIC and the 8254 PIT at 100 Hz, preemptive
+  scheduling over a process table.
+- **Processes:** fork/exec/wait/exit, signals, sysarch, and the FreeBSD/amd64
+  system-call ABI (`syscall`/`iretq`).
+- **VFS:** tmpfs root, file and directory system calls, tty/termios.
+- **Userland:** a Zig libc, shell and BSD-style utilities, a standalone C
+  toolchain, dynamic linking (`ld-elf.so.1` + `libc.so.1`), and a real FreeBSD
+  static binary (`/rescue/echo`).
 
 Next:
 
-- Processes/LWPs with their own address space (own CR3), `fork`/`exec`, and a
-  scheduler.
-- `syscall`/`sysret`, a minimal libc, and a shell.
-- Drivers (storage, input) and a second architecture to validate `sys/arch`.
+- FreeBSD dynamic binaries (real `ld-elf.so.1` + `libc.so.7`).
+- Threads and `kqueue`; then sockets and shared memory.
+- Drivers for a graphical stack (input, DRM/KMS) — the road to Xorg.
 
 ## Contributing
 
