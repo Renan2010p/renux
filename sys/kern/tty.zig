@@ -179,7 +179,7 @@ pub fn ioctl(t: *Tty, cmd: u64, arg: u64) i32 {
             copyOut(dst, @ptrCast(&t.termios), @sizeOf(termios.Termios));
             return 0;
         },
-        ttycom.TIOCSETA => {
+        ttycom.TIOCSETA, ttycom.TIOCSETAW, ttycom.TIOCSETAF => {
             const src: [*]const u8 = @ptrFromInt(arg);
             copyIn(@ptrCast(&t.termios), src, @sizeOf(termios.Termios));
             return 0;
@@ -197,6 +197,21 @@ pub fn ioctl(t: *Tty, cmd: u64, arg: u64) i32 {
         ttycom.TIOCSWINSZ => {
             const src: [*]const u8 = @ptrFromInt(arg);
             copyIn(@ptrCast(&t.winsize), src, @sizeOf(termios.Winsize));
+            return 0;
+        },
+        ttycom.TIOCGPGRP => {
+            const dst: *align(1) i32 = @ptrFromInt(arg);
+            dst.* = t.fg_pid;
+            return 0;
+        },
+        ttycom.TIOCSPGRP => {
+            const src: *align(1) const i32 = @ptrFromInt(arg);
+            t.fg_pid = src.*;
+            return 0;
+        },
+        ttycom.FIONREAD => {
+            const dst: *align(1) i32 = @ptrFromInt(arg);
+            dst.* = if (t.have_line) @intCast(t.ready_len - t.ready_pos) else 0;
             return 0;
         },
         else => return -@as(i32, @import("../sys/errno.zig").ENOTTY),

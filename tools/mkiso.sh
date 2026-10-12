@@ -142,9 +142,21 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         cp "$FBSDLIB/usr/share/misc/termcap" "$WORK/usr/share/misc/termcap"
         sed -i '/cmdline:/i\    module_path: boot():/usr/share/misc/termcap' "$WORK/limine.conf"
     fi
+    # terminfo entries, for ncurses/libedit (compiled on the build host).
+    for t in x/xterm x/xterm-256color v/vt100 v/vt220 l/linux c/cons25 n/network; do
+        if [ -f "/usr/share/terminfo/$t" ]; then
+            mkdir -p "$WORK/usr/share/terminfo/$(dirname "$t")"
+            cp "/usr/share/terminfo/$t" "$WORK/usr/share/terminfo/$t"
+            sed -i "/cmdline:/i\\    module_path: boot():/usr/share/terminfo/$t" "$WORK/limine.conf"
+        fi
+    done
     if [ -f "$FBSDLIB/bin/echo" ]; then
         cp "$FBSDLIB/bin/echo" "$WORK/usr/bin/fbsd-echo"
         sed -i '/cmdline:/i\    module_path: boot():/usr/bin/fbsd-echo' "$WORK/limine.conf"
+    fi
+    if [ -f "$FBSDLIB/bin/sh" ]; then
+        cp "$FBSDLIB/bin/sh" "$WORK/bin/fbsdsh"
+        sed -i '/cmdline:/i\    module_path: boot():/bin/fbsdsh' "$WORK/limine.conf"
     fi
 fi
 

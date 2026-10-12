@@ -20,6 +20,9 @@ comptime {
 const MAX_LINE: usize = 256;
 const MAX_NAME: usize = 128;
 const MAX_PATH: usize = 256;
+
+/// The environment this shell was started with, passed on to every child.
+var shell_env: [*]?[*:0]const u8 = undefined;
 const MAX_ARGS: usize = 8;
 
 /// Copy `s` into `buf` and NUL-terminate it, returning the C string.
@@ -126,17 +129,15 @@ fn runExternal(name: []const u8, rest: []const u8, background: bool) void {
     }
     av[argc] = null;
 
-    var ep: [1]?[*:0]const u8 = .{null};
-
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {
         if (hasSlash(name)) {
             // An explicit path: execute it directly.
-            _ = libc.syscall.execve(@ptrCast(&nbuf[0]), @ptrCast(&av), @ptrCast(&ep));
+            _ = libc.syscall.execve(@ptrCast(&nbuf[0]), @ptrCast(&av), shell_env);
         } else {
-            tryExec("/bin", name, @ptrCast(&av), @ptrCast(&ep));
-            tryExec("/usr/bin", name, @ptrCast(&av), @ptrCast(&ep));
-            tryExec("/usr/sbin", name, @ptrCast(&av), @ptrCast(&ep));
+            tryExec("/bin", name, @ptrCast(&av), shell_env);
+            tryExec("/usr/bin", name, @ptrCast(&av), shell_env);
+            tryExec("/usr/sbin", name, @ptrCast(&av), shell_env);
         }
         printf("sh: %s: not found\n", .{name});
         libc.syscall.exit(127);
@@ -329,7 +330,8 @@ fn buildPrompt(buf: []u8) []const u8 {
 }
 
 export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
-    _ = envp;
+    shell_env = envp;
+    libc.c.setEnviron(envp);
 
     // "sh script": run the script and exit.
     if (argc >= 2) {

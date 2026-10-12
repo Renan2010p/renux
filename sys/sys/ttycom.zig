@@ -23,7 +23,17 @@ fn ioc(dir: u64, group: u8, num: u8, len: usize) u64 {
 pub const TIOCGETA: u64 = ioc(IOC_OUT, 't', 19, @sizeOf(termios.Termios));
 /// Set terminal attributes (a struct termios).
 pub const TIOCSETA: u64 = ioc(IOC_IN, 't', 20, @sizeOf(termios.Termios));
+/// Set terminal attributes after draining output (a struct termios).
+pub const TIOCSETAW: u64 = ioc(IOC_IN, 't', 21, @sizeOf(termios.Termios));
+/// Set terminal attributes, flushing input and draining output.
+pub const TIOCSETAF: u64 = ioc(IOC_IN, 't', 22, @sizeOf(termios.Termios));
 /// Get the window size (a struct winsize).
 pub const TIOCGWINSZ: u64 = ioc(IOC_OUT, 't', 104, @sizeOf(termios.Winsize));
 /// Set the window size (a struct winsize).
 pub const TIOCSWINSZ: u64 = ioc(IOC_IN, 't', 103, @sizeOf(termios.Winsize));
+/// Get the process group of the terminal (an int).
+pub const TIOCGPGRP: u64 = ioc(IOC_OUT, 't', 119, @sizeOf(c_int));
+/// Set the process group of the terminal (an int).
+pub const TIOCSPGRP: u64 = ioc(IOC_IN, 't', 118, @sizeOf(c_int));
+/// Get the number of bytes available to read (an int).
+pub const FIONREAD: u64 = ioc(IOC_OUT, 'f', 127, @sizeOf(c_int));
