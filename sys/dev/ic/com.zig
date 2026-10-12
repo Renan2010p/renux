@@ -79,7 +79,7 @@ pub fn putc(c: u8) void {
 
 /// The console descriptor for this driver, for cons.cn_attach().
 pub fn console() cons.Console {
-    return .{ .putc = putc, .getc = getc, .trygetc = tryGetc };
+    return .{ .putc = putc, .getc = getc, .trygetc = tryGetc, .inputReady = receiverReady };
 }
 
 fn receiverReady() bool {

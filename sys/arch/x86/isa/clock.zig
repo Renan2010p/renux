@@ -15,12 +15,20 @@ const intr: type = @import("../x86/intr.zig");
 const intrdefs: type = @import("../include/intrdefs.zig");
 const pic: type = @import("../x86/i8259.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
+const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const sysinit: type = @import("../../../sys/sysinit.zig");
 
 /// Tick rate in Hz.
 pub const HZ: u32 = 100;
 
 var ticks: u64 = 0;
+/// Channel poll(2) sleeps on: the tick wakes it so a poll timeout elapses.
+var poll_chan: u8 = 0;
+
+/// Channel a poll(2) waits on between readiness checks.
+pub fn pollChannel() *anyopaque {
+    return @ptrCast(&poll_chan);
+}
 
 fn outb(port: u16, value: u8) void {
     bus_space.write1(.io, port, 0, value);
@@ -52,6 +60,8 @@ fn tick() void {
     if (heartbeat and ticks % HZ == 0) {
         prf.print(".");
     }
+    // Wake anyone waiting in poll(2) so it can re-check readiness / time out.
+    kern_sched.wakeup(pollChannel());
 }
 
 fn clockInit(_: ?*const anyopaque) callconv(.c) void {

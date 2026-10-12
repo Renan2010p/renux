@@ -38,6 +38,8 @@ pub const Console: type = struct {
     size: ?*const fn () ?Size = null,
     /// Report whether the terminal wants application cursor keys (DECCKM).
     appCursor: ?*const fn () bool = null,
+    /// Report whether a character is ready to read, without consuming it.
+    inputReady: ?*const fn () bool = null,
 };
 
 var consoles: [MAX_CONSOLES]Console = undefined;
@@ -150,6 +152,22 @@ pub fn cnAppCursor() bool {
     var i: usize = 0;
     while (i < nconsoles) : (i += 1) {
         if (consoles[i].appCursor) |f| {
+            if (f()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// True when a character is waiting to be read (used by poll(2)).
+pub fn cnInputReady() bool {
+    if (input_head != input_tail) {
+        return true;
+    }
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].inputReady) |f| {
             if (f()) {
                 return true;
             }

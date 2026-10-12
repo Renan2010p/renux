@@ -26,6 +26,7 @@ const kern_resource: type = @import("kern_resource.zig");
 const vfs_syscalls: type = @import("vfs_syscalls.zig");
 const arch_sysarch: type = @import("../arch/arch.zig");
 const sys_generic: type = @import("sys_generic.zig");
+const sys_poll: type = @import("sys_poll.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
 const uvm_mmap: type = @import("../uvm/uvm_mmap.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
@@ -188,6 +189,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_utimensat, .handler = sysOk },
     .{ .num = sys.SYS_getppid, .handler = sysGetppid },
     .{ .num = sys.SYS_getgid, .handler = sysOk },
+    .{ .num = sys.SYS_poll, .handler = sys_poll.sysPoll },
 };
 
 /// Number-to-handler table, indexed by system call number.

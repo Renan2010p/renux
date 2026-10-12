@@ -78,6 +78,7 @@ pub const SYS_utimensat: u64 = 547;
 pub const SYS_rename: u64 = 128;
 pub const SYS_getppid: u64 = 39;
 pub const SYS_getgid: u64 = 47;
+pub const SYS_poll: u64 = 209;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;
