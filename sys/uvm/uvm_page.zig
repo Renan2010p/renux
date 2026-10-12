@@ -88,3 +88,8 @@ pub fn physfree(pa: u64) void {
 pub fn freeCount() usize {
     return @intCast(bm.freeCount());
 }
+
+/// Total physical pages covered by the loaded memory (for sysctl vm.stats).
+pub fn totalPages() usize {
+    return @intCast(mem_top >> phys.PAGE_SHIFT);
+}

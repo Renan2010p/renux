@@ -13,6 +13,10 @@ const errno: type = @import("../sys/errno.zig");
 const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
+const proc: type = @import("../sys/proc.zig");
+const kern_proc: type = @import("kern_proc.zig");
+const kern_time: type = @import("kern_time.zig");
+const user: type = @import("../sys/user.zig");
 
 const CTL_SYSCTL: u64 = 0;
 const CTL_KERN: u64 = 1;
@@ -31,6 +35,15 @@ const VM_INACTIVE_COUNT: u64 = 104;
 const VM_WIRE_COUNT: u64 = 105;
 const VM_CACHE_COUNT: u64 = 106;
 const VM_DMMAX: u64 = 107;
+const VM_LOADAVG: u64 = 108;
+
+/// FreeBSD KERN_PROC and its subtypes.
+const KERN_PROC: u64 = 14;
+const KERN_PROC_ALL: u64 = 0;
+const KERN_PROC_PID: u64 = 1;
+const KERN_PROC_PROC: u64 = 8;
+const KERN_SMP_CPUS: u64 = 119;
+const KERN_SMP_MAXCPUS: u64 = 120;
 
 const KERN_OSTYPE: u64 = 1;
 const KERN_OSRELEASE: u64 = 2;
@@ -144,9 +157,12 @@ const name_mib = [_]NameMib{
     .{ .name = "kern.cp_time", .mib = &.{ CTL_KERN, KERN_CP_TIME } },
     .{ .name = "kern.cp_times", .mib = &.{ CTL_KERN, KERN_CP_TIMES } },
     .{ .name = "kern.smp.active", .mib = &.{ CTL_KERN, KERN_SMP_ACTIVE } },
+    .{ .name = "kern.smp.cpus", .mib = &.{ CTL_KERN, KERN_SMP_CPUS } },
+    .{ .name = "kern.smp.maxcpus", .mib = &.{ CTL_KERN, KERN_SMP_MAXCPUS } },
     .{ .name = "kern.fscale", .mib = &.{ CTL_KERN, KERN_FSCALE } },
     .{ .name = "kern.boottrace.boottrace", .mib = &.{ CTL_KERN, KERN_BOOTTRACE_BOOTTRACE } },
     .{ .name = "vm.dmmax", .mib = &.{ CTL_VM, VM_DMMAX } },
+    .{ .name = "vm.loadavg", .mib = &.{ CTL_VM, VM_LOADAVG } },
 };
 
 /// Look up a "a.b.c" name in the OID table.
@@ -241,15 +257,91 @@ fn reportLong(oldp: u64, oldlenp: u64, v: i64) u64 {
 /// idle) for the single CPU. They are non-zero so tools that take a delta do
 /// not divide by zero.
 fn reportCpTime(oldp: u64, oldlenp: u64) u64 {
+    const t: u64 = arch.clock.tickCount();
+    // user, nice, sys, intr, idle -- non-zero so a delta never divides by zero,
+    // and mostly idle so the meter reflects an idle machine.
+    const vals = [5]u64{ t / 20, 0, t / 40, 0, t };
     var b: [5 * 8]u8 = undefined;
     var slot: usize = 0;
     while (slot < 5) : (slot += 1) {
         var i: usize = 0;
         while (i < 8) : (i += 1) {
-            b[slot * 8 + i] = 0;
+            b[slot * 8 + i] = @truncate(vals[slot] >> @intCast(i * 8));
         }
-        b[slot * 8] = 1;
     }
+    return report(oldp, oldlenp, &b);
+}
+
+/// Buffer for the kinfo_proc array KERN_PROC returns (one per process slot).
+var proclist_buf: [64]user.KinfoProc = undefined;
+
+/// Fill one kinfo_proc from a process.
+fn fillProc(k: *user.KinfoProc, p: *proc.Proc) void {
+    const raw: [*]u8 = @ptrCast(k);
+    var i: usize = 0;
+    while (i < @sizeOf(user.KinfoProc)) : (i += 1) {
+        raw[i] = 0;
+    }
+    k.ki_structsize = @intCast(@sizeOf(user.KinfoProc));
+    k.ki_pid = p.pid;
+    k.ki_ppid = if (p.parent) |par| par.pid else 0;
+    k.ki_pgid = p.pid;
+    k.ki_sid = p.pid;
+    k.ki_uid = p.uid;
+    k.ki_ruid = p.uid;
+    k.ki_svuid = p.uid;
+    k.ki_stat = switch (p.state) {
+        .running, .runnable => 'R',
+        .sleeping => 'S',
+        .zombie => 'Z',
+        else => 'S',
+    };
+    k.ki_pri = .{ .class = 0, .level = 80, .native = 80, .user = 0 };
+    k.ki_tid = p.pid;
+    k.ki_numthreads = 1;
+    k.ki_size = p.brk;
+    var j: usize = 0;
+    while (j < p.name_len and j < user.COMMLEN) : (j += 1) {
+        k.ki_comm[j] = p.name[j];
+    }
+    k.ki_comm[j] = 0;
+    const emul: []const u8 = "native";
+    var e: usize = 0;
+    while (e < emul.len and e < user.KI_EMULNAMELEN) : (e += 1) {
+        k.ki_emul[e] = emul[e];
+    }
+}
+
+/// sysctl(KERN_PROC, ...): an array of kinfo_proc.
+fn procList(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
+    const op: u64 = if (mib.len >= 3) mib[2] else KERN_PROC_ALL;
+    const arg: u64 = if (mib.len >= 4) mib[3] else 0;
+    var n: usize = 0;
+    for (&kern_proc.table) |*p| {
+        if (p.state == .unused) {
+            continue;
+        }
+        if (op == KERN_PROC_PID and p.pid != @as(i32, @bitCast(@as(u32, @truncate(arg))))) {
+            continue;
+        }
+        if (n >= proclist_buf.len) {
+            break;
+        }
+        fillProc(&proclist_buf[n], p);
+        n += 1;
+    }
+    const raw: [*]const u8 = @ptrCast(&proclist_buf[0]);
+    return report(oldp, oldlenp, raw[0 .. n * @sizeOf(user.KinfoProc)]);
+}
+
+/// vm.loadavg: struct loadavg { fixpt_t ldavg[3]; long fscale; }.
+fn loadavg(oldp: u64, oldlenp: u64) u64 {
+    var b: [24]u8 = undefined;
+    var i: usize = 0;
+    while (i < 24) : (i += 1) {
+        b[i] = 0;
+    }
+    b[17] = 0x08; // fscale at offset 16 == 2048
     return report(oldp, oldlenp, &b);
 }
 
@@ -272,7 +364,7 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             // FreeBSD's securelevel is -1 when unset (the kernel runs without a
             // securelevel); init reads this to decide whether to raise it.
             KERN_SECURELEVEL => return reportInt(oldp, oldlenp, -1),
-            KERN_BOOTTIME => return reportLong(oldp, oldlenp, 0),
+            KERN_BOOTTIME => return reportLong(oldp, oldlenp, @intCast(kern_time.EPOCH)),
             KERN_USRSTACK => return reportLong(oldp, oldlenp, @intCast(arch.vmparam.USER_STACK_TOP)),
             KERN_PID_MAX => return reportInt(oldp, oldlenp, 99999),
             KERN_CONSOLE => return report(oldp, oldlenp, "\x00"),
@@ -281,13 +373,17 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             KERN_SMP_ACTIVE => return reportInt(oldp, oldlenp, 0),
             KERN_FSCALE => return reportInt(oldp, oldlenp, 1),
             KERN_BOOTTRACE_BOOTTRACE => return reportInt(oldp, oldlenp, 0),
+            KERN_PROC => return procList(mib, oldp, oldlenp),
+            KERN_SMP_CPUS, KERN_SMP_MAXCPUS => return reportInt(oldp, oldlenp, 1),
             else => return sys.signed(-errno.ENOENT),
         },
         CTL_VM => switch (id) {
             VM_PAGE_SIZE => return reportInt(oldp, oldlenp, @intCast(param.PAGE_SIZE)),
-            VM_PAGE_COUNT => return reportInt(oldp, oldlenp, 131072),
+            VM_PAGE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.totalPages())),
             VM_FREE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.freeCount())),
-            VM_ACTIVE_COUNT, VM_INACTIVE_COUNT, VM_WIRE_COUNT, VM_CACHE_COUNT, VM_DMMAX => return reportInt(oldp, oldlenp, 0),
+            VM_ACTIVE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.totalPages() - uvm_page.freeCount())),
+            VM_INACTIVE_COUNT, VM_WIRE_COUNT, VM_CACHE_COUNT, VM_DMMAX => return reportInt(oldp, oldlenp, 0),
+            VM_LOADAVG => return loadavg(oldp, oldlenp),
             else => return sys.signed(-errno.ENOENT),
         },
         CTL_HW => switch (id) {

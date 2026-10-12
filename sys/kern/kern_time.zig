@@ -11,8 +11,9 @@ const sys: type = @import("../sys/syscall.zig");
 const arch: type = @import("../arch/arch.zig");
 const errno: type = @import("../sys/errno.zig");
 
-/// Seconds at boot, 2026-01-01T00:00:00Z (there is no RTC to read).
-const EPOCH: u64 = 1767225600;
+/// Seconds at boot, 2026-01-01T00:00:00Z (there is no RTC to read). Published so
+/// sysctl kern.boottime reports it and uptime is measured from boot.
+pub const EPOCH: u64 = 1767225600;
 
 /// A time value (NetBSD's struct timeval).
 pub const Timeval: type = extern struct {

@@ -431,6 +431,24 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
         }
     }
 
+    // Record the program name (basename of the executable), for ps/top/htop.
+    {
+        var base: usize = 0;
+        var j: usize = 0;
+        while (j < exe_path.len) : (j += 1) {
+            if (exe_path[j] == '/') {
+                base = j + 1;
+            }
+        }
+        const bn: []const u8 = exe_path[base..];
+        const m: usize = if (bn.len > p.name.len) p.name.len else bn.len;
+        var q: usize = 0;
+        while (q < m) : (q += 1) {
+            p.name[q] = bn[q];
+        }
+        p.name_len = m;
+    }
+
     const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -errno.ENOMEM;
     const main: exec_elf.Result = loadInto(p.cwd, newmap, exe_path, 0) orelse return -errno.ENOEXEC;
     if (!mapStack(newmap)) {

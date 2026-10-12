@@ -61,6 +61,10 @@ pub const Proc: type = struct {
     fsbase: u64,
     /// Real user id.
     uid: u32,
+    /// Program name (basename of the executable), for ps/top/htop.
+    name: [20]u8,
+    /// Length of `name`.
+    name_len: usize,
     /// Pending signal bits.
     sig_pending: u64,
     /// Blocked signal bits.
