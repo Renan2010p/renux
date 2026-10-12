@@ -37,6 +37,8 @@ var cur_reverse: bool = false;
 var cursor_visible: bool = true;
 var scroll_top: u32 = 0;
 var scroll_bot: u32 = 0;
+/// Last graphic character written, repeated by REP (CSI n b).
+var last_ch: u8 = ' ';
 
 // Escape parser.
 const State: type = enum { ground, esc, csi, osc, osc_esc, charset };
@@ -143,6 +145,7 @@ fn putChar(ch: u8) void {
     }
     grid[cy][cx].ch = ch;
     grid[cy][cx].reverse = cur_reverse;
+    last_ch = ch;
     drawCell(cy, cx);
     if (cx + 1 >= cols) {
         cx = 0;
@@ -419,6 +422,14 @@ fn dispatch(final: u8) void {
         'M' => deleteLines(param(0, 1)),
         'P' => deleteChars(param(0, 1)),
         'X' => eraseRange(cy, cx, cx + param(0, 1)),
+        '@' => insertChars(param(0, 1)),
+        'b' => {
+            // REP: repeat the preceding graphic character n times (nano uses
+            // this to fill its bars).
+            const n = param(0, 1);
+            var i: u32 = 0;
+            while (i < n) : (i += 1) putChar(last_ch);
+        },
         'r' => {
             const top = param(0, 1) - 1;
             const bot = param(1, rows) - 1;
@@ -545,6 +556,21 @@ fn deleteChars(n: u32) void {
     }
     while (c < cols) : (c += 1) {
         grid[cy][c] = .{};
+    }
+    c = cx;
+    while (c < cols) : (c += 1) drawCell(cy, c);
+}
+
+/// ICH: shift the line right by `n` cells from the cursor, blanking the gap.
+fn insertChars(n: u32) void {
+    var c: u32 = cols;
+    while (c > cx + n) {
+        c -= 1;
+        grid[cy][c] = grid[cy][c - n];
+    }
+    var k: u32 = cx;
+    while (k < cx + n and k < cols) : (k += 1) {
+        grid[cy][k] = .{};
     }
     c = cx;
     while (c < cols) : (c += 1) drawCell(cy, c);
