@@ -132,10 +132,22 @@ pub fn sysPread(args: [sys.MAXARGS]u64) u64 {
     return @intCast(n);
 }
 
-/// fcntl(2): minimal. File status flags are not modelled, so the operations a
-/// C library probes return success/zero.
+/// fcntl(2): implement the descriptor flags a C library probes. File status
+/// flags are derived from the descriptor's read/write mode; everything else is
+/// accepted and ignored.
 pub fn sysFcntl(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
+    const fd: u64 = args[0];
+    const cmd: u64 = args[1];
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
+
+    const F_GETFL: u64 = 3;
+    if (cmd == F_GETFL) {
+        const r: bool = (f.f_flag & file.FREAD) != 0;
+        const w: bool = (f.f_flag & file.FWRITE) != 0;
+        // O_RDONLY == 0, O_WRONLY == 1, O_RDWR == 2.
+        const v: i64 = if (r and w) 2 else if (w) 1 else 0;
+        return @intCast(v);
+    }
     return 0;
 }
 
