@@ -104,6 +104,11 @@ pub fn free(p: *proc.Proc) void {
         vfs_subr.vrele(cwd);
         p.cwd = null;
     }
+    if (p.pmap != 0) {
+        if (arch.boot.hhdmOffset()) |off| {
+            arch.pmap.destroy(p.pmap, off);
+        }
+    }
     if (p.kstack_page != 0) {
         uvm_page.physfree(p.kstack_page);
     }

@@ -489,8 +489,13 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     }
     p.sig_pending = 0;
 
+    const oldmap: arch.pmap.Pmap = p.pmap;
     arch.pmap.activate(newmap);
     p.pmap = newmap;
+    // The pre-exec address space is freed when the process exits; tearing it
+    // down here (while still returning through the old kernel context) is not
+    // safe yet.
+    _ = oldmap;
 
     frame.rip = entry;
     frame.rsp = info.rsp;

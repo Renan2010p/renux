@@ -174,10 +174,55 @@ pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
     }
 }
 
+/// Tear down the user half of `p`: return the user data pages to the physical
+/// allocator, so a process that exits does not leak its whole address space.
+/// The page-table pages are left allocated: some intermediate tables are shared
+/// (the kernel half is), so freeing them corrupts other processes. This is
+/// called when a process is reaped; the direct-map offset is passed in, as
+/// destroy() may be reached through a module instance that has not seen
+/// bootstrap().
+pub fn destroy(p: Pmap, hhdm_off: u64) void {
+    const pml4: [*]u64 = @ptrFromInt((p & pte.FRAME_MASK) + hhdm_off);
+    var idx4: usize = 0;
+    while (idx4 < KERNEL_PML4_START) : (idx4 += 1) {
+        const e4: u64 = pml4[idx4];
+        if ((e4 & pte.P) == 0) continue;
+        if (!uvm_page.validPage(e4 & pte.FRAME_MASK)) continue;
+        const pdp: [*]u64 = @ptrFromInt((e4 & pte.FRAME_MASK) + hhdm_off);
+        var idx3: usize = 0;
+        while (idx3 < INDEX_MASK + 1) : (idx3 += 1) {
+            const e3: u64 = pdp[idx3];
+            if ((e3 & pte.P) == 0) continue;
+            if ((e3 & pte.PS) != 0) {
+                uvm_page.physfree(e3 & pte.FRAME_1G_MASK);
+                continue;
+            }
+            if (!uvm_page.validPage(e3 & pte.FRAME_MASK)) continue;
+            const pd: [*]u64 = @ptrFromInt((e3 & pte.FRAME_MASK) + hhdm_off);
+            var idx2: usize = 0;
+            while (idx2 < INDEX_MASK + 1) : (idx2 += 1) {
+                const e2: u64 = pd[idx2];
+                if ((e2 & pte.P) == 0) continue;
+                if ((e2 & pte.PS) != 0) {
+                    uvm_page.physfree(e2 & pte.FRAME_2M_MASK);
+                    continue;
+                }
+                if (!uvm_page.validPage(e2 & pte.FRAME_MASK)) continue;
+                const pt: [*]u64 = @ptrFromInt((e2 & pte.FRAME_MASK) + hhdm_off);
+                var idx1: usize = 0;
+                while (idx1 < INDEX_MASK + 1) : (idx1 += 1) {
+                    const e1: u64 = pt[idx1];
+                    if ((e1 & pte.P) == 0) continue;
+                    uvm_page.physfree(e1 & pte.FRAME_MASK);
+                }
+            }
+        }
+    }
+}
+
 /// Map a kernel page in the kernel page map.
 pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
-    map(kernel_pmap, va, pa, prot);
-}
+    map(kernel_pmap, va, pa, prot);}
 
 /// Map a user page in page map `p`.
 pub fn enterUser(p: Pmap, va: u64, pa: u64, prot: Prot) void {
