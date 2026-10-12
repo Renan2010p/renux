@@ -82,6 +82,11 @@ SECTIONS
 		KEEP(*(.limine_requests))
 		KEEP(*(.limine_requests_end))
 		/*
+		 * Renux boot protocol request. The loader scans the loaded image
+		 * for it and writes the BootInfo address into its response field.
+		 */
+		KEEP(*(.renux_requests))
+		/*
 		 * SYSINIT linker set: subsystem initialisers, sorted at boot by
 		 * mi_startup().
 		 */

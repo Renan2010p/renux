@@ -35,7 +35,7 @@ pub const trapframe: type = @import("../include/trap.zig");
 pub const vmparam: type = @import("../include/vmparam.zig");
 
 // Boot protocol bindings in use on this port (Limine).
-pub const boot: type = @import("limine");
+pub const boot: type = @import("renuxboot");
 
 // Force every module (and its exports, e.g. the trap entry) to be analysed.
 comptime {

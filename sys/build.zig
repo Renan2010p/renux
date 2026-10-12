@@ -40,6 +40,16 @@ pub fn build(b: *Builder) !void {
     });
     kern_mod.addImport("limine", limine_mod);
 
+    // The Renux boot protocol (stand/arch/amd64/boot.zig). It is what the
+    // kernel's arch.boot resolves to; its own fallback uses the Limine module.
+    const boot_mod: *Builder.Module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("../stand/arch/amd64/boot.zig"),
+    });
+    boot_mod.addImport("limine", limine_mod);
+    kern_mod.addImport("renuxboot", boot_mod);
+
     const kern_exec: *Builder.Step.Compile = b.addExecutable(.{
         .name = "kernel",
         .root_module = kern_mod,
