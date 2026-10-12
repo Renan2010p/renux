@@ -14,11 +14,31 @@ const arch: type = @import("../../arch/arch.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
 const prf: type = @import("../../kern/subr_prf.zig");
 
-// Scan codes for the shift keys (set 1).
+// Scan codes for the modifier keys (set 1).
 const SC_LSHIFT: u8 = 0x2a;
 const SC_RSHIFT: u8 = 0x36;
+const SC_LCTRL: u8 = 0x1d;
 
 var shift_down: bool = false;
+var ctrl_down: bool = false;
+
+/// Map a printable character to the control character produced with Ctrl held
+/// (Ctrl+A..Ctrl+Z and the punctuation keys, as the BSD consoles do).
+fn controlChar(ch: u8) u8 {
+    if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z')) {
+        return ch & 0x1f;
+    }
+    return switch (ch) {
+        '[', '3' => 0x1b,
+        '\\', '4' => 0x1c,
+        ']', '5' => 0x1d,
+        '6' => 0x1e,
+        '-', '7', '/' => 0x1f,
+        '2', ' ', '@', '`' => 0x00,
+        '8' => 0x7f, // Ctrl+8 is DEL
+        else => ch,
+    };
+}
 
 /// IRQ 1 handler: consume every pending scan code. The status register is read
 /// once per byte: it describes the byte about to be read, so the mouse/AUX bit
@@ -42,13 +62,20 @@ fn handler() void {
             shift_down = !released;
             continue;
         }
+        if (code == SC_LCTRL) {
+            ctrl_down = !released;
+            continue;
+        }
         if (released) {
             continue; // ignore other key releases
         }
 
         const table = if (shift_down) &keymap.shifted else &keymap.normal;
-        const ch: u8 = table[code];
-        if (ch != 0) {
+        var ch: u8 = table[code];
+        if (ctrl_down) {
+            ch = controlChar(ch);
+        }
+        if (ch != 0 or ctrl_down) {
             cons.cnInput(ch);
         }
     }
