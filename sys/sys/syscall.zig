@@ -67,6 +67,17 @@ pub const SYS_setsid: u64 = 147;
 pub const SYS_setlogin: u64 = 50;
 pub const SYS_getpgrp: u64 = 81;
 pub const SYS_setpgid: u64 = 82;
+pub const SYS_fsync: u64 = 95;
+pub const SYS_fdatasync: u64 = 550;
+pub const SYS_ftruncate: u64 = 480;
+pub const SYS_truncate: u64 = 479;
+pub const SYS_chmod: u64 = 15;
+pub const SYS_fchmod: u64 = 124;
+pub const SYS_futimens: u64 = 546;
+pub const SYS_utimensat: u64 = 547;
+pub const SYS_rename: u64 = 128;
+pub const SYS_getppid: u64 = 39;
+pub const SYS_getgid: u64 = 47;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;

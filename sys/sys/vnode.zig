@@ -66,6 +66,8 @@ pub const VnodeOps: type = struct {
     read: *const fn (vp: *Vnode, offset: u64, buf: []u8) isize,
     /// Write `buf` at `offset`; returns the count or -errno.
     write: *const fn (vp: *Vnode, offset: u64, buf: []const u8) isize,
+    /// Change the file's size to `length`; returns 0 or errno.
+    truncate: *const fn (vp: *Vnode, length: u64) i32,
     /// Fill in `vap` for `vp`; returns 0 or errno.
     getattr: *const fn (vp: *Vnode, vap: *Vattr) i32,
     /// Read directory entries into `buf`, starting at `offset`. Sets `eofflag`

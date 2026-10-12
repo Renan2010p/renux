@@ -63,6 +63,22 @@ fn sysGetpid(args: [sys.MAXARGS]u64) u64 {
     return @intCast(kern_proc.current.pid);
 }
 
+/// A system call whose effect Renux does not model yet but which callers treat
+/// as harmless: report success.
+fn sysOk(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}
+
+/// getppid(2): init's parent is init; a child's parent is its recorded parent.
+fn sysGetppid(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    if (kern_proc.current.parent) |p| {
+        return @intCast(p.pid);
+    }
+    return @intCast(kern_proc.current.pid);
+}
+
 fn sysClose(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];
     const err: i32 = kern_descrip.fd_close(kern_proc.current, @intCast(fd));
@@ -162,6 +178,16 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_setlogin, .handler = kern_prot.sysSetlogin },
     .{ .num = sys.SYS_getpgrp, .handler = kern_prot.sysGetpgrp },
     .{ .num = sys.SYS_setpgid, .handler = kern_prot.sysSetpgid },
+    .{ .num = sys.SYS_fsync, .handler = vfs_syscalls.sysFsync },
+    .{ .num = sys.SYS_fdatasync, .handler = vfs_syscalls.sysFsync },
+    .{ .num = sys.SYS_ftruncate, .handler = vfs_syscalls.sysFtruncate },
+    .{ .num = sys.SYS_truncate, .handler = vfs_syscalls.sysTruncate },
+    .{ .num = sys.SYS_chmod, .handler = sysOk },
+    .{ .num = sys.SYS_fchmod, .handler = sysOk },
+    .{ .num = sys.SYS_futimens, .handler = sysOk },
+    .{ .num = sys.SYS_utimensat, .handler = sysOk },
+    .{ .num = sys.SYS_getppid, .handler = sysGetppid },
+    .{ .num = sys.SYS_getgid, .handler = sysOk },
 };
 
 /// Number-to-handler table, indexed by system call number.

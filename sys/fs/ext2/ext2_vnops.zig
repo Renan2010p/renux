@@ -26,6 +26,7 @@ const ext2_vnodeops: vnode.VnodeOps = .{
     .close = ext2Close,
     .read = ext2Read,
     .write = ext2Write,
+    .truncate = ext2Truncate,
     .getattr = ext2Getattr,
     .readdir = ext2Readdir,
     .inactive = ext2Inactive,
@@ -128,6 +129,12 @@ fn ext2Write(vp: *vnode.Vnode, offset: u64, buf: []const u8) isize {
     _ = offset;
     _ = buf;
     return -errno.EROFS;
+}
+
+fn ext2Truncate(vp: *vnode.Vnode, length: u64) i32 {
+    _ = vp;
+    _ = length;
+    return errno.EROFS;
 }
 
 fn ext2Getattr(vp: *vnode.Vnode, vap: *vnode.Vattr) i32 {

@@ -163,6 +163,11 @@ pub fn vn_open(start: ?*vnode.Vnode, path: []const u8, flags: i32, create_mode: 
         return null;
     }
 
+    // O_TRUNC empties the file when it is opened for writing.
+    if ((flags & fcntl.O_TRUNC) != 0 and (mode & file.FWRITE) != 0) {
+        _ = vp.v_op.truncate(vp, 0);
+    }
+
     const f: *file.File = kmem.zallocAs(file.File) orelse {
         vfs_subr.vrele(vp);
         return null;

@@ -167,6 +167,61 @@ fn chunkAtOrAppend(node: *tmpfs.Node, index: usize) ?*tmpfs.Chunk {
     return chunkAt(node, index);
 }
 
+/// Change the size of regular file `node` to `length`. Shrinking to zero
+/// drops every chunk; a non-zero shrink trims the last partial chunk (extending
+/// just grows the size, with holes read as zeroes).
+pub fn regTruncate(node: *tmpfs.Node, length: u64) void {
+    if (length >= node.size) {
+        node.size = length;
+        return;
+    }
+
+    if (length == 0) {
+        var c: ?*tmpfs.Chunk = node.data_head;
+        while (c) |chunk| {
+            const next: ?*tmpfs.Chunk = chunk.next;
+            kmem.freeAs(tmpfs.Chunk, chunk);
+            c = next;
+        }
+        node.data_head = null;
+        node.data_tail = null;
+        node.nchunks = 0;
+        node.size = 0;
+        return;
+    }
+
+    // Trim: drop chunks wholly past `length` and shorten the one that straddles it.
+    var base: u64 = 0;
+    var prev: ?*tmpfs.Chunk = null;
+    var c: ?*tmpfs.Chunk = node.data_head;
+    while (c) |chunk| {
+        const end: u64 = base + chunk.len;
+        if (base >= length) {
+            // This chunk and every following one are dropped.
+            if (prev) |p| {
+                p.next = null;
+            } else {
+                node.data_head = null;
+            }
+            node.data_tail = prev;
+            var d: ?*tmpfs.Chunk = chunk;
+            while (d) |dd| {
+                const next: ?*tmpfs.Chunk = dd.next;
+                kmem.freeAs(tmpfs.Chunk, dd);
+                d = next;
+            }
+            break;
+        }
+        if (end > length) {
+            chunk.len = @intCast(length - base);
+        }
+        prev = chunk;
+        base = end;
+        c = chunk.next;
+    }
+    node.size = length;
+}
+
 /// Read up to `buf.len` bytes of regular file `node` starting at `offset`.
 pub fn regRead(node: *tmpfs.Node, offset: u64, buf: []u8) usize {
     var copied: usize = 0;

@@ -27,6 +27,7 @@ const tmpfs_vnodeops: vnode.VnodeOps = .{
     .close = tmpfsClose,
     .read = tmpfsRead,
     .write = tmpfsWrite,
+    .truncate = tmpfsTruncate,
     .getattr = tmpfsGetattr,
     .readdir = tmpfsReaddir,
     .inactive = tmpfsInactive,
@@ -177,6 +178,15 @@ fn tmpfsWrite(vp: *vnode.Vnode, offset: u64, buf: []const u8) isize {
         return -errno.EISDIR;
     }
     return @intCast(tmpfs_subr.regWrite(node, offset, buf));
+}
+
+fn tmpfsTruncate(vp: *vnode.Vnode, length: u64) i32 {
+    const node: *tmpfs.Node = nodeOf(vp);
+    if (node.type != .vreg) {
+        return errno.EISDIR;
+    }
+    tmpfs_subr.regTruncate(node, length);
+    return 0;
 }
 
 fn tmpfsGetattr(vp: *vnode.Vnode, vap: *vnode.Vattr) i32 {

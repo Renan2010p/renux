@@ -23,6 +23,43 @@ const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 
+/// fsync(2)/fdatasync(2): Renux has no disk cache to flush yet, so both are
+/// successful no-ops. (nano calls fsync after a save and errors out otherwise.)
+pub fn sysFsync(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}
+
+/// ftruncate(2): change the size of the file behind descriptor `fd`.
+pub fn sysFtruncate(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const length: u64 = args[1];
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.ERROR;
+    if (f.f_type != file.DTYPE_VNODE) {
+        return sys.ERROR;
+    }
+    const raw: ?*anyopaque = f.f_data orelse return sys.ERROR;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    const err: i32 = vp.v_op.truncate(vp, length);
+    if (err != 0) {
+        return sys.signed(-err);
+    }
+    return 0;
+}
+
+/// truncate(2): change the size of the named file.
+pub fn sysTruncate(args: [sys.MAXARGS]u64) u64 {
+    const path_ptr: u64 = args[0];
+    const length: u64 = args[1];
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.ERROR;
+    const vp: *vnode.Vnode = vfs_lookup.nameiLookup(path) orelse return sys.signed(-errno.ENOENT);
+    const err: i32 = vp.v_op.truncate(vp, length);
+    if (err != 0) {
+        return sys.signed(-err);
+    }
+    return 0;
+}
+
 /// open(2): resolve `path` relative to the working directory and return a
 /// descriptor.
 pub fn sysOpen(args: [sys.MAXARGS]u64) u64 {
