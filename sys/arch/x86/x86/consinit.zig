@@ -18,6 +18,7 @@ const com: type = @import("../../../dev/ic/com.zig");
 const cons: type = @import("../../../dev/cons.zig");
 const rasops: type = @import("../../../dev/rasops/rasops.zig");
 const rcons: type = @import("../../../dev/wscons/wscons_raster.zig");
+const wsemul: type = @import("../../../dev/wscons/wsemul_vt100.zig");
 
 /// The conventional first serial port, COM1.
 const com1: com.Port = .{
@@ -33,6 +34,7 @@ pub fn consinit(framebuffer: ?rasops.Raster) void {
 
     if (framebuffer) |raster| {
         rcons.attach(raster);
-        cons.cn_attach(rcons.console());
+        wsemul.init();
+        cons.cn_attach(wsemul.console());
     }
 }
