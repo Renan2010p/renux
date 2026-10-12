@@ -102,7 +102,7 @@ fn loadSegment(pmap: arch.pmap.Pmap, src: Source, ph: *const elf.Phdr, hhdm: u64
     // Allocate and map every page the segment occupies (zero-filled).
     var va: u64 = vstart;
     while (va < vend) : (va += param.PAGE_SIZE) {
-        const pa: u64 = uvm_page.physalloc() orelse return false;
+        const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
         arch.pmap.enterUser(pmap, va, pa, prot);
     }
 

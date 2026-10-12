@@ -47,7 +47,7 @@ pub fn sysBrk(args: [sys.MAXARGS]u64) u64 {
         var va: u64 = param.alignUp(p.brk, param.PAGE_SIZE);
         const end: u64 = param.alignUp(addr, param.PAGE_SIZE);
         while (va < end) : (va += param.PAGE_SIZE) {
-            const pa: u64 = uvm_page.physalloc() orelse return sys.signed(-errno.ENOMEM);
+            const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
             arch.pmap.enterUser(p.pmap, va, pa, .user_rw);
         }
     }
@@ -114,7 +114,7 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
             va += param.PAGE_SIZE;
             foff += param.PAGE_SIZE;
         }) {
-            const pa: u64 = uvm_page.physalloc() orelse return sys.signed(-errno.ENOMEM);
+            const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
             const dst: [*]u8 = @ptrFromInt(pa + hhdm);
             var k: usize = 0;
             while (k < param.PAGE_SIZE) : (k += 1) {
@@ -129,7 +129,7 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
     } else {
         var va: u64 = base;
         while (va < base + size) : (va += param.PAGE_SIZE) {
-            const pa: u64 = uvm_page.physalloc() orelse return sys.signed(-errno.ENOMEM);
+            const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
             arch.pmap.enterUser(p.pmap, va, pa, prot);
         }
     }

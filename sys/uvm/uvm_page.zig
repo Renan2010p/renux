@@ -3,34 +3,28 @@
 //
 // Physical page allocator.
 //
-// This is the Zig counterpart of NetBSD's sys/uvm/uvm_page.c, simplified: it
-// manages a single free list of 4 KiB pages. Free pages carry the next link in
-// their own first 8 bytes, so the allocator needs no side tables; pages are
+// This is the Zig counterpart of NetBSD's sys/uvm/uvm_page.c. The state lives
+// in a bitmap (see phys_bitmap.zig) rather than in the free pages themselves,
+// so a stray write to a free page can no longer corrupt the allocator and a
+// double free is detected instead of silently duplicating a page. Pages are
 // reached through the higher-half direct map (HHDM) offset reported by the
-// bootloader. Physical page 0 is never handed out and doubles as the "null"
-// link, so a list head of 0 means empty.
+// bootloader, and page zero is never handed out. Pages are handed out from the
+// top down, like the boot loader arranges memory (the very low pages can still
+// hold in-use boot structures that the memory map calls usable).
 
 const param: type = @import("../sys/param.zig");
+const phys: type = @import("phys_bitmap.zig");
+const prf: type = @import("../kern/subr_prf.zig");
 
 var hhdm: u64 = 0;
-var head: u64 = 0;
-var count: usize = 0;
+
+/// The bitmaps cover up to 4 GiB (1 Mi bits, one per 4 KiB page).
+var free_bits: [131072]u8 = undefined;
+var present_bits: [131072]u8 = undefined;
+var bm: phys.Bitmap = undefined;
+
 /// One past the highest usable physical address seen by physload.
 var mem_top: u64 = 0;
-
-/// One bit per 4 KiB page (up to 4 GiB), set while the page is allocated. It
-/// makes physfree() idempotent: freeing an already-free page would put the same
-/// page on the free list twice and corrupt it.
-var alloc_bits: [131072]u8 = undefined;
-
-/// Page index of `pa` within the allocation bitmap, or null when out of range.
-fn bitIndex(pa: u64) ?usize {
-    const i: u64 = pa >> 12;
-    if (i >= @as(u64, alloc_bits.len) * 8) {
-        return null;
-    }
-    return @intCast(i);
-}
 
 /// True when `pa` names an aligned 4 KiB page within the usable physical memory.
 pub fn validPage(pa: u64) bool {
@@ -41,55 +35,35 @@ pub fn validPage(pa: u64) bool {
 /// Prepare the allocator with the direct-map offset used to reach memory.
 pub fn init(offset: u64) void {
     hhdm = offset;
-    head = 0;
-    count = 0;
-    var i: usize = 0;
-    while (i < alloc_bits.len) : (i += 1) {
-        alloc_bits[i] = 0;
-    }
+    mem_top = 0;
+    bm = phys.Bitmap.init(&free_bits, &present_bits, 0, @as(u64, free_bits.len) * 8);
 }
 
-/// Address of the free-list link stored in a free page.
-fn link(pa: u64) *u64 {
+/// Address of the direct-map view of physical page `pa`.
+fn pagePtr(pa: u64) [*]u64 {
     return @ptrFromInt(pa + hhdm);
 }
 
-/// Add the pages in [start, end) to the free list.
+/// Mark the pages in [start, end) as available.
 pub fn physload(start: u64, end: u64) void {
     if (end > mem_top) {
         mem_top = end;
     }
-    var pa: u64 = param.alignUp(start, param.PAGE_SIZE);
-    while (pa + param.PAGE_SIZE <= end) : (pa += param.PAGE_SIZE) {
-        if (pa == 0) {
-            continue; // never hand out page 0
-        }
-        const node: *u64 = link(pa);
-        node.* = head;
-        head = pa;
-        count += 1;
-    }
+    bm.load(start, end);
+    // Page zero is never handed out.
+    bm.unload(0, param.PAGE_SIZE);
+}
+
+/// Mark the pages in [start, end) as unavailable (carve out boot-loader modules
+/// that land in memory the map still calls usable).
+pub fn physunload(start: u64, end: u64) void {
+    bm.unload(start, end);
 }
 
 /// Allocate a zeroed 4 KiB page, or null when memory is exhausted.
 pub fn physalloc() ?u64 {
-    if (head == 0) {
-        return null;
-    }
-    if (!validPage(head)) {
-        // A corrupted free list must never be followed into the void.
-        head = 0;
-        count = 0;
-        return null;
-    }
-    const pa: u64 = head;
-    head = link(pa).*;
-    count -= 1;
-    if (bitIndex(pa)) |i| {
-        alloc_bits[i >> 3] |= @as(u8, 1) << @intCast(i & 7);
-    }
-
-    const page: [*]u64 = @ptrFromInt(pa + hhdm);
+    const pa: u64 = bm.alloc() orelse return null;
+    const page: [*]u64 = pagePtr(pa);
     var i: usize = 0;
     while (i < param.PAGE_SIZE / 8) : (i += 1) {
         page[i] = 0;
@@ -97,41 +71,20 @@ pub fn physalloc() ?u64 {
     return pa;
 }
 
-/// Return a page to the free list.
+/// Return a page to the allocator. A page that is not currently allocated (a
+/// double free) or outside a loaded range is refused and reported, so the
+/// mistake can be found instead of corrupting memory.
 pub fn physfree(pa: u64) void {
-    if (!validPage(pa)) {
-        return; // ignore stray/invalid frames rather than corrupt the list
-    }
-    if (bitIndex(pa)) |i| {
-        const mask: u8 = @as(u8, 1) << @intCast(i & 7);
-        if ((alloc_bits[i >> 3] & mask) == 0) {
-            return; // already free: freeing twice would corrupt the list
-        }
-        alloc_bits[i >> 3] &= ~mask;
-    }
-    const node: *u64 = link(pa);
-    node.* = head;
-    head = pa;
-    count += 1;
-}
-
-/// Remove the pages in [start, end) from the free list. Used to carve the
-/// boot loader's modules out of memory the memory map still calls usable.
-pub fn physunload(start: u64, end: u64) void {
-    var prev: *u64 = &head;
-    while (prev.* != 0) {
-        const pa: u64 = prev.*;
-        if (pa >= start and pa < end) {
-            const node: *u64 = link(pa);
-            prev.* = node.*;
-            count -= 1;
-        } else {
-            prev = link(pa);
+    if (!bm.free(pa)) {
+        if (validPage(pa)) {
+            prf.print("physfree: page not allocated (double free?) pa=");
+            prf.printHex(pa);
+            prf.printLine("");
         }
     }
 }
 
 /// Number of free pages.
 pub fn freeCount() usize {
-    return count;
+    return @intCast(bm.freeCount());
 }

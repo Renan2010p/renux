@@ -32,11 +32,105 @@ const PML4_SLOTS: usize = 512;
 var hhdm: u64 = 0;
 var kernel_pmap: Pmap = 0;
 
+/// Per-pmap record of every physical page that belongs to the pmap's address
+/// space: its top level, its page tables, and all its data pages. destroy()
+/// frees exactly this record -- there is no walk, so it can never touch a page
+/// the pmap does not own. This mirrors FreeBSD's pmap_release(), which frees
+/// only the pmap's own pages and clears the shared kernel entries.
+const MAXARENA: usize = 64;
+const BLOCK_PAGES: usize = 500;
+
+const Block: type = struct {
+    next: ?*Block,
+    used: usize,
+    pages: [BLOCK_PAGES]u64,
+};
+
+const Arena: type = struct {
+    pmap: u64,
+    head: ?*Block,
+    n: usize,
+};
+
+var arenas: [MAXARENA]Arena = undefined;
+
+fn arenaOf(pmap: u64) ?*Arena {
+    var i: usize = 0;
+    while (i < MAXARENA) : (i += 1) {
+        if (arenas[i].pmap == pmap) {
+            return &arenas[i];
+        }
+    }
+    return null;
+}
+
+/// Start (or find) the arena for `pmap`.
+fn arenaOpen(pmap: u64) void {
+    if (arenaOf(pmap) != null) {
+        return;
+    }
+    var i: usize = 0;
+    while (i < MAXARENA) : (i += 1) {
+        if (arenas[i].pmap == 0) {
+            arenas[i] = .{ .pmap = pmap, .head = null, .n = 0 };
+            return;
+        }
+    }
+}
+
+/// Record `pa` as belonging to `pmap` (a no-op for an untracked pmap, such as
+/// the kernel's).
+fn recordPage(pmap: u64, pa: u64) void {
+    const a: *Arena = arenaOf(pmap) orelse return;
+    if (a.head == null or a.head.?.used == BLOCK_PAGES) {
+        const blk_pa: u64 = uvm_page.physalloc() orelse return;
+        const b: *Block = @ptrFromInt((blk_pa & pte.FRAME_MASK) + hhdm);
+        b.next = a.head;
+        b.used = 0;
+        a.head = b;
+    }
+    const b: *Block = a.head.?;
+    b.pages[b.used] = pa;
+    b.used += 1;
+    a.n += 1;
+}
+
+/// Free every page recorded for `pmap`, and the record's own blocks. Never
+/// touches a page that was not allocated for this pmap.
+fn arenaClose(pmap: u64) void {
+    const a: *Arena = arenaOf(pmap) orelse return;
+    var b: ?*Block = a.head;
+    while (b) |blk| {
+        var k: usize = 0;
+        while (k < blk.used) : (k += 1) {
+            uvm_page.physfree(blk.pages[k]);
+        }
+        const nx: ?*Block = blk.next;
+        uvm_page.physfree(@intFromPtr(blk) - hhdm);
+        b = nx;
+    }
+    a.pmap = 0;
+    a.head = null;
+    a.n = 0;
+}
+
+/// Allocate a zeroed page and record it as belonging to `pmap`. Every page in a
+/// process's address space -- data and page tables -- is allocated through here.
+pub fn allocPage(pmap: Pmap) ?u64 {
+    const pa: u64 = uvm_page.physalloc() orelse return null;
+    recordPage(pmap, pa);
+    return pa;
+}
+
 /// Prepare the pmap with the direct-map offset, and remember the boot page map
 /// as the kernel's.
 pub fn bootstrap(offset: u64) void {
     hhdm = offset;
     kernel_pmap = readCr3() & pte.FRAME_MASK;
+    var i: usize = 0;
+    while (i < MAXARENA) : (i += 1) {
+        arenas[i] = .{ .pmap = 0, .head = null, .n = 0 };
+    }
 }
 
 /// The kernel's page map (the one the bootloader installed).
@@ -78,6 +172,8 @@ pub fn create() ?Pmap {
     while (i < PML4_SLOTS) : (i += 1) {
         dst[i] = src[i];
     }
+    arenaOpen(pa);
+    recordPage(pa, pa);
     return pa;
 }
 
@@ -100,10 +196,10 @@ fn index(va: u64, comptime shift: u6) usize {
 /// entry is not present. Intermediate tables are marked user-accessible; a user
 /// mapping still requires the US bit at the leaf, so kernel mappings stay
 /// unreachable from ring 3.
-fn descend(parent: [*]u64, i: usize) ?[*]u64 {
+fn descend(owner: u64, parent: [*]u64, i: usize) ?[*]u64 {
     var entry: u64 = parent[i];
     if ((entry & pte.P) == 0) {
-        const child = uvm_page.physalloc() orelse return null;
+        const child: u64 = allocPage(owner) orelse return null;
         entry = child | pte.P | pte.RW | pte.US;
         parent[i] = entry;
     }
@@ -113,9 +209,9 @@ fn descend(parent: [*]u64, i: usize) ?[*]u64 {
 /// Install a leaf mapping with raw PTE flags.
 fn install(p: Pmap, va: u64, pa: u64, flags: u64) void {
     const pml4 = table(p);
-    const pdp = descend(pml4, index(va, pte.L4_SHIFT)) orelse return;
-    const pd = descend(pdp, index(va, pte.L3_SHIFT)) orelse return;
-    const pt = descend(pd, index(va, pte.L2_SHIFT)) orelse return;
+    const pdp = descend(p, pml4, index(va, pte.L4_SHIFT)) orelse return;
+    const pd = descend(p, pdp, index(va, pte.L3_SHIFT)) orelse return;
+    const pt = descend(p, pd, index(va, pte.L2_SHIFT)) orelse return;
     pt[index(va, pte.L1_SHIFT)] = (pa & pte.FRAME_MASK) | flags;
 
     if (p == current()) {
@@ -155,7 +251,7 @@ pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
                     const e1: u64 = pt[idx1];
                     if ((e1 & pte.P) == 0) continue;
 
-                    const dst_pa: u64 = uvm_page.physalloc() orelse return;
+                    const dst_pa: u64 = allocPage(dst) orelse return;
                     const s: [*]const u8 = @ptrFromInt((e1 & pte.FRAME_MASK) + hhdm_offset);
                     const d: [*]u8 = @ptrFromInt(dst_pa + hhdm_offset);
                     var k: usize = 0;
@@ -174,53 +270,14 @@ pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
     }
 }
 
-/// Tear down the user half of `p`: return the user data pages to the physical
-/// allocator, so a process that exits does not leak its whole address space.
-/// The lower page-table pages (tables and directories) are also returned, but
-/// the top levels (PDPTs and the PML4) are deliberately left allocated: freeing
-/// them corrupted live processes, so the sharing between a pmap and the kernel
-/// half must be understood first. Called when a process is reaped; the
-/// direct-map offset is passed in, as destroy() may be reached through a module
-/// instance that has not seen bootstrap().
+/// Tear down a process's address space: free every page recorded for `p` (its
+/// top level, its page tables and its data pages). There is no walk, so it can
+/// never touch a page the pmap does not own, and the shared kernel half (which
+/// is never recorded) is left alone. Called when a process is reaped or execs
+/// away its old image.
 pub fn destroy(p: Pmap, hhdm_off: u64) void {
-    const pml4: [*]u64 = @ptrFromInt((p & pte.FRAME_MASK) + hhdm_off);
-    var idx4: usize = 0;
-    while (idx4 < KERNEL_PML4_START) : (idx4 += 1) {
-        const e4: u64 = pml4[idx4];
-        if ((e4 & pte.P) == 0) continue;
-        if (!uvm_page.validPage(e4 & pte.FRAME_MASK)) continue;
-        const pdp: [*]u64 = @ptrFromInt((e4 & pte.FRAME_MASK) + hhdm_off);
-        var idx3: usize = 0;
-        while (idx3 < INDEX_MASK + 1) : (idx3 += 1) {
-            const e3: u64 = pdp[idx3];
-            if ((e3 & pte.P) == 0) continue;
-            if ((e3 & pte.PS) != 0) {
-                uvm_page.physfree(e3 & pte.FRAME_1G_MASK);
-                continue;
-            }
-            if (!uvm_page.validPage(e3 & pte.FRAME_MASK)) continue;
-            const pd: [*]u64 = @ptrFromInt((e3 & pte.FRAME_MASK) + hhdm_off);
-            var idx2: usize = 0;
-            while (idx2 < INDEX_MASK + 1) : (idx2 += 1) {
-                const e2: u64 = pd[idx2];
-                if ((e2 & pte.P) == 0) continue;
-                if ((e2 & pte.PS) != 0) {
-                    uvm_page.physfree(e2 & pte.FRAME_2M_MASK);
-                    continue;
-                }
-                if (!uvm_page.validPage(e2 & pte.FRAME_MASK)) continue;
-                const pt: [*]u64 = @ptrFromInt((e2 & pte.FRAME_MASK) + hhdm_off);
-                var idx1: usize = 0;
-                while (idx1 < INDEX_MASK + 1) : (idx1 += 1) {
-                    const e1: u64 = pt[idx1];
-                    if ((e1 & pte.P) == 0) continue;
-                    uvm_page.physfree(e1 & pte.FRAME_MASK);
-                }
-                uvm_page.physfree(e2 & pte.FRAME_MASK);
-            }
-            uvm_page.physfree(e3 & pte.FRAME_MASK);
-        }
-    }
+    _ = hhdm_off;
+    arenaClose(p);
 }
 
 /// Map a kernel page in the kernel page map.

@@ -110,7 +110,7 @@ pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8, ba
 fn mapStack(pmap: arch.pmap.Pmap) bool {
     var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
     while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
-        const pa: u64 = uvm_page.physalloc() orelse return false;
+        const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
         arch.pmap.enterUser(pmap, va, pa, .user_rw);
     }
     return true;
@@ -124,7 +124,7 @@ pub fn trampolineVa() u64 {
 /// Map the sigreturn trampoline: a page whose first bytes execute the
 /// sigreturn system call, used as the return address of a signal handler.
 pub fn mapTrampoline(pmap: arch.pmap.Pmap) bool {
-    const pa: u64 = uvm_page.physalloc() orelse return false;
+    const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
 
     // mov eax, SYS_sigreturn (417); int 0x80
@@ -292,7 +292,7 @@ pub fn setupInitialTls(p: *proc.Proc, pmap: arch.pmap.Pmap, main: exec_elf.Resul
 
     var va: u64 = base;
     while (va < base + size) : (va += param.PAGE_SIZE) {
-        const pa: u64 = uvm_page.physalloc() orelse return false;
+        const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
         arch.pmap.enterUser(pmap, va, pa, .user_rw);
     }
 
@@ -492,10 +492,12 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     const oldmap: arch.pmap.Pmap = p.pmap;
     arch.pmap.activate(newmap);
     p.pmap = newmap;
-    // The pre-exec address space is freed when the process exits; tearing it
-    // down here (while still returning through the old kernel context) is not
-    // safe yet.
-    _ = oldmap;
+    // The old address space is no longer needed: free exactly the pages
+    // recorded for it (its own tables and data; the shared kernel half was
+    // never recorded, so it is untouched).
+    if (oldmap != 0 and oldmap != newmap) {
+        arch.pmap.destroy(oldmap, 0);
+    }
 
     frame.rip = entry;
     frame.rsp = info.rsp;
