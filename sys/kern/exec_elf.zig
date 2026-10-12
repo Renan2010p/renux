@@ -17,7 +17,7 @@
 const elf: type = @import("../sys/exec_elf.zig");
 const arch: type = @import("../arch/arch.zig");
 const param: type = @import("../sys/param.zig");
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 const prf: type = @import("subr_prf.zig");
 
 /// Where the loader reads an image from.
@@ -143,7 +143,7 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source, base: u64) ?Result {
     // Accept FreeBSD-branded images (e_ident[EI_OSABI] == ELFOSABI_FREEBSD), so
     // a binary built for FreeBSD loads here.
     if (ehdr.e_ident[7] == elf.ELFOSABI_FREEBSD) {
-        prf.printLine("exec: FreeBSD-branded ELF");
+        prf.log(prf.LOG_DEBUG, "exec: FreeBSD-branded ELF", .{});
     }
     if (ehdr.e_type != elf.ET_EXEC and ehdr.e_type != elf.ET_DYN) {
         return null;
@@ -185,7 +185,7 @@ pub fn load(pmap: arch.pmap.Pmap, src: Source, base: u64) ?Result {
                 phdr = base + ph.p_vaddr + (ehdr.e_phoff - ph.p_offset);
             }
             if (!loadSegment(pmap, src, &ph, hhdm, base)) {
-                prf.printLine("exec_elf: out of memory");
+                prf.log(prf.LOG_ERR, "exec_elf: out of memory", .{});
                 return null;
             }
         } else if (ph.p_type == elf.PT_INTERP) {

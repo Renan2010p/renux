@@ -3,7 +3,7 @@
 //
 // Physical page allocator.
 //
-// This is the Zig counterpart of NetBSD's sys/uvm/uvm_page.c. The state lives
+// This is the Zig counterpart of NetBSD's sys/uvm/vm_page.c. The state lives
 // in a bitmap (see phys_bitmap.zig) rather than in the free pages themselves,
 // so a stray write to a free page can no longer corrupt the allocator and a
 // double free is detected instead of silently duplicating a page. Pages are
@@ -37,6 +37,7 @@ pub fn init(offset: u64) void {
     hhdm = offset;
     mem_top = 0;
     bm = phys.Bitmap.init(&free_bits, &present_bits, 0, @as(u64, free_bits.len) * 8);
+    prf.log(prf.LOG_DEBUG, "vm_page: physical page allocator ready", .{});
 }
 
 /// Address of the direct-map view of physical page `pa`.

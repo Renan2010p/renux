@@ -16,13 +16,14 @@ const intrdefs: type = @import("../../x86/include/intrdefs.zig");
 const pmap: type = @import("../../x86/x86/pmap.zig");
 const syscall: type = @import("../../x86/x86/syscall.zig");
 const vector: type = @import("vector.zig");
-const uvm_fault: type = @import("../../../uvm/uvm_fault.zig");
-const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const vm_fault: type = @import("../../../vm/vm_fault.zig");
+const vm_page: type = @import("../../../vm/vm_page.zig");
 const sys: type = @import("../../../sys/syscall.zig");
 const errno: type = @import("../../../sys/errno.zig");
 const kern_sched: type = @import("../../../kern/kern_sched.zig");
 const kern_signal: type = @import("../../../kern/kern_signal.zig");
 const kern_exit: type = @import("../../../kern/kern_exit.zig");
+const kern_proc: type = @import("../../../kern/kern_proc.zig");
 const param: type = @import("../../../sys/param.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
@@ -91,10 +92,10 @@ fn handlePageFault(frame: *trap.TrapFrame) bool {
         return false; // protection fault, not a missing page
     }
     const va: u64 = readCr2();
-    if (uvm_fault.regionFor(va) == null) {
+    if (vm_fault.regionFor(va) == null) {
         return false;
     }
-    const pa: u64 = uvm_page.physalloc() orelse return false;
+    const pa: u64 = vm_page.physalloc() orelse return false;
     pmap.enterUser(pmap.current(), va & ~param.PAGE_MASK, pa, .user_rw);
     return true;
 }
@@ -159,13 +160,7 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
         if (handlePageFault(frame)) {
             return;
         }
-        prf.print("page fault at ");
-        prf.printHex(readCr2());
-        prf.print(" error ");
-        prf.printHex(frame.error_code);
-        prf.print(" rip ");
-        prf.printHex(frame.rip);
-        prf.printLine("");
+        prf.log(prf.LOG_ERR, "pid %d (%s): page fault at %x error %x rip %x", .{ kern_proc.current.pid, kern_proc.current.name[0..kern_proc.current.name_len], readCr2(), frame.error_code, frame.rip });
         // A fault from user mode kills the process (as SIGSEGV); only a kernel
         // fault panics.
         if ((frame.error_code & 0x4) != 0) {
@@ -183,13 +178,7 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
         return;
     }
 
-    prf.print("trap: vector ");
-    prf.printDec(frame.vector);
-    prf.print(" error ");
-    prf.printHex(frame.error_code);
-    prf.print(" rip ");
-    prf.printHex(frame.rip);
-    prf.printLine("");
+    prf.log(prf.LOG_ERR, "trap: vector %d error %x rip %x", .{ frame.vector, frame.error_code, frame.rip });
 
     if (frame.vector == trap.T_BREAKPOINT) {
         return;

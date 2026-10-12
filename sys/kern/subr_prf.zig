@@ -164,6 +164,38 @@ pub fn printf(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+// BSD syslog priorities, as sys/sys/syslog.h defines them. `log()` emits a
+// message only when its priority passes the current filter, exactly as
+// FreeBSD's log(9) (sys/kern/subr_prf.c) does.
+pub const LOG_EMERG: u8 = 0; // system is unusable
+pub const LOG_ALERT: u8 = 1; // action must be taken immediately
+pub const LOG_CRIT: u8 = 2; // critical conditions
+pub const LOG_ERR: u8 = 3; // error conditions
+pub const LOG_WARNING: u8 = 4; // warning conditions
+pub const LOG_NOTICE: u8 = 5; // normal but significant condition
+pub const LOG_INFO: u8 = 6; // informational
+pub const LOG_DEBUG: u8 = 7; // debug-level messages
+
+/// Most verbose priority that reaches the console; anything numerically greater
+/// is dropped (FreeBSD's `log_max`, defaulting to LOG_INFO).
+var log_max: u8 = LOG_INFO;
+
+/// Set the log filter, as a `kern.log_max`-style tunable would.
+pub fn setLogMax(level: u8) void {
+    log_max = level;
+}
+
+/// FreeBSD's log(9): format a message and emit it subject to the priority
+/// filter. Subsystems report boot progress through this rather than raw
+/// printf(), so a single knob can quiet them.
+pub fn log(comptime level: u8, comptime fmt: []const u8, args: anytype) void {
+    if (level > log_max) {
+        return;
+    }
+    printf(fmt, args);
+    putchar('\n');
+}
+
 /// Fatal kernel error. Reports to the console and halts the CPU forever.
 ///
 /// The signature matches Zig's panic hook so this can be installed as the

@@ -7,7 +7,7 @@
 // sys/sys/kmem.h), reduced to a fixed-class bucket allocator. An allocation is
 // rounded up to one of a small set of size classes, and each class keeps its
 // own free list. Objects are carved from 4 KiB pages obtained through
-// uvm_page; a free object stores the next link in its own first bytes, so no
+// vm_page; a free object stores the next link in its own first bytes, so no
 // side tables are needed, and every object begins with an eight-byte header
 // that records its size class, which is what kmem_free() uses to find the
 // right free list.
@@ -15,7 +15,7 @@
 // Only whole pages are ever requested from the physical allocator, and no
 // locking is used yet (single CPU).
 
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
@@ -41,7 +41,7 @@ pub fn init(offset: u64) void {
     while (i < CLASSES.len) : (i += 1) {
         freelist[i] = 0;
     }
-    prf.printLine("kmem: bucket allocator, size classes 16..4096 bytes");
+    prf.log(prf.LOG_INFO, "kmem: bucket allocator, size classes 16..4096 bytes", .{});
 }
 
 /// Index of the smallest class that can hold `total` bytes, or null when the
@@ -74,7 +74,7 @@ fn popFree(idx: usize) ?usize {
     }
 
     const size: usize = CLASSES[idx];
-    const pa: u64 = uvm_page.physalloc() orelse return null;
+    const pa: u64 = vm_page.physalloc() orelse return null;
     const base: usize = @intCast(pa + hhdm);
     const count: usize = param.PAGE_SIZE / size;
 

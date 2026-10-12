@@ -12,7 +12,7 @@ const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_time: type = @import("kern_time.zig");
@@ -379,9 +379,9 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
         },
         CTL_VM => switch (id) {
             VM_PAGE_SIZE => return reportInt(oldp, oldlenp, @intCast(param.PAGE_SIZE)),
-            VM_PAGE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.totalPages())),
-            VM_FREE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.freeCount())),
-            VM_ACTIVE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.totalPages() - uvm_page.freeCount())),
+            VM_PAGE_COUNT => return reportInt(oldp, oldlenp, @intCast(vm_page.totalPages())),
+            VM_FREE_COUNT => return reportInt(oldp, oldlenp, @intCast(vm_page.freeCount())),
+            VM_ACTIVE_COUNT => return reportInt(oldp, oldlenp, @intCast(vm_page.totalPages() - vm_page.freeCount())),
             VM_INACTIVE_COUNT, VM_WIRE_COUNT, VM_CACHE_COUNT, VM_DMMAX => return reportInt(oldp, oldlenp, 0),
             VM_LOADAVG => return loadavg(oldp, oldlenp),
             else => return sys.signed(-errno.ENOENT),

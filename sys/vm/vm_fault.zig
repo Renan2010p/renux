@@ -3,7 +3,7 @@
 //
 // Anonymous memory fault registry.
 //
-// This is a heavily simplified stand-in for NetBSD's sys/uvm/uvm_fault.c. It
+// This is a heavily simplified stand-in for NetBSD's sys/uvm/vm_fault.c. It
 // records anonymous virtual address ranges that should be filled on demand:
 // when the machine-dependent trap code takes a not-present page fault for an
 // address inside a registered range, it allocates a zero page and maps it, then

@@ -12,7 +12,6 @@ const keymap: type = @import("wskbdmap_mfii.zig");
 const cons: type = @import("../cons.zig");
 const arch: type = @import("../../arch/arch.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
-const prf: type = @import("../../kern/subr_prf.zig");
 
 // Scan codes for the modifier keys (set 1).
 const SC_LSHIFT: u8 = 0x2a;
@@ -132,8 +131,6 @@ pub fn init() void {
     pckbc.init();
     arch.intr.register(arch.intrdefs.irqVector(1), handler);
     arch.pic.enableIrq(1);
-    prf.printLine("pckbc0 at isa0 port 0x60-0x64");
-    prf.printLine("pckbd0 at pckbc0");
 }
 
 fn pckbdInit(_: ?*const anyopaque) callconv(.c) void {

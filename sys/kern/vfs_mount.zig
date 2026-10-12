@@ -10,6 +10,7 @@
 
 const vnode: type = @import("../sys/vnode.zig");
 const mount: type = @import("../sys/mount.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// Maximum number of simultaneously mounted filesystems.
 pub const MAXMOUNT: usize = 8;
@@ -83,6 +84,7 @@ pub fn mountFs(name: []const u8, data: ?*anyopaque) ?*mount.Mount {
     mp.mnt_root = root;
 
     nmounts += 1;
+    prf.log(prf.LOG_INFO, "%s: mounted", .{name});
     return mp;
 }
 

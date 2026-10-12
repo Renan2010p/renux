@@ -11,6 +11,7 @@
 const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// True while the scheduler itself is running (so a timer interrupt must not
 /// try to preempt it).
@@ -45,6 +46,7 @@ pub fn prepareContext(p: *proc.Proc) void {
         .r15 = 0,
         .rip = @intFromPtr(&procEntry),
     };
+    prf.log(prf.LOG_DEBUG, "sched: prepared context for pid %d", .{p.pid});
 }
 
 /// The scheduler loop. Runs on the boot stack and never returns.

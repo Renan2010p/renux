@@ -36,7 +36,7 @@ pub const bus_space: type = machdep_impl.bus_space;
 /// Machine-dependent console initialisation (see kern/init_main.zig).
 pub const consinit: type = machdep_impl.consinit;
 
-/// Machine-dependent page map (see sys/uvm).
+/// Machine-dependent page map (see sys/vm).
 pub const pmap: type = machdep_impl.pmap;
 
 /// Machine-dependent process context and kernel-thread switch.

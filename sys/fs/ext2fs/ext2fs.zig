@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
-// ext2 filesystem: on-disk format.
+// ext2fs filesystem: on-disk format.
 //
 // This is the Zig counterpart of NetBSD's sys/ufs/ext2fs (ext2fs.h together
 // with the read side of ext2fs_bmap.c, ext2fs_lookup.c and ext2fs_vnops.c),
@@ -22,12 +22,12 @@ const SUPER_OFFSET: u64 = 1024;
 /// The root directory's inode number (EXT2_ROOT_INO).
 pub const ROOT_INO: u64 = 2;
 
-/// Size of an inode on disk when the superblock does not give one (ext2 rev 0).
+/// Size of an inode on disk when the superblock does not give one (ext2fs rev 0).
 const DEFAULT_INODE_SIZE: u64 = 128;
 
-/// Number of vnodes cached, keyed by inode number. ext2 vnodes are never
+/// Number of vnodes cached, keyed by inode number. ext2fs vnodes are never
 /// reclaimed, so the cache just avoids handing out a fresh vnode for an inode
-/// that already has one. It lives in .bss (a single ext2 mount exists at a
+/// that already has one. It lives in .bss (a single ext2fs mount exists at a
 /// time) so the mount record stays small enough for the kmem allocator.
 pub const CACHE_N: usize = 2048;
 
@@ -111,7 +111,7 @@ pub fn rd32(img: []const u8, off: u64) u32 {
 // -- mount --------------------------------------------------------------------
 
 /// Read the superblock and prepare `mnt`. Returns false when `image` is not an
-/// ext2 filesystem.
+/// ext2fs filesystem.
 pub fn mountInit(mnt: *Ext2Mount, image: []const u8) bool {
     if (rd16(image, SUPER_OFFSET + 56) != SUPER_MAGIC) {
         return false;

@@ -17,6 +17,7 @@ const errno: type = @import("../../sys/errno.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
 const kmem: type = @import("../../kern/subr_kmem.zig");
 const vfs_mount: type = @import("../../kern/vfs_mount.zig");
+const prf: type = @import("../../kern/subr_prf.zig");
 
 /// Create the mount's private state and its root node.
 fn tmpfsMount(mp: *mount.Mount, data: ?*anyopaque) i32 {
@@ -71,6 +72,7 @@ var tmpfs_vfs: mount.Vfs = .{
 
 fn tmpfsInit(_: ?*const anyopaque) callconv(.c) void {
     vfs_mount.register(&tmpfs_vfs);
+    prf.log(prf.LOG_INFO, "tmpfs: filesystem registered", .{});
 }
 
 comptime {

@@ -3,7 +3,7 @@
 //
 // brk and mmap.
 //
-// This is the Zig counterpart of NetBSD's sys/uvm/uvm_mmap.c, reduced to brk:
+// This is the Zig counterpart of NetBSD's sys/uvm/vm_mmap.c, reduced to brk:
 // it grows or shrinks the process's heap by mapping or abandoning pages. Pages
 // are mapped eagerly here; demand-zero faults will replace this once the region
 // registry is per-process.
@@ -13,9 +13,10 @@ const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
 const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
-const uvm_page: type = @import("uvm_page.zig");
+const vm_page: type = @import("vm_page.zig");
 const kern_proc: type = @import("../kern/kern_proc.zig");
 const kern_descrip: type = @import("../kern/kern_descrip.zig");
+const prf: type = @import("../kern/subr_prf.zig");
 const file: type = @import("../sys/file.zig");
 const vnode: type = @import("../sys/vnode.zig");
 
@@ -53,6 +54,7 @@ pub fn sysBrk(args: [sys.MAXARGS]u64) u64 {
     }
 
     p.brk = addr;
+    prf.log(prf.LOG_DEBUG, "brk: pid %d -> %x", .{ p.pid, p.brk });
     return p.brk;
 }
 
@@ -137,6 +139,7 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
     if (base + size > p.mmap_next) {
         p.mmap_next = base + size;
     }
+    prf.log(prf.LOG_DEBUG, "mmap: pid %d at %x len %x", .{ p.pid, base, size });
     return base;
 }
 

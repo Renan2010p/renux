@@ -13,6 +13,7 @@ const signal: type = @import("../sys/signal.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// Fork the current process. Returns the child's pid in the parent, 0 in the
 /// child, or -1 on failure.
@@ -20,6 +21,7 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     const parent = kern_proc.current;
     const child = kern_proc.alloc() orelse return -1;
     child.parent = parent;
+    prf.log(prf.LOG_DEBUG, "fork: %d -> %d", .{ parent.pid, child.pid });
 
     const hhdm: u64 = arch.boot.hhdmOffset() orelse {
         kern_proc.free(child);

@@ -28,7 +28,7 @@ const arch_sysarch: type = @import("../arch/arch.zig");
 const sys_generic: type = @import("sys_generic.zig");
 const sys_poll: type = @import("sys_poll.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
-const uvm_mmap: type = @import("../uvm/uvm_mmap.zig");
+const vm_mmap: type = @import("../vm/vm_mmap.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
@@ -135,10 +135,10 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_wait4, .handler = sysWait },
     .{ .num = sys.SYS_unlink, .handler = vfs_syscalls.sysUnlink },
     .{ .num = sys.SYS_chdir, .handler = vfs_syscalls.sysChdir },
-    .{ .num = sys.SYS_brk, .handler = uvm_mmap.sysBrk },
-    .{ .num = sys.SYS_mmap, .handler = uvm_mmap.sysMmap },
-    .{ .num = sys.SYS_munmap, .handler = uvm_mmap.sysMunmap },
-    .{ .num = sys.SYS_mprotect, .handler = uvm_mmap.sysMprotect },
+    .{ .num = sys.SYS_brk, .handler = vm_mmap.sysBrk },
+    .{ .num = sys.SYS_mmap, .handler = vm_mmap.sysMmap },
+    .{ .num = sys.SYS_munmap, .handler = vm_mmap.sysMunmap },
+    .{ .num = sys.SYS_mprotect, .handler = vm_mmap.sysMprotect },
     .{ .num = sys.SYS_issetugid, .handler = kern_prot.sysIssetugid },
     .{ .num = sys.SYS_sysarch, .handler = arch_sysarch.sysarch.sysSysarch },
     .{ .num = sys.SYS_sigprocmask, .handler = kern_signal.sysSigprocmask },

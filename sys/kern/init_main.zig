@@ -15,7 +15,7 @@ const rasops: type = @import("../dev/rasops/rasops.zig");
 const cons: type = @import("../dev/cons.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const mount: type = @import("../sys/mount.zig");
-const ext2: type = @import("../fs/ext2/ext2.zig");
+const ext2fs: type = @import("../fs/ext2fs/ext2fs.zig");
 const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
@@ -25,7 +25,7 @@ const vfs_mount: type = @import("vfs_mount.zig");
 const vfs_vnops: type = @import("vfs_vnops.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
@@ -38,11 +38,12 @@ const trademark: []const u8 =
     "Renux is a trademark of The Renux Project.\n\n";
 
 /// Build identification, printed as "version machine" then the compiler line,
-/// as FreeBSD's print_version() does.
+/// as FreeBSD's print_version() does: the release and config line, the build
+/// path, then the compiler that produced the kernel.
 const version: []const u8 =
-    "Renux 0.1 (GENERIC) #0: Sat Oct 10 12:00:00 UTC 2026\n" ++
-    "\tbuild@renux:/usr/src/sys/amd64/compile/GENERIC amd64\n" ++
-    "Renux clang version 22.1.8 (https://github.com/llvm/llvm-project.git)\n";
+    "Renux 0.1-RELEASE #0: Sat Oct 10 12:00:00 UTC 2026\n" ++
+    "\tbuild@renux:/usr/obj/usr/src/amd64.amd64/sys/GENERIC amd64\n" ++
+    "Renux clang version 22.1.8 (https://github.com/llvm/llvm-project.git) target: x86_64-unknown-renux\n";
 
 /// Build a machine-independent raster from the boot framebuffer.
 fn bootRaster() ?rasops.Raster {
@@ -83,26 +84,28 @@ fn printVersion(_: ?*const anyopaque) callconv(.c) void {
     prf.print(version);
 }
 
-/// Configure the system hardware. This enables interrupts (FreeBSD's
-/// SI_SUB_CONFIGURE; NetBSD's configure()).
+/// Configure the system hardware: attach the legacy ISA devices and enable
+/// interrupts (FreeBSD's SI_SUB_CONFIGURE). The device lines are printed in
+/// FreeBSD's newbus dmesg format, `name<unit>: <description> ... on <parent>`
+/// (sys/kern/subr_bus.c bus_print_child_header/footer), with the descriptions
+/// FreeBSD's drivers use (sys/x86/isa/atpic.c, sys/x86/isa/atrtc.c,
+/// sys/dev/atkbdc/atkbdc.c, sys/dev/uart/uart_bus_isa.c).
 fn configure(_: ?*const anyopaque) callconv(.c) void {
-    prf.printLine("isa0 at mainbus0");
-    prf.printLine("i8259: legacy PIC, master at 0x20 slave at 0xa0");
-    prf.printLine("apic: not present, using the legacy PIC");
-    prf.printLine("com0 at isa0 port 0x3f8-0x3ff irq 4: ns16550a, 16-byte fifo");
-    prf.printLine("attimer0 at isa0 port 0x40-0x43");
+    // CPU topology (sys/x86/x86/mp_x86.c cpu_mp_announce()), a single package
+    // with one core and no hardware threads on this machine.
+    prf.printLine("FreeBSD/SMP: 1 package(s) x 1 core(s)");
+    prf.printLine("atpic0: <AT PIC> port 0x20-0x21,0xa0-0xa1 irq 0 on isa0");
+    prf.printLine("atrtc0: <AT realtime clock> port 0x70-0x71 irq 8 on isa0");
+    prf.printLine("atkbdc0: <Keyboard controller (i8042)> port 0x60,0x64 irq 1 on isa0");
+    prf.printLine("atkbd0: <AT Keyboard> irq 1 on atkbdc0");
+    prf.printLine("uart0: <16550 or compatible> port 0x3f8-0x3ff irq 4 flags 0x10 on isa0");
     if (arch.boot.framebuffer(0)) |fb| {
-        prf.print("wsdisplay0 at mainbus0: console (");
+        prf.print("vt0: <Generic> resolution ");
         prf.printDec(fb.width);
         prf.print("x");
         prf.printDec(fb.height);
-        prf.print(", ");
-        prf.printDec(fb.bpp);
-        prf.printLine("bpp)");
+        prf.printLine(" on isa0");
     }
-    prf.printLine("Timecounter \"i8254\" frequency 1193182 Hz quality 0");
-    prf.printLine("syscall: fast system call (syscall/sysret) enabled");
-    prf.printLine("Renux: enabling interrupts (PIT @ 100 Hz)");
     arch.cpu.enable_interrupts();
 }
 
@@ -136,9 +139,7 @@ fn ensureParents(path: []const u8) void {
 /// special cases. Parent directories are created as needed.
 fn populateRoot() void {
     const count: usize = arch.boot.moduleCount() orelse 0;
-    prf.print("populateRoot: modules=");
-    prf.printDec(count);
-    prf.printLine("");
+    prf.log(prf.LOG_INFO, "populate: %u boot modules", .{count});
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const mod: *arch.boot.File = arch.boot.module(i) orelse continue;
@@ -149,8 +150,7 @@ fn populateRoot() void {
 
         ensureParents(path);
         const vp: *vnode.Vnode = vfs_vnops.vn_create(path, .vreg, 0o755) orelse {
-            prf.print("populate: cannot create ");
-            prf.printLine(path);
+            prf.log(prf.LOG_WARNING, "populate: cannot create %s", .{path});
             continue;
         };
         _ = vp.v_op.write(vp, 0, bytes);
@@ -188,19 +188,19 @@ fn findModule(name: []const u8) ?[]const u8 {
 }
 
 /// Populate the root tmpfs from a whole-filesystem image loaded as a single
-/// boot module: walk the ext2 tree and recreate every file, directory and
+/// boot module: walk the ext2fs tree and recreate every file, directory and
 /// symbolic link. This gives the FreeBSD "live" layout (one image on the
 /// medium instead of one boot module per file) while keeping a writable root.
 fn unpackImage(image: []const u8) bool {
-    var mnt: ext2.Ext2Mount = undefined;
-    if (!ext2.mountInit(&mnt, image)) {
+    var mnt: ext2fs.Ext2Mount = undefined;
+    if (!ext2fs.mountInit(&mnt, image)) {
         return false;
     }
-    if (!copyDir(&mnt, ext2.ROOT_INO, &.{})) {
+    if (!copyDir(&mnt, ext2fs.ROOT_INO, &.{})) {
         return false;
     }
     const vp: *vnode.Vnode = vfs_lookup.nameiLookup("/sbin/init") orelse {
-        prf.printLine("unpack: /sbin/init missing");
+        prf.log(prf.LOG_WARNING, "unpack: /sbin/init missing", .{});
         return true;
     };
     var vap: vnode.Vattr = .{
@@ -216,22 +216,20 @@ fn unpackImage(image: []const u8) bool {
         .ctime = 0,
     };
     _ = vp.v_op.getattr(vp, &vap);
-    prf.print("unpack: /sbin/init size=");
-    prf.printDec(vap.size);
-    prf.printLine("");
+    prf.log(prf.LOG_DEBUG, "/sbin/init size=%u", .{vap.size});
     return true;
 }
 
 /// Recursively copy the directory `ino` of `mnt` into `dir_path` in the root.
-fn copyDir(mnt: *ext2.Ext2Mount, ino: u64, dir_path: []const u8) bool {
-    const dir: ext2.Inode = ext2.readInode(mnt, ino) orelse return false;
-    if ((dir.mode & ext2.S_IFMT) != ext2.S_IFDIR) {
+fn copyDir(mnt: *ext2fs.Ext2Mount, ino: u64, dir_path: []const u8) bool {
+    const dir: ext2fs.Inode = ext2fs.readInode(mnt, ino) orelse return false;
+    if ((dir.mode & ext2fs.S_IFMT) != ext2fs.S_IFDIR) {
         return false;
     }
 
     var pos: u64 = 0;
-    var ent: ext2.DirEntry = undefined;
-    while (ext2.dirNext(mnt, &dir, &pos, &ent)) {
+    var ent: ext2fs.DirEntry = undefined;
+    while (ext2fs.dirNext(mnt, &dir, &pos, &ent)) {
         const name: []const u8 = ent.name[0..ent.name_len];
         if ((name.len == 1 and name[0] == '.') or
             (name.len == 2 and name[0] == '.' and name[1] == '.'))
@@ -263,9 +261,9 @@ fn copyDir(mnt: *ext2.Ext2Mount, ino: u64, dir_path: []const u8) bool {
         }
         const child: []const u8 = pathbuf[0..pl];
 
-        const cin: ext2.Inode = ext2.readInode(mnt, ent.ino) orelse continue;
+        const cin: ext2fs.Inode = ext2fs.readInode(mnt, ent.ino) orelse continue;
         const mode: u16 = cin.mode & 0o7777;
-        switch (ext2.vtypeOf(cin.mode)) {
+        switch (ext2fs.vtypeOf(cin.mode)) {
             .vdir => {
                 ensureDir(child);
                 _ = copyDir(mnt, ent.ino, child);
@@ -275,7 +273,7 @@ fn copyDir(mnt: *ext2.Ext2Mount, ino: u64, dir_path: []const u8) bool {
                 var off: u64 = 0;
                 var buf: [4096]u8 = undefined;
                 while (off < cin.size) {
-                    const got: usize = ext2.readData(mnt, &cin, off, &buf);
+                    const got: usize = ext2fs.readData(mnt, &cin, off, &buf);
                     if (got == 0) {
                         break;
                     }
@@ -286,7 +284,7 @@ fn copyDir(mnt: *ext2.Ext2Mount, ino: u64, dir_path: []const u8) bool {
             },
             .vlnk => {
                 var lbuf: [param.MAXPATHLEN]u8 = undefined;
-                const ln: isize = ext2.readLink(mnt, &cin, &lbuf);
+                const ln: isize = ext2fs.readLink(mnt, &cin, &lbuf);
                 if (ln > 0) {
                     const vp: *vnode.Vnode = vfs_vnops.vn_create(child, .vlnk, 0o777) orelse continue;
                     _ = vp.v_op.write(vp, 0, lbuf[0..@intCast(ln)]);
@@ -303,11 +301,11 @@ fn copyDir(mnt: *ext2.Ext2Mount, ino: u64, dir_path: []const u8) bool {
 fn mountTmpfs() ?*mount.Mount {
     prf.printLine("Trying to mount root from tmpfs []...");
     const mp: *mount.Mount = vfs_mount.mountFs("tmpfs", null) orelse {
-        prf.printLine("init: cannot mount root filesystem");
+        prf.log(prf.LOG_ERR, "cannot mount root filesystem", .{});
         return null;
     };
     vfs_mount.setRoot(mp);
-    prf.printLine("tmpfs: mounted on /");
+    prf.log(prf.LOG_DEBUG, "tmpfs: mounted on /", .{});
     return mp;
 }
 
@@ -319,13 +317,11 @@ fn mountRoot() ?*mount.Mount {
     const mp: *mount.Mount = mountTmpfs() orelse return null;
 
     if (findModule("/root.img")) |image| {
-        prf.print("init: expanding /root.img (");
-        prf.printDec(image.len);
-        prf.printLine(" bytes) into the root");
+        prf.log(prf.LOG_INFO, "expanding /root.img (%u bytes) into the root", .{image.len});
         if (unpackImage(image)) {
             return mp;
         }
-        prf.printLine("init: cannot expand /root.img; using the modules");
+        prf.log(prf.LOG_WARNING, "cannot expand /root.img; using the modules", .{});
     }
 
     populateRoot();
@@ -375,23 +371,23 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
 
     // Create the init process; alloc() gives it its own address space.
     const init = kern_proc.alloc() orelse {
-        prf.printLine("init: cannot create process");
+        prf.log(prf.LOG_ERR, "cannot create init process", .{});
         return;
     };
 
     const result = kern_exec.loadInto(null, init.pmap, "/sbin/init", 0) orelse {
-        prf.printLine("init: cannot load /sbin/init");
+        prf.log(prf.LOG_ERR, "cannot load /sbin/init", .{});
         return;
     };
 
     // Map the initial user stack.
     var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
     while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
-        const pa: u64 = uvm_page.physalloc() orelse return;
+        const pa: u64 = vm_page.physalloc() orelse return;
         arch.pmap.enterUser(init.pmap, va, pa, .user_rw);
     }
     if (!kern_exec.mapTrampoline(init.pmap)) {
-        prf.printLine("init: cannot map trampoline");
+        prf.log(prf.LOG_ERR, "cannot map trampoline", .{});
         return;
     }
 
@@ -400,7 +396,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     const args: []const []const u8 = &.{"/sbin/init"};
     const env: []const []const u8 = &.{"TERM=xterm"};
     const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env, &.{}) orelse {
-        prf.printLine("init: cannot build stack");
+        prf.log(prf.LOG_ERR, "cannot build init stack", .{});
         return;
     };
 
@@ -439,22 +435,20 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.brk = result.brk;
     init.mmap_next = param.USER_MMAP_BASE;
     if (!kern_exec.setupInitialTls(init, init.pmap, result)) {
-        prf.printLine("init: cannot set up initial TLS");
+        prf.log(prf.LOG_ERR, "cannot set up initial TLS", .{});
         return;
     }
 
     kern_sched.prepareContext(init);
     init.state = .runnable;
 
-    prf.print("init: starting at ");
-    prf.printHex(result.entry);
-    prf.printLine("");
+    prf.log(prf.LOG_DEBUG, "init: starting at %x", .{result.entry});
 
     // From here on, output is userland: switch the console to the FreeBSD-like
     // normal (light grey) foreground, cursor included.
     cons.cnSetColor(0xc0, 0xc0, 0xc0);
 
-    prf.printLine("sched: starting the scheduler (preemptive, PIT @ 100 Hz)");
+    prf.log(prf.LOG_INFO, "sched: starting the scheduler (preemptive, PIT @ 100 Hz)", .{});
     // Run the scheduler; it never returns.
     kern_sched.scheduler();
 }

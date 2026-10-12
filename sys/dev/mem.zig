@@ -63,7 +63,7 @@ const mem_cdevsw: conf.Cdevsw = .{
 
 fn memAttach(_: ?*const anyopaque) callconv(.c) void {
     conf.registerCdev(MEM_MAJOR, &mem_cdevsw);
-    prf.printLine("mem0 at mainbus0: /dev/null, /dev/zero");
+    prf.log(prf.LOG_DEBUG, "mem: /dev/null, /dev/zero registered", .{});
 }
 
 comptime {

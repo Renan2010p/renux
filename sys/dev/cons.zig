@@ -13,6 +13,7 @@
 const conf: type = @import("../sys/conf.zig");
 const errno: type = @import("../sys/errno.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
+const prf: type = @import("../kern/subr_prf.zig");
 
 /// Maximum number of attached consoles.
 pub const MAX_CONSOLES: usize = 4;
@@ -238,6 +239,7 @@ const cons_cdevsw: conf.Cdevsw = .{
 
 fn consAttachDev(_: ?*const anyopaque) callconv(.c) void {
     conf.registerCdev(CONSOLE_MAJOR, &cons_cdevsw);
+    prf.log(prf.LOG_DEBUG, "console: device registered", .{});
 }
 
 comptime {

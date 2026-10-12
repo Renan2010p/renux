@@ -118,7 +118,7 @@ pub fn build(b: *Builder) !void {
 
     // zig build test  (host unit tests for the pure, portable parts)
     const test_step: *Builder.Step = b.step("test", "Run the host unit tests");
-    const unit: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "test", "sys/uvm/phys_bitmap.zig" });
+    const unit: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "test", "sys/vm/phys_bitmap.zig" });
     unit.setCwd(b.path("."));
     test_step.dependOn(&unit.step);
 

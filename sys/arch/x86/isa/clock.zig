@@ -66,6 +66,11 @@ fn tick() void {
 
 fn clockInit(_: ?*const anyopaque) callconv(.c) void {
     init();
+    // Announce the clocks the way FreeBSD's tc_init() and et_register() do
+    // (sys/kern/kern_tc.c): an event timer and a timecounter, both backed by
+    // the i8254. The frequency is the PIT input clock, 1193182 Hz.
+    prf.printLine("Event timer \"i8254\" frequency 1193182 Hz quality 0");
+    prf.printLine("Timecounter \"i8254\" frequency 1193182 Hz quality 0");
 }
 
 comptime {

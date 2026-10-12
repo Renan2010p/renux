@@ -13,7 +13,7 @@
 
 const pte: type = @import("../include/pte.zig");
 const iface: type = @import("../include/pmap.zig");
-const uvm_page: type = @import("../../../uvm/uvm_page.zig");
+const vm_page: type = @import("../../../vm/vm_page.zig");
 const param: type = @import("../../../sys/param.zig");
 
 pub const Prot: type = iface.Prot;
@@ -83,7 +83,7 @@ fn arenaOpen(pmap: u64) void {
 fn recordPage(pmap: u64, pa: u64) void {
     const a: *Arena = arenaOf(pmap) orelse return;
     if (a.head == null or a.head.?.used == BLOCK_PAGES) {
-        const blk_pa: u64 = uvm_page.physalloc() orelse return;
+        const blk_pa: u64 = vm_page.physalloc() orelse return;
         const b: *Block = @ptrFromInt((blk_pa & pte.FRAME_MASK) + hhdm);
         b.next = a.head;
         b.used = 0;
@@ -103,10 +103,10 @@ fn arenaClose(pmap: u64) void {
     while (b) |blk| {
         var k: usize = 0;
         while (k < blk.used) : (k += 1) {
-            uvm_page.physfree(blk.pages[k]);
+            vm_page.physfree(blk.pages[k]);
         }
         const nx: ?*Block = blk.next;
-        uvm_page.physfree(@intFromPtr(blk) - hhdm);
+        vm_page.physfree(@intFromPtr(blk) - hhdm);
         b = nx;
     }
     a.pmap = 0;
@@ -117,7 +117,7 @@ fn arenaClose(pmap: u64) void {
 /// Allocate a zeroed page and record it as belonging to `pmap`. Every page in a
 /// process's address space -- data and page tables -- is allocated through here.
 pub fn allocPage(pmap: Pmap) ?u64 {
-    const pa: u64 = uvm_page.physalloc() orelse return null;
+    const pa: u64 = vm_page.physalloc() orelse return null;
     recordPage(pmap, pa);
     return pa;
 }
@@ -165,7 +165,7 @@ fn table(pa: u64) [*]u64 {
 
 /// Create a page map with the kernel half shared and an empty user half.
 pub fn create() ?Pmap {
-    const pa: u64 = uvm_page.physalloc() orelse return null; // zeroed
+    const pa: u64 = vm_page.physalloc() orelse return null; // zeroed
     const dst: [*]u64 = table(pa);
     const src: [*]u64 = table(kernel_pmap);
     var i: usize = KERNEL_PML4_START;

@@ -9,7 +9,7 @@
 const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const signal: type = @import("../sys/signal.zig");
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const descrip: type = @import("kern_descrip.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
@@ -55,7 +55,7 @@ pub fn init() void {
             p.sig_handler[s] = 0;
         }
     }
-    prf.printLine("proc: process table, 64 slots");
+    prf.log(prf.LOG_INFO, "proc: process table, 64 slots", .{});
 }
 
 /// Allocate a process with a fresh address space and kernel stack.
@@ -67,7 +67,7 @@ pub fn alloc() ?*proc.Proc {
             continue;
         }
         const map = arch.pmap.create() orelse return null;
-        const kpage = uvm_page.physalloc() orelse return null;
+        const kpage = vm_page.physalloc() orelse return null;
         p.pid = next_pid;
         next_pid += 1;
         p.parent = null;
@@ -112,7 +112,7 @@ pub fn free(p: *proc.Proc) void {
         }
     }
     if (p.kstack_page != 0) {
-        uvm_page.physfree(p.kstack_page);
+        vm_page.physfree(p.kstack_page);
     }
     p.state = .unused;
     p.pid = 0;

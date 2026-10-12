@@ -11,6 +11,7 @@
 const tty: type = @import("../kern/tty.zig");
 const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
+const prf: type = @import("../kern/subr_prf.zig");
 
 /// Major number of the terminal device.
 pub const TTY_MAJOR: usize = 1;
@@ -61,6 +62,7 @@ const tty_cdevsw: conf.Cdevsw = .{
 
 fn ttyAttach(_: ?*const anyopaque) callconv(.c) void {
     conf.registerCdev(TTY_MAJOR, &tty_cdevsw);
+    prf.log(prf.LOG_DEBUG, "tty: device registered", .{});
 }
 
 comptime {

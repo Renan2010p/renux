@@ -16,11 +16,11 @@ pub const panic = std.debug.FullPanic(@import("kern/subr_prf.zig").panic);
 comptime {
     _ = @import("arch/arch.zig");
     _ = @import("kern/init_main.zig");
-    _ = @import("uvm/uvm_init.zig");
+    _ = @import("vm/vm_init.zig");
     _ = @import("dev/pckbport/pckbd.zig");
     _ = @import("dev/cons.zig");
     _ = @import("dev/tty.zig");
     _ = @import("dev/mem.zig");
     _ = @import("fs/tmpfs/tmpfs_vfsops.zig");
-    _ = @import("fs/ext2/ext2_vfsops.zig");
+    _ = @import("fs/ext2fs/ext2fs_vfsops.zig");
 }

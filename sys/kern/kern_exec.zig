@@ -22,7 +22,7 @@ const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
-const uvm_page: type = @import("../uvm/uvm_page.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
@@ -82,6 +82,7 @@ fn vnodeRead(ctx: *anyopaque, offset: u64, buf: []u8) usize {
 /// `pmap`, at link address + `base`. Returns null when the path cannot be
 /// resolved, opened or interpreted.
 pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8, base: u64) ?exec_elf.Result {
+    prf.log(prf.LOG_DEBUG, "exec: loading %s", .{path});
     const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return null;
 
     var vap: vnode.Vattr = .{
