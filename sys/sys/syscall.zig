@@ -55,6 +55,14 @@ pub const SYS_setrlimit: u64 = 195;
 pub const SYS_fstatat: u64 = 552;
 pub const SYS_clock_gettime: u64 = 232;
 pub const SYS_writev: u64 = 121;
+pub const SYS_access: u64 = 33;
+pub const SYS_faccessat: u64 = 489;
+pub const SYS_geteuid: u64 = 25;
+pub const SYS_getegid: u64 = 43;
+pub const SYS_fcntl: u64 = 92;
+pub const SYS_openat: u64 = 499;
+pub const SYS_readv: u64 = 120;
+pub const SYS_pread: u64 = 475;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;

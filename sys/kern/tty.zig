@@ -185,6 +185,11 @@ pub fn ioctl(t: *Tty, cmd: u64, arg: u64) i32 {
             return 0;
         },
         ttycom.TIOCGWINSZ => {
+            // Prefer the real console size (framebuffer grid) when there is one.
+            if (cons.cnSize()) |s| {
+                t.winsize.ws_row = @intCast(s.rows);
+                t.winsize.ws_col = @intCast(s.cols);
+            }
             const dst: [*]u8 = @ptrFromInt(arg);
             copyOut(dst, @ptrCast(&t.winsize), @sizeOf(termios.Winsize));
             return 0;

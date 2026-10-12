@@ -17,6 +17,12 @@ const sysinit: type = @import("../sys/sysinit.zig");
 /// Maximum number of attached consoles.
 pub const MAX_CONSOLES: usize = 4;
 
+/// A console's character grid size.
+pub const Size: type = struct {
+    rows: u32,
+    cols: u32,
+};
+
 /// A console device, described by callbacks. Only putc is required; getc is
 /// optional and used by the (future) kernel debugger and getchar path.
 pub const Console: type = struct {
@@ -28,6 +34,8 @@ pub const Console: type = struct {
     trygetc: ?*const fn () ?u8 = null,
     /// Set the foreground colour (RGB), if the device can.
     setfg: ?*const fn (r: u8, g: u8, b: u8) void = null,
+    /// Report the console's character grid size, if it has one.
+    size: ?*const fn () ?Size = null,
 };
 
 var consoles: [MAX_CONSOLES]Console = undefined;
@@ -118,6 +126,19 @@ pub fn cnSetColor(r: u8, g: u8, b: u8) void {
             setfg(r, g, b);
         }
     }
+}
+
+/// Return the character grid size of the first console that reports one.
+pub fn cnSize() ?Size {
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].size) |f| {
+            if (f()) |s| {
+                return s;
+            }
+        }
+    }
+    return null;
 }
 
 /// Emit a byte string on the console.

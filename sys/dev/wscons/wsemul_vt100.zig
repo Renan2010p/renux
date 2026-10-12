@@ -63,7 +63,15 @@ pub fn init() void {
 /// The console descriptor: output bytes go through putc(); colour changes are
 /// forwarded to the painter.
 pub fn console() cons.Console {
-    return .{ .putc = putc, .setfg = setForeground };
+    return .{ .putc = putc, .setfg = setForeground, .size = size };
+}
+
+/// The console size in cells, for TIOCGWINSZ.
+pub fn size() ?cons.Size {
+    if (rows == 0 or cols == 0) {
+        return null;
+    }
+    return .{ .rows = rows, .cols = cols };
 }
 
 fn setForeground(r: u8, g: u8, b: u8) void {
@@ -228,7 +236,12 @@ fn ground(ch: u8) void {
             state = .esc;
         },
         '\r' => moveTo(cy, 0),
-        '\n' => lineFeed(),
+        '\n' => {
+            // The kernel prints bare LF; treat it as CR+LF, as the old raster
+            // console did (the tty has no ONLCR translation yet).
+            moveTo(cy, 0);
+            lineFeed();
+        },
         0x08 => {
             if (cx > 0) moveTo(cy, cx - 1);
         },

@@ -22,6 +22,18 @@ pub fn sysSetuid(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// geteuid(2): the effective user id (the same as the real id here).
+pub fn sysGeteuid(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return @intCast(kern_proc.current.uid);
+}
+
+/// getegid(2): the effective group id.
+pub fn sysGetegid(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}
+
 /// issetugid(2): whether the process is setuid/gid. Never, so far.
 pub fn sysIssetugid(args: [sys.MAXARGS]u64) u64 {
     _ = args;

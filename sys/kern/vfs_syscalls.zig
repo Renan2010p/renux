@@ -218,6 +218,39 @@ pub fn sysUnlink(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// access(2): report whether the calling process can access `path`. Only the
+/// path's existence is checked (permissions are not modelled yet).
+pub fn sysAccess(args: [sys.MAXARGS]u64) u64 {
+    const path_ptr: u64 = args[0];
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
+    vfs_subr.vrele(vp);
+    return 0;
+}
+
+/// faccessat(2): like access(2); the descriptor is only used when the path is
+/// empty.
+pub fn sysFaccessat(args: [sys.MAXARGS]u64) u64 {
+    const path_ptr: u64 = args[1];
+    if (path_ptr == 0) {
+        return 0;
+    }
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    if (path.len == 0) {
+        return 0;
+    }
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
+    vfs_subr.vrele(vp);
+    return 0;
+}
+
+/// openat(2): open a path relative to a directory descriptor. Only the current
+/// directory (AT_FDCWD) and absolute paths are resolved, as elsewhere.
+pub fn sysOpenat(args: [sys.MAXARGS]u64) u64 {
+    const shifted: [sys.MAXARGS]u64 = .{ args[1], args[2], args[3], 0, 0, 0 };
+    return sysOpen(shifted);
+}
+
 /// Copy `len` bytes of kernel memory to the caller's address `dst`.
 fn copyOut(dst: u64, src: [*]const u8, len: usize) void {
     const d: [*]u8 = @ptrFromInt(dst);

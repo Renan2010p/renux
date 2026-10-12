@@ -76,6 +76,69 @@ pub fn sysWritev(args: [sys.MAXARGS]u64) u64 {
     return @intCast(total);
 }
 
+/// readv(2): read into the gathered buffers from `fd`.
+pub fn sysReadv(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const iov_ptr: u64 = args[1];
+    const iovcnt: u64 = args[2];
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
+    if ((f.f_flag & file.FREAD) == 0) {
+        return sys.signed(-errno.EBADF);
+    }
+    const iov: [*]align(1) const Iovec = @ptrFromInt(iov_ptr);
+    var total: isize = 0;
+    var i: u64 = 0;
+    while (i < iovcnt) : (i += 1) {
+        const len: u64 = iov[i].iov_len;
+        if (len == 0) {
+            continue;
+        }
+        const bytes: [*]u8 = @ptrFromInt(iov[i].iov_base);
+        const n: isize = f.f_ops.read(f, bytes[0..@intCast(len)]);
+        if (n < 0) {
+            if (total > 0) {
+                return @intCast(total);
+            }
+            return sys.signed(n);
+        }
+        total += n;
+        if (n < len) {
+            break;
+        }
+    }
+    return @intCast(total);
+}
+
+/// pread(2): read at an explicit offset without moving the file position.
+pub fn sysPread(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const buf: u64 = args[1];
+    const count: u64 = args[2];
+    const off: i64 = @bitCast(args[3]);
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
+    if ((f.f_flag & file.FREAD) == 0) {
+        return sys.signed(-errno.EBADF);
+    }
+    const saved: u64 = f.f_offset;
+    f.f_offset = @intCast(off);
+    const bytes: [*]u8 = @ptrFromInt(buf);
+    const n: isize = f.f_ops.read(f, bytes[0..@intCast(count)]);
+    f.f_offset = saved;
+    if (n < 0) {
+        return sys.signed(n);
+    }
+    return @intCast(n);
+}
+
+/// fcntl(2): minimal. File status flags are not modelled, so the operations a
+/// C library probes return success/zero.
+pub fn sysFcntl(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}
+
 /// read(2): read from descriptor `fd`.
 pub fn sysRead(args: [sys.MAXARGS]u64) u64 {
     const fd: u64 = args[0];

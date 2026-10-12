@@ -142,6 +142,14 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_fstatat, .handler = vfs_syscalls.sysFstatat },
     .{ .num = sys.SYS_clock_gettime, .handler = kern_time.sysClockGettime },
     .{ .num = sys.SYS_writev, .handler = sys_generic.sysWritev },
+    .{ .num = sys.SYS_access, .handler = vfs_syscalls.sysAccess },
+    .{ .num = sys.SYS_faccessat, .handler = vfs_syscalls.sysFaccessat },
+    .{ .num = sys.SYS_geteuid, .handler = kern_prot.sysGeteuid },
+    .{ .num = sys.SYS_getegid, .handler = kern_prot.sysGetegid },
+    .{ .num = sys.SYS_fcntl, .handler = sys_generic.sysFcntl },
+    .{ .num = sys.SYS_openat, .handler = vfs_syscalls.sysOpenat },
+    .{ .num = sys.SYS_readv, .handler = sys_generic.sysReadv },
+    .{ .num = sys.SYS_pread, .handler = sys_generic.sysPread },
 };
 
 /// Number-to-handler table, indexed by system call number.
