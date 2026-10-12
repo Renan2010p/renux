@@ -15,6 +15,7 @@
 
 const exec_elf: type = @import("exec_elf.zig");
 const vnode: type = @import("../sys/vnode.zig");
+const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
 const signal: type = @import("../sys/signal.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
@@ -387,8 +388,8 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     // Read the caller's arguments while its address space is still current.
     var argbuf: [MAXARG][]const u8 = undefined;
     var envbuf: [MAXARG][]const u8 = undefined;
-    const argc: usize = readVec(argv_ptr, &argbuf) orelse return -1;
-    const envc: usize = readVec(envp_ptr, &envbuf) orelse return -1;
+    const argc: usize = readVec(argv_ptr, &argbuf) orelse return -errno.EFAULT;
+    const envc: usize = readVec(envp_ptr, &envbuf) orelse return -errno.EFAULT;
 
     const p: *proc.Proc = kern_proc.current;
 
@@ -405,7 +406,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     var interp: []const u8 = undefined;
     var sarg: ?[]const u8 = null;
     {
-        const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return -1;
+        const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return -errno.ENOENT;
         const is_script: bool = scriptInterp(vp, &script_buf, &interp, &sarg);
         vfs_subr.vrele(vp);
         if (is_script) {
@@ -430,13 +431,13 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
         }
     }
 
-    const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -1;
-    const main: exec_elf.Result = loadInto(p.cwd, newmap, exe_path, 0) orelse return -1;
+    const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -errno.ENOMEM;
+    const main: exec_elf.Result = loadInto(p.cwd, newmap, exe_path, 0) orelse return -errno.ENOEXEC;
     if (!mapStack(newmap)) {
-        return -1;
+        return -errno.ENOMEM;
     }
     if (!mapTrampoline(newmap)) {
-        return -1;
+        return -errno.ENOMEM;
     }
 
     // A PT_INTERP image is a dynamic executable: load the interpreter (the
@@ -446,7 +447,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     var interp_base: u64 = 0;
     if (main.interp_len > 0) {
         const ipath: []const u8 = main.interp[0..main.interp_len];
-        const interp_res: exec_elf.Result = loadInto(p.cwd, newmap, ipath, INTERP_BASE) orelse return -1;
+        const interp_res: exec_elf.Result = loadInto(p.cwd, newmap, ipath, INTERP_BASE) orelse return -errno.ENOEXEC;
         entry = interp_res.entry;
         interp_base = INTERP_BASE;
     }
@@ -474,12 +475,12 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     auxv[an] = .{ .type = AT_EGID, .val = p.uid };
     an += 1;
 
-    const info: StartInfo = buildStack(newmap, final[0..final_argc], envbuf[0..envc], auxv[0..an]) orelse return -1;
+    const info: StartInfo = buildStack(newmap, final[0..final_argc], envbuf[0..envc], auxv[0..an]) orelse return -errno.ENOMEM;
 
     p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;
     if (!setupInitialTls(p, newmap, main)) {
-        return -1;
+        return -errno.ENOMEM;
     }
 
     // Caught signals revert to their default action across exec.
