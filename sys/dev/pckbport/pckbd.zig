@@ -21,6 +21,31 @@ const SC_LCTRL: u8 = 0x1d;
 
 var shift_down: bool = false;
 var ctrl_down: bool = false;
+var extended: bool = false;
+
+/// Push an escape sequence on the console input queue.
+fn emit(seq: []const u8) void {
+    for (seq) |c| {
+        cons.cnInput(c);
+    }
+}
+
+/// Translate an extended (0xE0-prefixed) make code into an ANSI sequence.
+fn extendedKey(code: u8) void {
+    switch (code) {
+        0x48 => emit("\x1b[A"), // up
+        0x50 => emit("\x1b[B"), // down
+        0x4d => emit("\x1b[C"), // right
+        0x4b => emit("\x1b[D"), // left
+        0x47 => emit("\x1b[H"), // Home
+        0x4f => emit("\x1b[F"), // End
+        0x53 => emit("\x1b[3~"), // Delete
+        0x49 => emit("\x1b[5~"), // Page Up
+        0x51 => emit("\x1b[6~"), // Page Down
+        0x52 => emit("\x1b[2~"), // Insert
+        else => {},
+    }
+}
 
 /// Map a printable character to the control character produced with Ctrl held
 /// (Ctrl+A..Ctrl+Z and the punctuation keys, as the BSD consoles do).
@@ -55,8 +80,26 @@ fn handler() void {
             continue; // mouse byte; not for us
         }
 
+        // 0xE0 introduces an extended key (arrows, Home/End, right Ctrl/Alt).
+        if (scancode == 0xe0) {
+            extended = true;
+            continue;
+        }
+
         const code: u8 = scancode & 0x7f;
         const released: bool = (scancode & 0x80) != 0;
+
+        if (extended) {
+            extended = false;
+            if (code == SC_LCTRL) {
+                ctrl_down = !released; // right Ctrl
+                continue;
+            }
+            if (!released) {
+                extendedKey(code);
+            }
+            continue;
+        }
 
         if (code == SC_LSHIFT or code == SC_RSHIFT) {
             shift_down = !released;
