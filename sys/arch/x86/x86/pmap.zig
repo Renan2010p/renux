@@ -176,11 +176,12 @@ pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
 
 /// Tear down the user half of `p`: return the user data pages to the physical
 /// allocator, so a process that exits does not leak its whole address space.
-/// The page-table pages are left allocated: some intermediate tables are shared
-/// (the kernel half is), so freeing them corrupts other processes. This is
-/// called when a process is reaped; the direct-map offset is passed in, as
-/// destroy() may be reached through a module instance that has not seen
-/// bootstrap().
+/// The lower page-table pages (tables and directories) are also returned, but
+/// the top levels (PDPTs and the PML4) are deliberately left allocated: freeing
+/// them corrupted live processes, so the sharing between a pmap and the kernel
+/// half must be understood first. Called when a process is reaped; the
+/// direct-map offset is passed in, as destroy() may be reached through a module
+/// instance that has not seen bootstrap().
 pub fn destroy(p: Pmap, hhdm_off: u64) void {
     const pml4: [*]u64 = @ptrFromInt((p & pte.FRAME_MASK) + hhdm_off);
     var idx4: usize = 0;
@@ -215,7 +216,9 @@ pub fn destroy(p: Pmap, hhdm_off: u64) void {
                     if ((e1 & pte.P) == 0) continue;
                     uvm_page.physfree(e1 & pte.FRAME_MASK);
                 }
+                uvm_page.physfree(e2 & pte.FRAME_MASK);
             }
+            uvm_page.physfree(e3 & pte.FRAME_MASK);
         }
     }
 }
