@@ -72,7 +72,8 @@ zig build buildlib        # lib/  -> C library
 zig build buildbin        # bin/  -> sh
 zig build buildsbin       # sbin/ -> init
 zig build builduserland   # bin/ + sbin/
-zig build iso             # bootable ISO (kernel + userland)
+zig build rootfs          # the root image embedded in the kernel
+zig build iso             # bootable ISO (kernel only)
 zig build run             # boot the ISO in QEMU
 zig build all             # everything
 ```
@@ -104,7 +105,7 @@ to BSD developers:
 build.zig              top-level build (drives sys/, lib/, bin/ and sbin/)
 sys/                   kernel
   sys_root.zig         kernel root module
-  kern/, uvm/, dev/, sys/
+  kern/, vm/, fs/, dev/, sys/
   arch/                machine-dependent code
     arch.zig           architecture dispatch (comptime switch)
     x86/               x86-family code shared by all ports
@@ -118,15 +119,17 @@ bin/                   user programs
 sbin/                  system programs
   init/                /sbin/init
 stand/                 boot support (Limine protocol bindings, config)
-tools/                 build helper scripts (get-limine.sh, mkiso.sh)
+tools/                 build helper scripts (get-limine.sh, mkrootfs.sh, mkiso.sh)
 ```
 
 ## Status
 
 Working today:
 
-- **Boot:** Limine (higher half), explicit linker script, GDT + TSS, IDT with
-  trap handling; FreeBSD-style SYSINIT / mi_startup and boot log.
+- **Boot:** Limine (higher half) loads the kernel and nothing else; the root
+  filesystem is embedded in the kernel (FreeBSD's `MD_ROOT`) and unpacked at
+  boot. Explicit linker script, GDT + TSS, IDT with trap handling; FreeBSD-style
+  SYSINIT / mi_startup, boot log and `Loading kernel...` spinner.
 - **Console:** serial plus a graphical raster console (wsfont / rasops / rcons)
   with a block cursor.
 - **Memory:** physical page allocator, x86 pmap with per-process address spaces,

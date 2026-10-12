@@ -51,6 +51,13 @@ pub fn build(b: *Builder) !void {
     // more ports exist this should be selected from the target CPU arch.
     kern_exec.setLinkerScript(b.path("arch/amd64/conf/kern.ldscript"));
 
+    // The root filesystem image is embedded in the kernel (FreeBSD's MD_ROOT,
+    // see fs/rootimage.zig). The top-level build generates the real image at
+    // sys/root.img; a standalone build here gets an empty one and boots from
+    // the boot modules instead.
+    const ensure_root: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "-c", "[ -f root.img ] || : > root.img" });
+    kern_exec.step.dependOn(&ensure_root.step);
+
     const install_kernel: *Builder.Step.InstallArtifact = b.addInstallArtifact(kern_exec, .{});
 
     b.getInstallStep().dependOn(&install_kernel.step);

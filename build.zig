@@ -19,6 +19,7 @@
 //   zig build buildbin       build the user programs (bin/)
 //   zig build buildsbin      build the system programs (sbin/)
 //   zig build builduserland  build bin/ and sbin/
+//   zig build rootfs         build the root image embedded in the kernel
 //   zig build iso            build a bootable ISO
 //   zig build run            boot the ISO in QEMU
 //   zig build all            everything
@@ -93,6 +94,21 @@ pub fn build(b: *Builder) !void {
     builduserland_step.dependOn(buildsbin_step);
     builduserland_step.dependOn(buildlibexec_step);
     builduserland_step.dependOn(buildusrbin_step);
+
+    // zig build rootfs  (the root image embedded in the kernel; needs the userland)
+    const rootfs_step: *Builder.Step = b.step("rootfs", "Build the root image embedded in the kernel");
+    const rootfs: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "../tools/mkrootfs.sh" });
+    rootfs.setCwd(b.path("sys"));
+    rootfs.step.dependOn(buildlib_step);
+    rootfs.step.dependOn(buildbin_step);
+    rootfs.step.dependOn(buildsbin_step);
+    rootfs.step.dependOn(buildlibexec_step);
+    rootfs.step.dependOn(buildusrbin_step);
+    rootfs_step.dependOn(&rootfs.step);
+
+    // The kernel carries the root image inside it (FreeBSD's MD_ROOT), so the
+    // image has to exist before the kernel is compiled.
+    buildkernel.step.dependOn(&rootfs.step);
 
     // zig build iso
     const iso_step: *Builder.Step = b.step("iso", "Build a bootable Renux ISO image");

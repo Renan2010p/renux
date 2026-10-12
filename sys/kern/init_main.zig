@@ -16,6 +16,7 @@ const cons: type = @import("../dev/cons.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const mount: type = @import("../sys/mount.zig");
 const ext2fs: type = @import("../fs/ext2fs/ext2fs.zig");
+const rootimage: type = @import("../fs/rootimage.zig");
 const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
@@ -71,6 +72,9 @@ fn consinit(_: ?*const anyopaque) callconv(.c) void {
 
 /// Print the copyright notice.
 fn announce(_: ?*const anyopaque) callconv(.c) void {
+    // The loader-and-kernel hand-off line, as FreeBSD's loader prints it before
+    // the kernel banner.
+    prf.printLine("Loading kernel...");
     prf.print(copyright);
 }
 
@@ -196,7 +200,12 @@ fn unpackImage(image: []const u8) bool {
     if (!ext2fs.mountInit(&mnt, image)) {
         return false;
     }
-    if (!copyDir(&mnt, ext2fs.ROOT_INO, &.{})) {
+    // Show a spinner while the image is unpacked, as the loader does while it
+    // loads the kernel and modules.
+    prf.spinBegin("Loading configured modules... ");
+    const copied: bool = copyDir(&mnt, ext2fs.ROOT_INO, &.{});
+    prf.spinEnd();
+    if (!copied) {
         return false;
     }
     const vp: *vnode.Vnode = vfs_lookup.nameiLookup("/sbin/init") orelse {
@@ -230,6 +239,7 @@ fn copyDir(mnt: *ext2fs.Ext2Mount, ino: u64, dir_path: []const u8) bool {
     var pos: u64 = 0;
     var ent: ext2fs.DirEntry = undefined;
     while (ext2fs.dirNext(mnt, &dir, &pos, &ent)) {
+        prf.spin();
         const name: []const u8 = ent.name[0..ent.name_len];
         if ((name.len == 1 and name[0] == '.') or
             (name.len == 2 and name[0] == '.' and name[1] == '.'))
@@ -316,6 +326,17 @@ fn mountTmpfs() ?*mount.Mount {
 fn mountRoot() ?*mount.Mount {
     const mp: *mount.Mount = mountTmpfs() orelse return null;
 
+    // FreeBSD's MD_ROOT: the root image is embedded in the kernel itself, so
+    // the loader has to load nothing but the kernel.
+    if (rootimage.bytes.len > 0) {
+        prf.log(prf.LOG_INFO, "expanding the embedded root image (%u bytes)", .{rootimage.bytes.len});
+        if (unpackImage(rootimage.bytes)) {
+            return mp;
+        }
+        prf.log(prf.LOG_WARNING, "cannot expand the embedded root; trying modules", .{});
+    }
+
+    // Fall back to an image loaded as a boot module, then to per-file modules.
     if (findModule("/root.img")) |image| {
         prf.log(prf.LOG_INFO, "expanding /root.img (%u bytes) into the root", .{image.len});
         if (unpackImage(image)) {

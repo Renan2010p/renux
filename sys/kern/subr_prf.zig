@@ -196,6 +196,43 @@ pub fn log(comptime level: u8, comptime fmt: []const u8, args: anytype) void {
     putchar('\n');
 }
 
+// The boot spinner, in the spirit of FreeBSD's boot2 (stand/i386/boot2/boot2.c),
+// which redraws one glyph in place with "\b \b". The kernel shows it while it
+// unpacks the embedded root image.
+
+/// Spinner glyphs, in order.
+const spin_frames: []const u8 = "|/-\\";
+
+var spin_frame: usize = 0;
+var spin_open: bool = false;
+
+/// Open a spinner line `label`; spin() advances it and spinEnd() closes it.
+pub fn spinBegin(label: []const u8) void {
+    print(label);
+    putchar(spin_frames[0]);
+    spin_frame = 1;
+    spin_open = true;
+}
+
+/// Advance the spinner one frame.
+pub fn spin() void {
+    if (!spin_open) {
+        return;
+    }
+    putchar(0x08); // backspace: redraw over the previous glyph
+    putchar(spin_frames[spin_frame]);
+    spin_frame = (spin_frame + 1) % spin_frames.len;
+}
+
+/// Close the spinner line.
+pub fn spinEnd() void {
+    if (!spin_open) {
+        return;
+    }
+    putchar('\n');
+    spin_open = false;
+}
+
 /// Fatal kernel error. Reports to the console and halts the CPU forever.
 ///
 /// The signature matches Zig's panic hook so this can be installed as the
