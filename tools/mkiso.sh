@@ -90,6 +90,10 @@ cp "$GETTY" "$WORK/usr/libexec/getty"
 cp "$LOGIN" "$WORK/usr/bin/login"
 cp "$STAT" "$WORK/usr/bin/stat"
 cp "$SH" "$WORK/bin/sh"
+# The native shell stays available as /bin/renux-sh; when a FreeBSD userland is
+# present it replaces /bin/sh (the default login shell), so the system boots
+# with FreeBSD's sh.
+cp "$SH" "$WORK/bin/renux-sh"
 cp "$LS" "$WORK/bin/ls"
 cp "$CAT" "$WORK/bin/cat"
 cp "$ECHO" "$WORK/bin/echo"
@@ -163,6 +167,9 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         sed -i '/cmdline:/i\    module_path: boot():/usr/bin/fbsd-echo' "$WORK/limine.conf"
     fi
     if [ -f "$FBSDLIB/bin/sh" ]; then
+        # FreeBSD's sh becomes the default /bin/sh (the login shell); the copy
+        # at /bin/fbsdsh is kept for explicit use.
+        cp "$FBSDLIB/bin/sh" "$WORK/bin/sh"
         cp "$FBSDLIB/bin/sh" "$WORK/bin/fbsdsh"
         sed -i '/cmdline:/i\    module_path: boot():/bin/fbsdsh' "$WORK/limine.conf"
     fi
