@@ -18,6 +18,14 @@ pub fn build(b: *Builder) void {
         .optimize = .ReleaseSmall,
     });
 
+    // The boot protocol types are shared with the kernel.
+    const bootinfo_mod: *Builder.Module = b.createModule(.{
+        .root_source_file = b.path("../../arch/amd64/bootinfo.zig"),
+        .target = target,
+        .optimize = .ReleaseSmall,
+    });
+    mod.addImport("bootinfo", bootinfo_mod);
+
     const exe: *Builder.Step.Compile = b.addExecutable(.{
         .name = "BOOTX64",
         .root_module = mod,
