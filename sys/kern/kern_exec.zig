@@ -23,6 +23,7 @@ const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const uvm_page: type = @import("../uvm/uvm_page.zig");
 const param: type = @import("../sys/param.zig");
+const prf: type = @import("subr_prf.zig");
 
 /// Maximum number of arguments or environment strings execve() accepts.
 pub const MAXARG: usize = 32;

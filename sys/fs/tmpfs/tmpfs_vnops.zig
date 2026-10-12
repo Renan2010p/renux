@@ -163,7 +163,9 @@ fn tmpfsClose(vp: *vnode.Vnode, flags: i32) i32 {
 
 fn tmpfsRead(vp: *vnode.Vnode, offset: u64, buf: []u8) isize {
     const node: *tmpfs.Node = nodeOf(vp);
-    if (node.type != .vreg) {
+    // Regular files and symbolic links store their bytes the same way; a link's
+    // contents are its target.
+    if (node.type != .vreg and node.type != .vlnk) {
         return -errno.EISDIR;
     }
     return @intCast(tmpfs_subr.regRead(node, offset, buf));
@@ -171,7 +173,7 @@ fn tmpfsRead(vp: *vnode.Vnode, offset: u64, buf: []u8) isize {
 
 fn tmpfsWrite(vp: *vnode.Vnode, offset: u64, buf: []const u8) isize {
     const node: *tmpfs.Node = nodeOf(vp);
-    if (node.type != .vreg) {
+    if (node.type != .vreg and node.type != .vlnk) {
         return -errno.EISDIR;
     }
     return @intCast(tmpfs_subr.regWrite(node, offset, buf));

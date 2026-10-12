@@ -22,4 +22,5 @@ comptime {
     _ = @import("dev/tty.zig");
     _ = @import("dev/mem.zig");
     _ = @import("fs/tmpfs/tmpfs_vfsops.zig");
+    _ = @import("fs/ext2/ext2_vfsops.zig");
 }

@@ -79,7 +79,8 @@ command -v xorriso >/dev/null 2>&1 || {
 rm -rf "$WORK"
 mkdir -p "$WORK/boot/limine" "$WORK/boot/renux" "$WORK/EFI/BOOT" \
     "$WORK/sbin" "$WORK/bin" "$WORK/usr/bin" "$WORK/usr/sbin" "$WORK/usr/libexec" \
-    "$WORK/etc" "$WORK/etc/rc.d" "$WORK/lib" "$WORK/libexec"
+    "$WORK/etc" "$WORK/etc/rc.d" "$WORK/lib" "$WORK/libexec" \
+    "$WORK/dev" "$WORK/tmp" "$WORK/var" "$WORK/var/log" "$WORK/var/run"
 
 cp "$LIMINE/limine-bios.sys" "$LIMINE/limine-bios-cd.bin" "$LIMINE/limine-uefi-cd.bin" "$WORK/boot/limine/"
 cp "$LIMINE/BOOTX64.EFI" "$WORK/EFI/BOOT/"
@@ -173,6 +174,26 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         cp "$FBSDLIB/bin/sh" "$WORK/bin/fbsdsh"
         sed -i '/cmdline:/i\    module_path: boot():/bin/fbsdsh' "$WORK/limine.conf"
     fi
+fi
+
+# Whole-filesystem root image: bundle everything staged above into one ext2
+# filesystem and load it as a single module, so the kernel mounts a real root
+# filesystem from the boot medium (FreeBSD's live/memstick layout) instead of
+# one boot module per file.  Set ROOTIMG=0 to keep the per-file modules only.
+ROOTIMG="${ROOTIMG:-1}"
+if [ "$ROOTIMG" = "1" ]; then
+    used_kb="$(du -sk "$WORK" | awk '{print $1}')"
+    blocks=$((used_kb + used_kb / 2 + 8192))
+    img="$WORK.root.img"
+    rm -f "$img"
+    mke2fs -q -t ext2 -b 1024 -I 128 -m 0 -i 4096 -O ^resize_inode,^dir_index \
+        -d "$WORK" "$img" "$blocks" || {
+        echo "mkiso: mke2fs failed" >&2
+        exit 1
+    }
+    cp "$img" "$WORK/root.img"
+    rm -f "$img"
+    sed -i '/cmdline:/i\    module_path: boot():/root.img' "$WORK/limine.conf"
 fi
 
 xorriso -as mkisofs -R -r -J \

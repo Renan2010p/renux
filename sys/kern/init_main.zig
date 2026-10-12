@@ -14,6 +14,8 @@ const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const cons: type = @import("../dev/cons.zig");
 const vnode: type = @import("../sys/vnode.zig");
+const mount: type = @import("../sys/mount.zig");
+const ext2: type = @import("../fs/ext2/ext2.zig");
 const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
@@ -134,6 +136,9 @@ fn ensureParents(path: []const u8) void {
 /// special cases. Parent directories are created as needed.
 fn populateRoot() void {
     const count: usize = arch.boot.moduleCount() orelse 0;
+    prf.print("populateRoot: modules=");
+    prf.printDec(count);
+    prf.printLine("");
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const mod: *arch.boot.File = arch.boot.module(i) orelse continue;
@@ -143,8 +148,203 @@ fn populateRoot() void {
         const bytes: []const u8 = @as([*]const u8, @ptrCast(address))[0..@intCast(mod.size)];
 
         ensureParents(path);
-        const vp: *vnode.Vnode = vfs_vnops.vn_create(path, .vreg, 0o755) orelse continue;
+        const vp: *vnode.Vnode = vfs_vnops.vn_create(path, .vreg, 0o755) orelse {
+            prf.print("populate: cannot create ");
+            prf.printLine(path);
+            continue;
+        };
         _ = vp.v_op.write(vp, 0, bytes);
+        vfs_subr.vrele(vp);
+    }
+}
+
+/// Compare two byte strings for equality.
+fn strEq(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+    var i: usize = 0;
+    while (i < a.len) : (i += 1) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Find the boot module whose path is `name`; returns its bytes, or null.
+fn findModule(name: []const u8) ?[]const u8 {
+    const count: usize = arch.boot.moduleCount() orelse 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const mod: *arch.boot.File = arch.boot.module(i) orelse continue;
+        const path_ptr: [*:0]const u8 = mod.path orelse continue;
+        const address: ?*anyopaque = mod.address orelse continue;
+        if (strEq(cstr(path_ptr), name)) {
+            return @as([*]const u8, @ptrCast(address))[0..@intCast(mod.size)];
+        }
+    }
+    return null;
+}
+
+/// Populate the root tmpfs from a whole-filesystem image loaded as a single
+/// boot module: walk the ext2 tree and recreate every file, directory and
+/// symbolic link. This gives the FreeBSD "live" layout (one image on the
+/// medium instead of one boot module per file) while keeping a writable root.
+fn unpackImage(image: []const u8) bool {
+    var mnt: ext2.Ext2Mount = undefined;
+    if (!ext2.mountInit(&mnt, image)) {
+        return false;
+    }
+    if (!copyDir(&mnt, ext2.ROOT_INO, &.{})) {
+        return false;
+    }
+    const vp: *vnode.Vnode = vfs_lookup.nameiLookup("/sbin/init") orelse {
+        prf.printLine("unpack: /sbin/init missing");
+        return true;
+    };
+    var vap: vnode.Vattr = .{
+        .type = .vnone,
+        .mode = 0,
+        .nlink = 0,
+        .size = 0,
+        .uid = 0,
+        .gid = 0,
+        .rdev = 0,
+        .atime = 0,
+        .mtime = 0,
+        .ctime = 0,
+    };
+    _ = vp.v_op.getattr(vp, &vap);
+    prf.print("unpack: /sbin/init size=");
+    prf.printDec(vap.size);
+    prf.printLine("");
+    return true;
+}
+
+/// Recursively copy the directory `ino` of `mnt` into `dir_path` in the root.
+fn copyDir(mnt: *ext2.Ext2Mount, ino: u64, dir_path: []const u8) bool {
+    const dir: ext2.Inode = ext2.readInode(mnt, ino) orelse return false;
+    if ((dir.mode & ext2.S_IFMT) != ext2.S_IFDIR) {
+        return false;
+    }
+
+    var pos: u64 = 0;
+    var ent: ext2.DirEntry = undefined;
+    while (ext2.dirNext(mnt, &dir, &pos, &ent)) {
+        const name: []const u8 = ent.name[0..ent.name_len];
+        if ((name.len == 1 and name[0] == '.') or
+            (name.len == 2 and name[0] == '.' and name[1] == '.'))
+        {
+            continue;
+        }
+
+        // Build the child path: dir_path + "/" + name.
+        var pathbuf: [param.MAXPATHLEN]u8 = undefined;
+        var pl: usize = 0;
+        if (dir_path.len == 0) {
+            pathbuf[pl] = '/';
+            pl += 1;
+        } else {
+            var d: usize = 0;
+            while (d < dir_path.len and pl < pathbuf.len) : (d += 1) {
+                pathbuf[pl] = dir_path[d];
+                pl += 1;
+            }
+            if (pl > 0 and pathbuf[pl - 1] != '/') {
+                pathbuf[pl] = '/';
+                pl += 1;
+            }
+        }
+        var n: usize = 0;
+        while (n < name.len and pl < pathbuf.len) : (n += 1) {
+            pathbuf[pl] = name[n];
+            pl += 1;
+        }
+        const child: []const u8 = pathbuf[0..pl];
+
+        const cin: ext2.Inode = ext2.readInode(mnt, ent.ino) orelse continue;
+        const mode: u16 = cin.mode & 0o7777;
+        switch (ext2.vtypeOf(cin.mode)) {
+            .vdir => {
+                ensureDir(child);
+                _ = copyDir(mnt, ent.ino, child);
+            },
+            .vreg => {
+                const vp: *vnode.Vnode = vfs_vnops.vn_create(child, .vreg, mode) orelse continue;
+                var off: u64 = 0;
+                var buf: [4096]u8 = undefined;
+                while (off < cin.size) {
+                    const got: usize = ext2.readData(mnt, &cin, off, &buf);
+                    if (got == 0) {
+                        break;
+                    }
+                    _ = vp.v_op.write(vp, off, buf[0..got]);
+                    off += got;
+                }
+                vfs_subr.vrele(vp);
+            },
+            .vlnk => {
+                var lbuf: [param.MAXPATHLEN]u8 = undefined;
+                const ln: isize = ext2.readLink(mnt, &cin, &lbuf);
+                if (ln > 0) {
+                    const vp: *vnode.Vnode = vfs_vnops.vn_create(child, .vlnk, 0o777) orelse continue;
+                    _ = vp.v_op.write(vp, 0, lbuf[0..@intCast(ln)]);
+                    vfs_subr.vrele(vp);
+                }
+            },
+            else => {}, // device nodes and specials: the kernel makes its own
+        }
+    }
+    return true;
+}
+
+/// Mount a tmpfs as the system root.
+fn mountTmpfs() ?*mount.Mount {
+    prf.printLine("Trying to mount root from tmpfs []...");
+    const mp: *mount.Mount = vfs_mount.mountFs("tmpfs", null) orelse {
+        prf.printLine("init: cannot mount root filesystem");
+        return null;
+    };
+    vfs_mount.setRoot(mp);
+    prf.printLine("tmpfs: mounted on /");
+    return mp;
+}
+
+/// Mount the system root: a tmpfs, populated from the whole-filesystem image
+/// loaded as the /root.img module when present (so the medium carries one
+/// filesystem image instead of one boot module per file), or from the
+/// individual boot modules otherwise.
+fn mountRoot() ?*mount.Mount {
+    const mp: *mount.Mount = mountTmpfs() orelse return null;
+
+    if (findModule("/root.img")) |image| {
+        prf.print("init: expanding /root.img (");
+        prf.printDec(image.len);
+        prf.printLine(" bytes) into the root");
+        if (unpackImage(image)) {
+            return mp;
+        }
+        prf.printLine("init: cannot expand /root.img; using the modules");
+    }
+
+    populateRoot();
+    return mp;
+}
+
+/// Create directory `path` when it does not already exist.
+fn ensureDir(path: []const u8) void {
+    if (vfs_lookup.nameiLookup(path) != null) {
+        return;
+    }
+    if (vfs_vnops.vn_create(path, .vdir, 0o755)) |vp| {
+        vfs_subr.vrele(vp);
+    }
+}
+
+/// Create the character-device node `path`.
+fn mknod(path: []const u8, mode: u16, rdev: u64) void {
+    if (vfs_vnops.vn_mknod(path, .vchr, mode, rdev)) |vp| {
         vfs_subr.vrele(vp);
     }
 }
@@ -153,55 +353,23 @@ fn populateRoot() void {
 /// boot modules, load /sbin/init from it, set up its stack, and enter ring 3
 /// (NetBSD's start_init()).
 fn start_init(_: ?*const anyopaque) callconv(.c) void {
-    prf.printLine("Trying to mount root from tmpfs []...");
-    const mp = vfs_mount.mountFs("tmpfs", null) orelse {
-        prf.printLine("init: cannot mount root filesystem");
-        return;
-    };
-    vfs_mount.setRoot(mp);
-    prf.printLine("tmpfs: mounted on /");
-    populateRoot();
+    _ = mountRoot() orelse return;
 
-    // Create /dev and its console device node.
-    if (vfs_lookup.nameiLookup("/dev") == null) {
-        if (vfs_vnops.vn_create("/dev", .vdir, 0o755)) |vp| {
-            vfs_subr.vrele(vp);
-        }
-    }
-    if (vfs_vnops.vn_mknod("/dev/console", .vchr, 0o600, conf.makedev(0, 0))) |vp| {
-        vfs_subr.vrele(vp);
-    }
-    if (vfs_vnops.vn_mknod("/dev/tty", .vchr, 0o666, conf.makedev(1, 0))) |vp| {
-        vfs_subr.vrele(vp);
-    }
+    // Device nodes (the root is a writable tmpfs).
+    ensureDir("/dev");
+    mknod("/dev/console", 0o600, conf.makedev(0, 0));
+    mknod("/dev/tty", 0o666, conf.makedev(1, 0));
     // The virtual console ttyv0 (FreeBSD's init only starts a session on a tty
     // marked "onifexists" when the device node exists).
-    if (vfs_vnops.vn_mknod("/dev/ttyv0", .vchr, 0o600, conf.makedev(0, 0))) |vp| {
-        vfs_subr.vrele(vp);
-    }
-    if (vfs_vnops.vn_mknod("/dev/null", .vchr, 0o666, conf.makedev(2, 2))) |vp| {
-        vfs_subr.vrele(vp);
-    }
-    if (vfs_vnops.vn_mknod("/dev/zero", .vchr, 0o666, conf.makedev(2, 12))) |vp| {
-        vfs_subr.vrele(vp);
-    }
+    mknod("/dev/ttyv0", 0o600, conf.makedev(0, 0));
+    mknod("/dev/null", 0o666, conf.makedev(2, 2));
+    mknod("/dev/zero", 0o666, conf.makedev(2, 12));
 
-    // /var/log, for the system log.
-    if (vfs_lookup.nameiLookup("/var") == null) {
-        if (vfs_vnops.vn_create("/var", .vdir, 0o755)) |vp| {
-            vfs_subr.vrele(vp);
-        }
-    }
-    if (vfs_lookup.nameiLookup("/var/log") == null) {
-        if (vfs_vnops.vn_create("/var/log", .vdir, 0o755)) |vp| {
-            vfs_subr.vrele(vp);
-        }
-    }
-    if (vfs_lookup.nameiLookup("/etc/rc.d") == null) {
-        if (vfs_vnops.vn_create("/etc/rc.d", .vdir, 0o755)) |vp| {
-            vfs_subr.vrele(vp);
-        }
-    }
+    ensureDir("/tmp");
+    ensureDir("/var");
+    ensureDir("/var/log");
+    ensureDir("/var/run");
+    ensureDir("/etc/rc.d");
 
     kern_proc.init();
 

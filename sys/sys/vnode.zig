@@ -90,6 +90,9 @@ pub const Vnode: type = struct {
     v_data: ?*anyopaque,
     /// Filesystem this vnode belongs to.
     v_mount: ?*mount.Mount,
+    /// A filesystem mounted on this directory, if any. namei() crosses into
+    /// mnt_root when it descends through the directory.
+    v_mountedhere: ?*mount.Mount,
     /// Number of open references.
     v_usecount: u32,
     /// Number of internal references (name cache, parent links, ...).

@@ -67,6 +67,22 @@ pub fn physfree(pa: u64) void {
     count += 1;
 }
 
+/// Remove the pages in [start, end) from the free list. Used to carve the
+/// boot loader's modules out of memory the memory map still calls usable.
+pub fn physunload(start: u64, end: u64) void {
+    var prev: *u64 = &head;
+    while (prev.* != 0) {
+        const pa: u64 = prev.*;
+        if (pa >= start and pa < end) {
+            const node: *u64 = link(pa);
+            prev.* = node.*;
+            count -= 1;
+        } else {
+            prev = link(pa);
+        }
+    }
+}
+
 /// Number of free pages.
 pub fn freeCount() usize {
     return count;

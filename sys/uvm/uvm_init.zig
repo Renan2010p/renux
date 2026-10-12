@@ -33,6 +33,22 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
             uvm_page.physload(entry.base, entry.base + entry.length);
         }
     }
+
+    // The boot loader can place a module partly inside a region it still
+    // reports as usable (observed with a large module). Never hand those pages
+    // out, or the module image is overwritten once memory is allocated.
+    const modules: usize = arch.boot.moduleCount() orelse 0;
+    var m: usize = 0;
+    while (m < modules) : (m += 1) {
+        const mod: *arch.boot.File = arch.boot.module(m) orelse continue;
+        const addr: ?*anyopaque = mod.address orelse continue;
+        const p: u64 = @intFromPtr(addr);
+        if (p < hhdm) {
+            continue;
+        }
+        const pa: u64 = p - hhdm;
+        uvm_page.physunload(pa, pa + mod.size);
+    }
 }
 
 /// Total usable physical memory reported by the boot protocol.

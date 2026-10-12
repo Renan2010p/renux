@@ -91,6 +91,34 @@ pub fn setRoot(mp: *mount.Mount) void {
     rootmount = mp;
 }
 
+/// Mount the filesystem `name` on the directory `dir`: the new filesystem's
+/// root is reached whenever namei() descends through `dir` (NetBSD's
+/// vfs_mountroot()-style rootmount for a directory). Returns the mount, or null.
+pub fn mountOn(dir: *vnode.Vnode, name: []const u8, data: ?*anyopaque) ?*mount.Mount {
+    if (dir.v_type != .vdir) {
+        return null;
+    }
+    const mp: *mount.Mount = mountFs(name, data) orelse return null;
+    dir.v_mountedhere = mp;
+    return mp;
+}
+
+/// Follow a mount point: if `vp` is a directory a filesystem is mounted on,
+/// return that filesystem's root; otherwise return `vp`.
+pub fn cross(vp: *vnode.Vnode) *vnode.Vnode {
+    var v: *vnode.Vnode = vp;
+    var guard: usize = 0;
+    while (v.v_mountedhere) |m| {
+        const root: ?*vnode.Vnode = m.mnt_root;
+        if (root == null or guard >= 8) {
+            break;
+        }
+        v = root.?;
+        guard += 1;
+    }
+    return v;
+}
+
 /// The root vnode of the system, or null before root is mounted.
 pub fn getRoot() ?*vnode.Vnode {
     const mp: *mount.Mount = rootmount orelse return null;
