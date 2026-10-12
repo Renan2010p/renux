@@ -27,6 +27,7 @@ const dev_ops: file.FileOps = .{
     .read = devRead,
     .write = devWrite,
     .ioctl = devIoctl,
+    .mmap = devMmap,
     .stat = devStat,
     .close = devClose,
 };
@@ -49,6 +50,12 @@ fn devWrite(f: *file.File, buf: []const u8) isize {
 fn devIoctl(f: *file.File, cmd: u64, arg: u64) i32 {
     const df: *DevFile = cast(f);
     return df.cdev.ioctl(df.ctx, cmd, arg);
+}
+
+fn devMmap(f: *file.File, offset: u64, prot: u32) ?u64 {
+    const df: *DevFile = cast(f);
+    const hook = df.cdev.mmap orelse return null;
+    return hook(df.ctx, offset, prot);
 }
 
 fn devStat(f: *file.File, st: *stat.Stat) i32 {

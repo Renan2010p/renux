@@ -13,6 +13,7 @@
 const arch: type = @import("../arch/arch.zig");
 const rasops: type = @import("../dev/rasops/rasops.zig");
 const cons: type = @import("../dev/cons.zig");
+const fbd: type = @import("../dev/fb/fb.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const mount: type = @import("../sys/mount.zig");
 const ext2fs: type = @import("../fs/ext2fs/ext2fs.zig");
@@ -67,7 +68,18 @@ fn bootRaster() ?rasops.Raster {
 
 /// Find and initialise the console, for early messages (NetBSD's consinit()).
 fn consinit(_: ?*const anyopaque) callconv(.c) void {
-    arch.consinit.consinit(bootRaster());
+    const r: ?rasops.Raster = bootRaster();
+    arch.consinit.consinit(r);
+    // Publish the framebuffer to userland as /dev/fb0 (FreeBSD's fbio.h ABI),
+    // which is what a graphical server's scfb(4) driver mmaps and paints.
+    if (r) |rr| {
+        if (arch.boot.framebuffer(0)) |fb| {
+            if (fb.address) |addr| {
+                const hhdm: u64 = arch.boot.hhdmOffset() orelse 0;
+                fbd.attach(rr, @intFromPtr(addr) - hhdm, fb.pitch * fb.height);
+            }
+        }
+    }
 }
 
 /// Print the copyright notice.
@@ -381,6 +393,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     mknod("/dev/ttyv0", 0o600, conf.makedev(0, 0));
     mknod("/dev/null", 0o666, conf.makedev(2, 2));
     mknod("/dev/zero", 0o666, conf.makedev(2, 12));
+    mknod("/dev/fb0", 0o600, conf.makedev(fbd.FB_MAJOR, 0));
 
     ensureDir("/tmp");
     ensureDir("/var");

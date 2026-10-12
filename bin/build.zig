@@ -93,6 +93,10 @@ pub fn build(b: *Builder) !void {
     const install_pwd: *Builder.Step.InstallArtifact = b.addInstallArtifact(pwd, .{});
     b.getInstallStep().dependOn(&install_pwd.step);
 
+    const fbdraw: *Builder.Step.Compile = program(b, target, optimize, libc, "fbdraw", "fbdraw/main.zig");
+    const install_fbdraw: *Builder.Step.InstallArtifact = b.addInstallArtifact(fbdraw, .{});
+    b.getInstallStep().dependOn(&install_fbdraw.step);
+
     const mkdir: *Builder.Step.Compile = program(b, target, optimize, libc, "mkdir", "mkdir/main.zig");
     const install_mkdir: *Builder.Step.InstallArtifact = b.addInstallArtifact(mkdir, .{});
     b.getInstallStep().dependOn(&install_mkdir.step);

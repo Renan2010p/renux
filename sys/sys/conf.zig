@@ -23,6 +23,8 @@ pub const Cdevsw: type = struct {
     write: *const fn (ctx: ?*anyopaque, buf: []const u8) isize,
     /// Handle a device-specific control request.
     ioctl: *const fn (ctx: ?*anyopaque, cmd: u64, arg: u64) i32,
+    /// Map device memory: return the physical address for `offset`, or null.
+    mmap: ?*const fn (ctx: ?*anyopaque, offset: u64, prot: u32) ?u64 = null,
     /// Called when the last reference to the open file is dropped.
     close: *const fn (ctx: ?*anyopaque) i32,
 };
