@@ -29,9 +29,14 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     // Copy the parent's user pages into the child's address space.
     arch.pmap.copyUser(child.pmap, parent.pmap, hhdm);
 
-    // The child resumes from the same user frame, but fork returns 0 in it.
+    // The child resumes from the same user frame, but fork() returns 0 in it.
+    // The carry flag must be cleared too: FreeBSD's fork stub branches to its
+    // error path (returning -1 with an unchanged errno) when the flag is set, so
+    // inheriting the parent's carry from a previous failed syscall would make
+    // fork() look like it failed in the child.
     child.frame = frame.*;
     child.frame.rax = 0;
+    child.frame.rflags &= ~@as(u64, 1);
 
     // Inherit the open file table and the working directory.
     var fd: usize = 0;
@@ -48,6 +53,9 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     child.brk = parent.brk;
     child.mmap_next = parent.mmap_next;
     child.uid = parent.uid;
+    // The child shares the parent's thread pointer (TLS) until it execs; without
+    // this, libc's per-thread state (errno, ...) faults on the first access.
+    child.fsbase = parent.fsbase;
 
     // Copy the working-directory path.
     var k: usize = 0;

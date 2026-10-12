@@ -150,6 +150,14 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
             sed -i "/cmdline:/i\\    module_path: boot():/usr/share/terminfo/$t" "$WORK/limine.conf"
         fi
     done
+    # FreeBSD's /sbin/init (static) and its /etc/ttys, when present.
+    if [ -f "$FBSDLIB/sbin/init" ]; then
+        cp "$FBSDLIB/sbin/init" "$WORK/sbin/init"
+    fi
+    if [ -f "$FBSDLIB/etc/ttys" ]; then
+        cp "$FBSDLIB/etc/ttys" "$WORK/etc/ttys"
+        sed -i '/cmdline:/i\    module_path: boot():/etc/ttys' "$WORK/limine.conf"
+    fi
     if [ -f "$FBSDLIB/bin/echo" ]; then
         cp "$FBSDLIB/bin/echo" "$WORK/usr/bin/fbsd-echo"
         sed -i '/cmdline:/i\    module_path: boot():/usr/bin/fbsd-echo' "$WORK/limine.conf"

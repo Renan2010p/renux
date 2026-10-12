@@ -15,8 +15,11 @@ const descrip: type = @import("kern_descrip.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const prf: type = @import("subr_prf.zig");
 
-/// Maximum number of processes.
-pub const NPROC: usize = 16;
+/// Maximum number of processes. FreeBSD's init restarts a getty as soon as it
+/// exits, so a supervisor-style userland easily keeps several processes (a
+/// session child per tty plus the getty itself); 64 leaves plenty of headroom
+/// for those and for reaped-but-not-yet-collected zombies.
+pub const NPROC: usize = 64;
 
 pub var table: [NPROC]proc.Proc = undefined;
 pub var current: *proc.Proc = undefined;
@@ -51,7 +54,7 @@ pub fn init() void {
             p.sig_handler[s] = 0;
         }
     }
-    prf.printLine("proc: process table, 16 slots");
+    prf.printLine("proc: process table, 64 slots");
 }
 
 /// Allocate a process with a fresh address space and kernel stack.

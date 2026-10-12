@@ -20,5 +20,6 @@ comptime {
     _ = @import("dev/pckbport/pckbd.zig");
     _ = @import("dev/cons.zig");
     _ = @import("dev/tty.zig");
+    _ = @import("dev/mem.zig");
     _ = @import("fs/tmpfs/tmpfs_vfsops.zig");
 }

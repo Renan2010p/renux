@@ -174,6 +174,17 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     if (vfs_vnops.vn_mknod("/dev/tty", .vchr, 0o666, conf.makedev(1, 0))) |vp| {
         vfs_subr.vrele(vp);
     }
+    // The virtual console ttyv0 (FreeBSD's init only starts a session on a tty
+    // marked "onifexists" when the device node exists).
+    if (vfs_vnops.vn_mknod("/dev/ttyv0", .vchr, 0o600, conf.makedev(0, 0))) |vp| {
+        vfs_subr.vrele(vp);
+    }
+    if (vfs_vnops.vn_mknod("/dev/null", .vchr, 0o666, conf.makedev(2, 2))) |vp| {
+        vfs_subr.vrele(vp);
+    }
+    if (vfs_vnops.vn_mknod("/dev/zero", .vchr, 0o666, conf.makedev(2, 12))) |vp| {
+        vfs_subr.vrele(vp);
+    }
 
     // /var/log, for the system log.
     if (vfs_lookup.nameiLookup("/var") == null) {

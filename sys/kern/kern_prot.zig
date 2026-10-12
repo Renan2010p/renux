@@ -34,6 +34,31 @@ pub fn sysGetegid(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// setsid(2): start a new session whose id is the calling process. Renux does
+/// not model sessions yet, so this just reports success.
+pub fn sysSetsid(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return @intCast(kern_proc.current.pid);
+}
+
+/// setlogin(2): set the login name. Not modelled; report success.
+pub fn sysSetlogin(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}
+
+/// getpgrp(2): the process group. Here every process is its own group.
+pub fn sysGetpgrp(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return @intCast(kern_proc.current.pid);
+}
+
+/// setpgid(2): join a process group. Not modelled; report success.
+pub fn sysSetpgid(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return 0;
+}
+
 /// issetugid(2): whether the process is setuid/gid. Never, so far.
 pub fn sysIssetugid(args: [sys.MAXARGS]u64) u64 {
     _ = args;

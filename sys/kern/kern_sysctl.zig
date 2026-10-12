@@ -25,6 +25,7 @@ const KERN_VERSION: u64 = 4;
 const KERN_MAXPROC: u64 = 6;
 const KERN_MAXFILES: u64 = 7;
 const KERN_ARGMAX: u64 = 8;
+const KERN_SECURELEVEL: u64 = 9;
 const KERN_HOSTNAME: u64 = 10;
 const KERN_BOOTTIME: u64 = 21;
 const KERN_OSRELDATE: u64 = 24;
@@ -92,6 +93,7 @@ const name_mib = [_]NameMib{
     .{ .name = "kern.version", .mib = &.{ CTL_KERN, KERN_VERSION } },
     .{ .name = "kern.hostname", .mib = &.{ CTL_KERN, KERN_HOSTNAME } },
     .{ .name = "kern.argmax", .mib = &.{ CTL_KERN, KERN_ARGMAX } },
+    .{ .name = "kern.securelevel", .mib = &.{ CTL_KERN, KERN_SECURELEVEL } },
     .{ .name = "kern.maxproc", .mib = &.{ CTL_KERN, KERN_MAXPROC } },
     .{ .name = "kern.maxfiles", .mib = &.{ CTL_KERN, KERN_MAXFILES } },
     .{ .name = "kern.boottime", .mib = &.{ CTL_KERN, KERN_BOOTTIME } },
@@ -199,8 +201,11 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             KERN_OSRELDATE => return reportInt(oldp, oldlenp, @intCast(OSRELDATE)),
             KERN_HOSTNAME => return report(oldp, oldlenp, "renux\x00"),
             KERN_ARGMAX => return reportInt(oldp, oldlenp, 262144),
-            KERN_MAXPROC => return reportInt(oldp, oldlenp, 16),
+            KERN_MAXPROC => return reportInt(oldp, oldlenp, 64),
             KERN_MAXFILES => return reportInt(oldp, oldlenp, 64),
+            // FreeBSD's securelevel is -1 when unset (the kernel runs without a
+            // securelevel); init reads this to decide whether to raise it.
+            KERN_SECURELEVEL => return reportInt(oldp, oldlenp, -1),
             KERN_BOOTTIME => return reportLong(oldp, oldlenp, 0),
             KERN_USRSTACK => return reportLong(oldp, oldlenp, @intCast(arch.vmparam.USER_STACK_TOP)),
             else => return sys.signed(-errno.ENOENT),

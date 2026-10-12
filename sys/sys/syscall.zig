@@ -63,6 +63,10 @@ pub const SYS_fcntl: u64 = 92;
 pub const SYS_openat: u64 = 499;
 pub const SYS_readv: u64 = 120;
 pub const SYS_pread: u64 = 475;
+pub const SYS_setsid: u64 = 147;
+pub const SYS_setlogin: u64 = 50;
+pub const SYS_getpgrp: u64 = 81;
+pub const SYS_setpgid: u64 = 82;
 
 /// Maximum argument count passed in registers.
 pub const MAXARGS: usize = 6;

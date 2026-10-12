@@ -28,16 +28,20 @@ pub fn exit(status: i32) noreturn {
     arch.cpu.idle();
 }
 
-/// Wait for any child to exit and reap it. Returns the child's pid and stores
-/// its exit status in `status_out`, or -1 if there is no child.
-pub fn wait(status_out: *i32) i32 {
+/// Wait for a child to exit and reap it. Returns the child's pid and stores its
+/// exit status in `status_out`, or -1 if there is no child. With `nohang`, a
+/// child that has not exited yet returns 0 without blocking.
+pub fn wait(status_out: *i32, nohang: bool) i32 {
     const parent = kern_proc.current;
 
     while (true) {
         for (&kern_proc.table) |*c| {
             if (c.state == .zombie and c.parent == parent) {
                 const pid: i32 = c.pid;
-                status_out.* = c.exit_status;
+                // FreeBSD wait(2) status: exit code in bits 8..15, low 7 bits
+                // zero for a normal exit. A shell exiting 1 must not look like a
+                // child killed by SIGHUP.
+                status_out.* = (c.exit_status & 0xff) << 8;
                 kern_proc.free(c);
                 return pid;
             }
@@ -51,6 +55,10 @@ pub fn wait(status_out: *i32) i32 {
         }
         if (!has_child) {
             return -1;
+        }
+        if (nohang) {
+            status_out.* = 0;
+            return 0;
         }
 
         kern_sched.sleep(@ptrCast(parent));

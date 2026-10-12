@@ -45,9 +45,17 @@ fn sysFork(args: [sys.MAXARGS]u64) u64 {
 }
 
 fn sysWait(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
+    const status_ptr: u64 = args[1];
+    const options: u64 = args[2];
+    const WNOHANG: u64 = 1;
+
     var status: i32 = 0;
-    return sys.signed(kern_exit.wait(&status));
+    const pid: i32 = kern_exit.wait(&status, (options & WNOHANG) != 0);
+    if (pid > 0 and status_ptr != 0) {
+        const dst: *align(1) i32 = @ptrFromInt(status_ptr);
+        dst.* = status;
+    }
+    return sys.signed(pid);
 }
 
 fn sysGetpid(args: [sys.MAXARGS]u64) u64 {
@@ -150,6 +158,10 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_openat, .handler = vfs_syscalls.sysOpenat },
     .{ .num = sys.SYS_readv, .handler = sys_generic.sysReadv },
     .{ .num = sys.SYS_pread, .handler = sys_generic.sysPread },
+    .{ .num = sys.SYS_setsid, .handler = kern_prot.sysSetsid },
+    .{ .num = sys.SYS_setlogin, .handler = kern_prot.sysSetlogin },
+    .{ .num = sys.SYS_getpgrp, .handler = kern_prot.sysGetpgrp },
+    .{ .num = sys.SYS_setpgid, .handler = kern_prot.sysSetpgid },
 };
 
 /// Number-to-handler table, indexed by system call number.
