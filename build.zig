@@ -95,6 +95,12 @@ pub fn build(b: *Builder) !void {
     builduserland_step.dependOn(buildlibexec_step);
     builduserland_step.dependOn(buildusrbin_step);
 
+    // zig build bootloader  (our own UEFI boot loader, stand/amd64/uefi)
+    const bootloader_step: *Builder.Step = b.step("bootloader", "Build the Renux UEFI boot loader (BOOTX64.EFI)");
+    const bootloader: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    bootloader.setCwd(b.path("stand/amd64/uefi"));
+    bootloader_step.dependOn(&bootloader.step);
+
     // zig build rootfs  (the root image embedded in the kernel; needs the userland)
     const rootfs_step: *Builder.Step = b.step("rootfs", "Build the root image embedded in the kernel");
     const rootfs: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "../tools/mkrootfs.sh" });
