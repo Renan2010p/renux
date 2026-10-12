@@ -12,11 +12,25 @@ const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
+const uvm_page: type = @import("../uvm/uvm_page.zig");
 
 const CTL_SYSCTL: u64 = 0;
 const CTL_KERN: u64 = 1;
+const CTL_VM: u64 = 2;
 const CTL_HW: u64 = 6;
 const CTL_SYSCTL_NAME2OID: u64 = 3;
+
+// Virtual-memory statistics, resolved by name (htop's FreeBSD backend reads
+// vm.stats.vm.*).  The ids are ours; the name table maps the FreeBSD names to
+// them.
+const VM_PAGE_SIZE: u64 = 100;
+const VM_PAGE_COUNT: u64 = 101;
+const VM_FREE_COUNT: u64 = 102;
+const VM_ACTIVE_COUNT: u64 = 103;
+const VM_INACTIVE_COUNT: u64 = 104;
+const VM_WIRE_COUNT: u64 = 105;
+const VM_CACHE_COUNT: u64 = 106;
+const VM_DMMAX: u64 = 107;
 
 const KERN_OSTYPE: u64 = 1;
 const KERN_OSRELEASE: u64 = 2;
@@ -30,6 +44,15 @@ const KERN_HOSTNAME: u64 = 10;
 const KERN_BOOTTIME: u64 = 21;
 const KERN_OSRELDATE: u64 = 24;
 const KERN_USRSTACK: u64 = 33;
+// Renux-only ids for names userland asks for by name.
+const KERN_PID_MAX: u64 = 111;
+const KERN_CONSOLE: u64 = 112;
+const KERN_BOOTTRACE_RUNTRACE: u64 = 113;
+const KERN_CP_TIME: u64 = 114;
+const KERN_CP_TIMES: u64 = 115;
+const KERN_SMP_ACTIVE: u64 = 116;
+const KERN_FSCALE: u64 = 117;
+const KERN_BOOTTRACE_BOOTTRACE: u64 = 118;
 
 const HW_MACHINE: u64 = 1;
 const HW_MODEL: u64 = 2;
@@ -108,6 +131,22 @@ const name_mib = [_]NameMib{
     .{ .name = "hw.physmem", .mib = &.{ CTL_HW, HW_PHYSMEM } },
     .{ .name = "hw.usermem", .mib = &.{ CTL_HW, HW_USERMEM } },
     .{ .name = "hw.realmem", .mib = &.{ CTL_HW, HW_REALMEM } },
+    .{ .name = "vm.stats.vm.v_page_size", .mib = &.{ CTL_VM, VM_PAGE_SIZE } },
+    .{ .name = "vm.stats.vm.v_page_count", .mib = &.{ CTL_VM, VM_PAGE_COUNT } },
+    .{ .name = "vm.stats.vm.v_free_count", .mib = &.{ CTL_VM, VM_FREE_COUNT } },
+    .{ .name = "vm.stats.vm.v_active_count", .mib = &.{ CTL_VM, VM_ACTIVE_COUNT } },
+    .{ .name = "vm.stats.vm.v_inactive_count", .mib = &.{ CTL_VM, VM_INACTIVE_COUNT } },
+    .{ .name = "vm.stats.vm.v_wire_count", .mib = &.{ CTL_VM, VM_WIRE_COUNT } },
+    .{ .name = "vm.stats.vm.v_cache_count", .mib = &.{ CTL_VM, VM_CACHE_COUNT } },
+    .{ .name = "kern.pid_max", .mib = &.{ CTL_KERN, KERN_PID_MAX } },
+    .{ .name = "kern.console", .mib = &.{ CTL_KERN, KERN_CONSOLE } },
+    .{ .name = "kern.boottrace.runtrace", .mib = &.{ CTL_KERN, KERN_BOOTTRACE_RUNTRACE } },
+    .{ .name = "kern.cp_time", .mib = &.{ CTL_KERN, KERN_CP_TIME } },
+    .{ .name = "kern.cp_times", .mib = &.{ CTL_KERN, KERN_CP_TIMES } },
+    .{ .name = "kern.smp.active", .mib = &.{ CTL_KERN, KERN_SMP_ACTIVE } },
+    .{ .name = "kern.fscale", .mib = &.{ CTL_KERN, KERN_FSCALE } },
+    .{ .name = "kern.boottrace.boottrace", .mib = &.{ CTL_KERN, KERN_BOOTTRACE_BOOTTRACE } },
+    .{ .name = "vm.dmmax", .mib = &.{ CTL_VM, VM_DMMAX } },
 };
 
 /// Look up a "a.b.c" name in the OID table.
@@ -140,7 +179,12 @@ fn nameToOid(name_ptr: u64, name_len: u64, oldp: u64, oldlenp: u64) u64 {
     const mib = lookupName(name) orelse return sys.signed(-errno.ENOENT);
     const bytes: u64 = mib.len * 4;
     if (oldp == 0) {
-        putU64(oldlenp, bytes);
+        if (oldlenp != 0) {
+            putU64(oldlenp, bytes);
+        }
+        return 0;
+    }
+    if (oldlenp == 0) {
         return 0;
     }
     if (getU64(oldlenp) < bytes) {
@@ -157,8 +201,14 @@ fn nameToOid(name_ptr: u64, name_len: u64, oldp: u64, oldlenp: u64) u64 {
 /// Copy `data` out to the caller (SysV sysctl semantics).
 fn report(oldp: u64, oldlenp: u64, data: []const u8) u64 {
     if (oldp == 0) {
-        putU64(oldlenp, data.len);
+        // Length-only probe; a caller may pass no length pointer at all.
+        if (oldlenp != 0) {
+            putU64(oldlenp, data.len);
+        }
         return 0;
+    }
+    if (oldlenp == 0) {
+        return 0; // nowhere to say how much was copied
     }
     const have: u64 = getU64(oldlenp);
     const n: usize = if (have < data.len) @intCast(have) else data.len;
@@ -187,6 +237,22 @@ fn reportLong(oldp: u64, oldlenp: u64, v: i64) u64 {
     return report(oldp, oldlenp, &b);
 }
 
+/// kern.cp_time / kern.cp_times: five `long` counters (user, nice, sys, intr,
+/// idle) for the single CPU. They are non-zero so tools that take a delta do
+/// not divide by zero.
+fn reportCpTime(oldp: u64, oldlenp: u64) u64 {
+    var b: [5 * 8]u8 = undefined;
+    var slot: usize = 0;
+    while (slot < 5) : (slot += 1) {
+        var i: usize = 0;
+        while (i < 8) : (i += 1) {
+            b[slot * 8 + i] = 0;
+        }
+        b[slot * 8] = 1;
+    }
+    return report(oldp, oldlenp, &b);
+}
+
 /// Dispatch a MIB to its value.
 fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
     const ctl: u64 = mib[0];
@@ -208,6 +274,20 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             KERN_SECURELEVEL => return reportInt(oldp, oldlenp, -1),
             KERN_BOOTTIME => return reportLong(oldp, oldlenp, 0),
             KERN_USRSTACK => return reportLong(oldp, oldlenp, @intCast(arch.vmparam.USER_STACK_TOP)),
+            KERN_PID_MAX => return reportInt(oldp, oldlenp, 99999),
+            KERN_CONSOLE => return report(oldp, oldlenp, "\x00"),
+            KERN_BOOTTRACE_RUNTRACE => return reportInt(oldp, oldlenp, 0),
+            KERN_CP_TIME, KERN_CP_TIMES => return reportCpTime(oldp, oldlenp),
+            KERN_SMP_ACTIVE => return reportInt(oldp, oldlenp, 0),
+            KERN_FSCALE => return reportInt(oldp, oldlenp, 1),
+            KERN_BOOTTRACE_BOOTTRACE => return reportInt(oldp, oldlenp, 0),
+            else => return sys.signed(-errno.ENOENT),
+        },
+        CTL_VM => switch (id) {
+            VM_PAGE_SIZE => return reportInt(oldp, oldlenp, @intCast(param.PAGE_SIZE)),
+            VM_PAGE_COUNT => return reportInt(oldp, oldlenp, 131072),
+            VM_FREE_COUNT => return reportInt(oldp, oldlenp, @intCast(uvm_page.freeCount())),
+            VM_ACTIVE_COUNT, VM_INACTIVE_COUNT, VM_WIRE_COUNT, VM_CACHE_COUNT, VM_DMMAX => return reportInt(oldp, oldlenp, 0),
             else => return sys.signed(-errno.ENOENT),
         },
         CTL_HW => switch (id) {

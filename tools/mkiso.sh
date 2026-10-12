@@ -142,6 +142,10 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         cp "$FBSDLIB/usr/local/bin/nano" "$WORK/usr/local/bin/nano"
         sed -i '/cmdline:/i\    module_path: boot():/usr/local/bin/nano' "$WORK/limine.conf"
     fi
+    if [ -f "$FBSDLIB/usr/local/bin/htop" ]; then
+        cp "$FBSDLIB/usr/local/bin/htop" "$WORK/usr/local/bin/htop"
+        sed -i '/cmdline:/i\    module_path: boot():/usr/local/bin/htop' "$WORK/limine.conf"
+    fi
     if [ -f "$FBSDLIB/usr/share/misc/termcap" ]; then
         mkdir -p "$WORK/usr/share/misc"
         cp "$FBSDLIB/usr/share/misc/termcap" "$WORK/usr/share/misc/termcap"
