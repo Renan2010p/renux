@@ -1,7 +1,7 @@
 # Renux
 
 > A modern, portable, Unix-like operating system written entirely in Zig —
-> inspired by NetBSD's clean design and portability, but without decades of
+> inspired by NetBSD's and FreeBSD clean design and portability, but without decades of
 > accumulated legacy.
 
 Renux is a from-scratch reimagining of a BSD-style operating system. It keeps
