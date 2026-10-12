@@ -116,6 +116,12 @@ pub fn build(b: *Builder) !void {
     run.step.dependOn(buildsbin_step);
     run_step.dependOn(&run.step);
 
+    // zig build test  (host unit tests for the pure, portable parts)
+    const test_step: *Builder.Step = b.step("test", "Run the host unit tests");
+    const unit: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "test", "sys/uvm/phys_bitmap.zig" });
+    unit.setCwd(b.path("."));
+    test_step.dependOn(&unit.step);
+
     // zig build all
     const all_step: *Builder.Step = b.step("all", "Build the kernel, library, userland and ISO");
     all_step.dependOn(iso_step);
