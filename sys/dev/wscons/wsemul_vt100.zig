@@ -31,6 +31,8 @@ var cx: u32 = 0;
 var cy: u32 = 0;
 var saved_cx: u32 = 0;
 var saved_cy: u32 = 0;
+/// DECCKM: the terminal wants application cursor keys (`\eOA`..`\eOD`).
+var cursor_app: bool = false;
 var cur_reverse: bool = false;
 var cursor_visible: bool = true;
 var scroll_top: u32 = 0;
@@ -63,7 +65,12 @@ pub fn init() void {
 /// The console descriptor: output bytes go through putc(); colour changes are
 /// forwarded to the painter.
 pub fn console() cons.Console {
-    return .{ .putc = putc, .setfg = setForeground, .size = size };
+    return .{ .putc = putc, .setfg = setForeground, .size = size, .appCursor = appCursor };
+}
+
+/// True when DECCKM (application cursor keys) is set.
+pub fn appCursor() bool {
+    return cursor_app;
 }
 
 /// The console size in cells, for TIOCGWINSZ.
@@ -480,14 +487,16 @@ fn setMode(set: bool) void {
     var i: usize = 0;
     while (i < nparams) : (i += 1) {
         const p = params[i];
-        if (csi_private and (p == 1049 or p == 47 or p == 1047)) {
+        if (csi_private and p == 1) {
+            cursor_app = set; // DECCKM
+        } else if (csi_private and (p == 1049 or p == 47 or p == 1047)) {
             clearScreen(); // alternate screen: reset and clear
         } else if (csi_private and p == 25) {
             cursor_visible = set;
             drawCell(cy, cx);
         }
-        // Other modes (application keys, bracketed paste, blink, autowrap) are
-        // accepted and ignored.
+        // Other modes (bracketed paste, blink, autowrap) are accepted and
+        // ignored.
     }
 }
 

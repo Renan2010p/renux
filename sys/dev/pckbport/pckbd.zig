@@ -30,15 +30,18 @@ fn emit(seq: []const u8) void {
     }
 }
 
-/// Translate an extended (0xE0-prefixed) make code into an ANSI sequence.
+/// Translate an extended (0xE0-prefixed) make code into an ANSI sequence. When
+/// the terminal is in application cursor mode (DECCKM) the arrows and Home/End
+/// use the `\eO` forms the terminfo entries expect.
 fn extendedKey(code: u8) void {
+    const app: bool = cons.cnAppCursor();
     switch (code) {
-        0x48 => emit("\x1b[A"), // up
-        0x50 => emit("\x1b[B"), // down
-        0x4d => emit("\x1b[C"), // right
-        0x4b => emit("\x1b[D"), // left
-        0x47 => emit("\x1b[H"), // Home
-        0x4f => emit("\x1b[F"), // End
+        0x48 => emit(if (app) "\x1bOA" else "\x1b[A"), // up
+        0x50 => emit(if (app) "\x1bOB" else "\x1b[B"), // down
+        0x4d => emit(if (app) "\x1bOC" else "\x1b[C"), // right
+        0x4b => emit(if (app) "\x1bOD" else "\x1b[D"), // left
+        0x47 => emit(if (app) "\x1bOH" else "\x1b[H"), // Home
+        0x4f => emit(if (app) "\x1bOF" else "\x1b[F"), // End
         0x53 => emit("\x1b[3~"), // Delete
         0x49 => emit("\x1b[5~"), // Page Up
         0x51 => emit("\x1b[6~"), // Page Down

@@ -36,6 +36,8 @@ pub const Console: type = struct {
     setfg: ?*const fn (r: u8, g: u8, b: u8) void = null,
     /// Report the console's character grid size, if it has one.
     size: ?*const fn () ?Size = null,
+    /// Report whether the terminal wants application cursor keys (DECCKM).
+    appCursor: ?*const fn () bool = null,
 };
 
 var consoles: [MAX_CONSOLES]Console = undefined;
@@ -139,6 +141,21 @@ pub fn cnSize() ?Size {
         }
     }
     return null;
+}
+
+/// True when a console reports that the terminal wants application cursor keys
+/// (DECCKM, set with `\e[?1h` and cleared with `\e[?1l`). The keyboard uses it
+/// to send `\eOA`..`\eOD` instead of `\e[A`..`\e[D`.
+pub fn cnAppCursor() bool {
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].appCursor) |f| {
+            if (f()) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /// Emit a byte string on the console.
