@@ -162,6 +162,27 @@ pub fn sysMunmap(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// minherit(2): how a range is passed to a fork child. INHERIT_ZERO ranges
+/// are given zero-filled (libc keeps its arc4random state there so a child
+/// never repeats the parent's random stream); INHERIT_SHARE and
+/// INHERIT_COPY are what fork does anyway (it copies), INHERIT_NONE is
+/// treated as INHERIT_ZERO.
+pub fn sysMinherit(args: [sys.MAXARGS]u64) u64 {
+    const INHERIT_SHARE: u64 = 0;
+    const INHERIT_COPY: u64 = 1;
+    const start: u64 = args[0] & ~@as(u64, param.PAGE_SIZE - 1);
+    const end: u64 = param.alignUp(args[0] + args[1], param.PAGE_SIZE);
+    if (args[2] == INHERIT_SHARE or args[2] == INHERIT_COPY) return 0;
+    const p = kern_proc.current;
+    for (&p.inherit_zero) |*r| {
+        if (r.end == 0) {
+            r.* = .{ .start = start, .end = end };
+            return 0;
+        }
+    }
+    return sys.signed(-errno.ENOMEM);
+}
+
 /// mprotect(2): protection changes are not tracked yet; report success.
 pub fn sysMprotect(args: [sys.MAXARGS]u64) u64 {
     _ = args;

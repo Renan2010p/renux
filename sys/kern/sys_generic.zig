@@ -13,6 +13,7 @@ const errno: type = @import("../sys/errno.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
+const proc: type = @import("../sys/proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 const vfs_vnops: type = @import("vfs_vnops.zig");
@@ -140,15 +141,38 @@ pub fn sysFcntl(args: [sys.MAXARGS]u64) u64 {
     const cmd: u64 = args[1];
     const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
 
+    // FreeBSD's sys/fcntl.h.
+    const F_DUPFD: u64 = 0;
+    const F_GETFD: u64 = 1;
+    const F_SETFD: u64 = 2;
     const F_GETFL: u64 = 3;
-    if (cmd == F_GETFL) {
-        const r: bool = (f.f_flag & file.FREAD) != 0;
-        const w: bool = (f.f_flag & file.FWRITE) != 0;
-        // O_RDONLY == 0, O_WRONLY == 1, O_RDWR == 2.
-        const v: i64 = if (r and w) 2 else if (w) 1 else 0;
-        return @intCast(v);
+    const F_SETFL: u64 = 4;
+    const F_DUPFD_CLOEXEC: u64 = 17;
+    const FD_CLOEXEC: u64 = 1;
+    const p = kern_proc.current;
+    switch (cmd) {
+        F_DUPFD, F_DUPFD_CLOEXEC => {
+            if (args[2] >= proc.NFILE) return sys.signed(-errno.EINVAL);
+            return sys.signed(kern_descrip.fdDup(p, @intCast(fd), @intCast(args[2]), cmd == F_DUPFD_CLOEXEC));
+        },
+        F_GETFD => return if (p.fd_cloexec[@intCast(fd)]) FD_CLOEXEC else 0,
+        F_SETFD => {
+            kern_descrip.fdSetCloexec(p, @intCast(fd), (args[2] & FD_CLOEXEC) != 0);
+            return 0;
+        },
+        F_GETFL => {
+            const r: bool = (f.f_flag & file.FREAD) != 0;
+            const w: bool = (f.f_flag & file.FWRITE) != 0;
+            // O_RDONLY == 0, O_WRONLY == 1, O_RDWR == 2.
+            const v: i64 = if (r and w) 2 else if (w) 1 else 0;
+            return @intCast(v);
+        },
+        // Status flags (O_NONBLOCK, O_APPEND) are accepted; reads already
+        // report EAGAIN to the generic layer, which blocks.
+        F_SETFL => return 0,
+        // Locks and the rest: there is one user of each file for now.
+        else => return 0,
     }
-    return 0;
 }
 
 /// read(2): read from descriptor `fd`.

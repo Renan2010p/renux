@@ -72,6 +72,21 @@ pub fn physalloc() ?u64 {
     return pa;
 }
 
+/// Allocate `n` zeroed, physically contiguous pages (kernel stacks); returns
+/// the address of the first, or null.
+pub fn physallocContig(n: u64) ?u64 {
+    const pa: u64 = bm.allocContig(n) orelse return null;
+    const words: [*]u64 = pagePtr(pa);
+    @memset(words[0 .. n * param.PAGE_SIZE / 8], 0);
+    return pa;
+}
+
+/// Free `n` contiguous pages from physallocContig().
+pub fn physfreeContig(pa: u64, n: u64) void {
+    var k: u64 = 0;
+    while (k < n) : (k += 1) physfree(pa + k * param.PAGE_SIZE);
+}
+
 /// Return a page to the allocator. A page that is not currently allocated (a
 /// double free) or outside a loaded range is refused and reported, so the
 /// mistake can be found instead of corrupting memory.

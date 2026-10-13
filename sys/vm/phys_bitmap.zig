@@ -155,6 +155,28 @@ pub const Bitmap = struct {
         return null;
     }
 
+    /// Allocate `n` physically contiguous free pages (kernel stacks); returns
+    /// the address of the first, or null when no such run exists. Scans down
+    /// from the top, like alloc().
+    pub fn allocContig(self: *Bitmap, n: u64) ?u64 {
+        if (n == 0 or self.nfree < n or n > self.npages) {
+            return null;
+        }
+        var i: u64 = self.npages - n + 1;
+        while (i > 0) {
+            i -= 1;
+            var k: u64 = 0;
+            while (k < n and self.isFree(i + k)) : (k += 1) {}
+            if (k == n) {
+                k = 0;
+                while (k < n) : (k += 1) setBit(self.free_bits, i + k, false);
+                self.nfree -= n;
+                return self.base + i * PAGE_SIZE;
+            }
+        }
+        return null;
+    }
+
     /// Free the page at `pa`. Returns false when it is not currently allocated
     /// (a double free) or is outside a loaded range, leaving the bitmap
     /// unchanged so the mistake cannot corrupt anything.
@@ -300,4 +322,29 @@ test "the scan hint wraps and reuses earlier holes" {
         }
     }
     try testing.expect(found);
+}
+
+test "allocContig returns a run of adjacent free pages" {
+    var h: Harness = .{};
+    h.init(16);
+    const a: u64 = h.bm.allocContig(4) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u64, 12), h.bm.freeCount());
+    // No page of the run is handed out again.
+    while (h.bm.alloc()) |pa| {
+        try testing.expect(pa < a or pa >= a + 4 * PAGE_SIZE);
+    }
+}
+
+test "allocContig skips runs broken by an allocated page" {
+    var h: Harness = .{};
+    h.init(8);
+    // Allocate everything, then free pages 0,1 | 3,4,5 | 7: the longest run
+    // of free pages is three long, starting at page 3.
+    while (h.bm.alloc()) |_| {}
+    for ([_]u64{ 0, 1, 3, 4, 5, 7 }) |i| {
+        try testing.expect(h.bm.free(0x1000 + i * PAGE_SIZE));
+    }
+    try testing.expectEqual(@as(?u64, null), h.bm.allocContig(4));
+    try testing.expectEqual(@as(?u64, 0x1000 + 3 * PAGE_SIZE), h.bm.allocContig(3));
+    try testing.expectEqual(@as(u64, 3), h.bm.freeCount());
 }

@@ -21,12 +21,17 @@ pub var boottime: u64 = DEFAULT_BOOTTIME;
 
 /// Set the time of day to `now` seconds since the epoch, as FreeBSD's
 /// inittodr() does from the RTC: the boot time is `now` less the uptime.
-pub fn setBoottime(now: i64) void {
-    if (now <= 0) {
+pub fn setBoottime(tod: i64) void {
+    if (tod <= 0) {
         return;
     }
     const up: u64 = arch.clock.tickCount() / arch.clock.HZ;
-    boottime = @as(u64, @intCast(now)) -| up;
+    boottime = @as(u64, @intCast(tod)) -| up;
+}
+
+/// The current time of day, in seconds since the epoch.
+pub fn now() u64 {
+    return boottime + arch.clock.tickCount() / arch.clock.HZ;
 }
 
 /// A time value (NetBSD's struct timeval).
@@ -91,5 +96,123 @@ pub fn sysClockGettime(args: [sys.MAXARGS]u64) u64 {
         ts.tv_sec = sec;
         ts.tv_nsec = nsec;
     }
+    return 0;
+}
+
+// -- sleeping and interval timers ------------------------------------------------
+//
+// FreeBSD's kern_time.c: nanosleep(2) and the ITIMER_REAL interval timer
+// behind setitimer(2) and alarm(3), driven by the clock tick (hardclock).
+
+const proc: type = @import("../sys/proc.zig");
+const signal: type = @import("../sys/signal.zig");
+const kern_proc: type = @import("kern_proc.zig");
+const kern_sched: type = @import("kern_sched.zig");
+const kern_signal: type = @import("kern_signal.zig");
+
+/// Called on every clock tick: fire the interval timers that are due.
+pub fn hardclock(ticks: u64) void {
+    for (&kern_proc.table) |*p| {
+        if (p.state == .unused or p.state == .zombie or p.itimer_due == 0) continue;
+        if (ticks < p.itimer_due) continue;
+        p.itimer_due = if (p.itimer_interval != 0) ticks + p.itimer_interval else 0;
+        kern_signal.psignal(p, signal.SIGALRM);
+        // Let a process blocked in the kernel notice the signal.
+        if (p.state == .sleeping) p.state = .runnable;
+    }
+}
+
+const USEC_PER_TICK: u64 = 1_000_000 / arch.clock.HZ;
+
+fn tvToTicks(tv: Timeval) u64 {
+    if (tv.tv_sec < 0 or tv.tv_usec < 0) return 0;
+    const us: u64 = @as(u64, @intCast(tv.tv_sec)) * 1_000_000 + @as(u64, @intCast(tv.tv_usec));
+    return (us + USEC_PER_TICK - 1) / USEC_PER_TICK;
+}
+
+fn ticksToTv(t: u64) Timeval {
+    const us: u64 = t * USEC_PER_TICK;
+    return .{ .tv_sec = @intCast(us / 1_000_000), .tv_usec = @intCast(us % 1_000_000) };
+}
+
+/// struct itimerval.
+const Itimerval: type = extern struct {
+    it_interval: Timeval,
+    it_value: Timeval,
+};
+
+const ITIMER_REAL: u64 = 0;
+
+fn currentItimer(p: *proc.Proc) Itimerval {
+    const now_t: u64 = arch.clock.tickCount();
+    const left: u64 = if (p.itimer_due > now_t) p.itimer_due - now_t else 0;
+    return .{ .it_interval = ticksToTv(p.itimer_interval), .it_value = ticksToTv(if (p.itimer_due == 0) 0 else left) };
+}
+
+/// getitimer(2). Only ITIMER_REAL runs; the virtual and profiling timers
+/// (which need per-process CPU accounting) are refused.
+pub fn sysGetitimer(args: [sys.MAXARGS]u64) u64 {
+    if (args[0] != ITIMER_REAL) return sys.signed(-errno.EINVAL);
+    const dst: *align(1) Itimerval = @ptrFromInt(args[1]);
+    dst.* = currentItimer(kern_proc.current);
+    return 0;
+}
+
+/// setitimer(2): arm or disarm ITIMER_REAL, returning the old setting.
+pub fn sysSetitimer(args: [sys.MAXARGS]u64) u64 {
+    if (args[0] != ITIMER_REAL) return sys.signed(-errno.EINVAL);
+    const p = kern_proc.current;
+    if (args[2] != 0) {
+        const old: *align(1) Itimerval = @ptrFromInt(args[2]);
+        old.* = currentItimer(p);
+    }
+    if (args[1] == 0) return 0;
+    const new: *align(1) const Itimerval = @ptrFromInt(args[1]);
+    const v: u64 = tvToTicks(new.it_value);
+    p.itimer_interval = tvToTicks(new.it_interval);
+    p.itimer_due = if (v == 0) 0 else arch.clock.tickCount() + v;
+    return 0;
+}
+
+/// nanosleep(2): sleep for the requested time, in clock ticks. A pending
+/// signal cuts it short with EINTR and the time left in `rmtp`.
+pub fn sysNanosleep(args: [sys.MAXARGS]u64) u64 {
+    const rq: *align(1) const Timespec = @ptrFromInt(args[0]);
+    if (rq.tv_sec < 0 or rq.tv_nsec < 0 or rq.tv_nsec >= 1_000_000_000) return sys.signed(-errno.EINVAL);
+    const ns: u64 = @as(u64, @intCast(rq.tv_sec)) * 1_000_000_000 + @as(u64, @intCast(rq.tv_nsec));
+    const ns_per_tick: u64 = 1_000_000_000 / arch.clock.HZ;
+    const due: u64 = arch.clock.tickCount() + (ns + ns_per_tick - 1) / ns_per_tick;
+    const p = kern_proc.current;
+    while (arch.clock.tickCount() < due) {
+        if ((p.sig_pending & ~p.sig_mask) != 0) {
+            if (args[1] != 0) {
+                const left: u64 = (due - arch.clock.tickCount()) * ns_per_tick;
+                const rm: *align(1) Timespec = @ptrFromInt(args[1]);
+                rm.* = .{ .tv_sec = @intCast(left / 1_000_000_000), .tv_nsec = @intCast(left % 1_000_000_000) };
+            }
+            return sys.signed(-errno.EINTR);
+        }
+        kern_sched.sleep(arch.clock.pollChannel());
+    }
+    return 0;
+}
+
+// -- scheduling priority ---------------------------------------------------------
+
+/// getpriority(2): the nice value. FreeBSD returns it directly (it may be
+/// negative; libc tells it from an error by errno).
+pub fn sysGetpriority(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return @bitCast(@as(i64, kern_proc.current.nice));
+}
+
+/// setpriority(2): record the nice value of the calling process. Only root
+/// may lower it.
+pub fn sysSetpriority(args: [sys.MAXARGS]u64) u64 {
+    const p = kern_proc.current;
+    const prio: i64 = @as(i32, @bitCast(@as(u32, @truncate(args[2]))));
+    const clamped: i32 = @intCast(@max(-20, @min(20, prio)));
+    if (clamped < p.nice and p.euid != 0) return sys.signed(-errno.EACCES);
+    p.nice = clamped;
     return 0;
 }

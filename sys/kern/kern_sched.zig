@@ -12,6 +12,7 @@ const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const prf: type = @import("subr_prf.zig");
+const param: type = @import("../sys/param.zig");
 
 /// True while the scheduler itself is running (so a timer interrupt must not
 /// try to preempt it).
@@ -82,8 +83,23 @@ pub fn scheduler() noreturn {
     }
 }
 
+/// Panic if the current process overran its kernel stack: the canary at the
+/// bottom of the stack was overwritten. Without this, an overflow silently
+/// corrupts whatever page follows the stack.
+fn checkStack() void {
+    const p = kern_proc.current;
+    if (p.kstack_page == 0) return;
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return;
+    const canary: *const u64 = @ptrFromInt(p.kstack_page + hhdm);
+    if (canary.* != param.KSTACK_CANARY) {
+        prf.printf("pid %d (%s): kernel stack overflow\n", .{ p.pid, p.name[0..p.name_len] });
+        prf.panic("kernel stack overflow", null);
+    }
+}
+
 /// Give up the CPU and let the scheduler pick another process.
 pub fn sched() void {
+    checkStack();
     arch.swtch.swtch(&kern_proc.current.context, &sched_ctx);
 }
 

@@ -49,4 +49,9 @@ pub const File: type = struct {
     f_data: ?*anyopaque,
     /// Operations for this kind of file.
     f_ops: *const FileOps,
+    /// For an open directory: its absolute path (a MAXPATHLEN kmem buffer),
+    /// which fchdir(2) needs because Renux tracks the working directory by
+    /// name. Null for everything else.
+    f_path: ?[*]u8 = null,
+    f_pathlen: usize = 0,
 };

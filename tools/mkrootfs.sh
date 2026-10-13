@@ -40,7 +40,8 @@ RTLD_SO="${RTLD_SO:-$ROOT/libexec/rtld-elf/zig-out/ld-elf.so.1}"
 LIBC_SO="${LIBC_SO:-$ROOT/lib/zig-out/libc.so.1}"
 DYNH="${DYNH:-$ROOT/examples/dynhello/zig-out/dynhello}"
 RC="${RC:-$ROOT/etc/rc}"
-FBSDLIB="${FBSDLIB:-}"
+# The FreeBSD base system (tools/get-freebsd.sh); used when it is present.
+FBSDLIB="${FBSDLIB:-$ROOT/tools/freebsd/root}"
 
 # Build whatever is missing.
 [ -f "$INIT" ] || ( cd "$ROOT/sbin" && zig build )
@@ -90,40 +91,108 @@ cp -a "$RTLD_SO" "$WORK/libexec/ld-elf.so.1"
 cp -a "$LIBC_SO" "$WORK/lib/libc.so.1"
 cp -a "$DYNH" "$WORK/bin/dynhello"
 
-# A FreeBSD userland subset (optional): the real libc.so.7 and dynamic programs
-# (nano, htop, sh), so FreeBSD binaries can run through ld-elf.so.1.
+# The FreeBSD userland. Renux runs FreeBSD's own programs (FreeBSD/amd64 ABI),
+# so when the base system is present (tools/get-freebsd.sh) the console login
+# is FreeBSD's: getty(8), login(1) with PAM, and sh(1), plus the everyday base
+# utilities. Shared libraries are found from each program's DT_NEEDED entries,
+# so only what is actually used goes into the image.
 if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
-    if [ -f "$FBSDLIB/libexec/ld-elf.so.1" ]; then
-        cp -a "$FBSDLIB/libexec/ld-elf.so.1" "$WORK/libexec/ld-elf.so.1"
-    fi
-    for f in "$FBSDLIB"/lib/*; do
-        [ -f "$f" ] || continue
-        cp -a "$f" "$WORK/lib/$(basename "$f")"
+    command -v readelf >/dev/null 2>&1 || {
+        echo "mkrootfs: 'readelf' is required for the FreeBSD userland" >&2
+        exit 1
+    }
+
+    # Programs, by their path in the FreeBSD tree.
+    FBSD_PROGS="
+        usr/libexec/getty usr/bin/login
+        bin/sh bin/ls bin/cat bin/echo bin/pwd bin/mkdir bin/rm bin/rmdir
+        bin/cp bin/mv bin/ln bin/chmod bin/date bin/hostname bin/sleep
+        bin/test bin/expr bin/kill bin/stty bin/realpath
+        usr/bin/uname usr/bin/id usr/bin/whoami usr/bin/env usr/bin/wc
+        usr/bin/head usr/bin/tail usr/bin/grep usr/bin/sed usr/bin/awk
+        usr/bin/more usr/bin/less usr/bin/vi usr/bin/clear usr/bin/tput
+        usr/bin/touch usr/bin/find usr/bin/sort usr/bin/uniq usr/bin/tr
+        usr/bin/cut usr/bin/basename usr/bin/dirname usr/bin/true
+        usr/bin/false usr/bin/yes usr/bin/printf usr/bin/which
+        usr/bin/stat usr/bin/du usr/bin/tee usr/bin/xargs usr/bin/logname
+        usr/bin/tty usr/bin/uptime usr/bin/w usr/bin/who usr/bin/hexdump
+        usr/bin/fortune
+    "
+    # PAM modules the login service stack loads (etc/pam.d/login, system).
+    FBSD_PAM="pam_self pam_unix pam_securetty pam_nologin pam_login_access
+        pam_lastlog pam_xdg pam_permit pam_deny"
+
+    # Locate a library by soname in the FreeBSD library directories.
+    fbsd_findlib() {
+        for d in lib usr/lib; do
+            if [ -e "$FBSDLIB/$d/$1" ]; then
+                echo "$d/$1"
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    # Install one file (and, for an ELF object, its libraries, recursively).
+    fbsd_install() {
+        rel="$1"
+        grep -qx "$rel" "$WORK/.fbsd-$$" && return 0
+        [ -e "$FBSDLIB/$rel" ] || {
+            echo "mkrootfs: FreeBSD file $rel not found" >&2
+            return 0
+        }
+        echo "$rel" >> "$WORK/.fbsd-$$"
+        mkdir -p "$WORK/$(dirname "$rel")"
+        cp -L "$FBSDLIB/$rel" "$WORK/$rel"
+        for lib in $(readelf -d "$FBSDLIB/$rel" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+            libpath="$(fbsd_findlib "$lib")" || {
+                echo "mkrootfs: $rel needs $lib, not found" >&2
+                continue
+            }
+            grep -qx "$libpath" "$WORK/.fbsd-$$" 2>/dev/null || fbsd_install "$libpath"
+        done
+    }
+
+    : > "$WORK/.fbsd-$$"
+    fbsd_install libexec/ld-elf.so.1
+    for prog in $FBSD_PROGS; do
+        fbsd_install "$prog"
     done
-    mkdir -p "$WORK/usr/local/bin"
-    [ -f "$FBSDLIB/usr/local/bin/nano" ] && cp -a "$FBSDLIB/usr/local/bin/nano" "$WORK/usr/local/bin/nano"
-    [ -f "$FBSDLIB/usr/local/bin/htop" ] && cp -a "$FBSDLIB/usr/local/bin/htop" "$WORK/usr/local/bin/htop"
-    if [ -f "$FBSDLIB/usr/share/misc/termcap" ]; then
-        mkdir -p "$WORK/usr/share/misc"
-        cp -a "$FBSDLIB/usr/share/misc/termcap" "$WORK/usr/share/misc/termcap"
-    fi
-    # terminfo entries, for ncurses/libedit (compiled on the build host).
-    for t in x/xterm x/xterm-256color v/vt100 v/vt220 l/linux c/cons25 n/network; do
-        if [ -f "/usr/share/terminfo/$t" ]; then
-            mkdir -p "$WORK/usr/share/terminfo/$(dirname "$t")"
-            cp -a "/usr/share/terminfo/$t" "$WORK/usr/share/terminfo/$t"
-        fi
+    for mod in $FBSD_PAM; do
+        fbsd_install "usr/lib/$mod.so.6"
+        ln -sf "$mod.so.6" "$WORK/usr/lib/$mod.so"
     done
-    [ -f "$FBSDLIB/sbin/init" ] && cp -a "$FBSDLIB/sbin/init" "$WORK/sbin/init"
-    [ -f "$FBSDLIB/etc/ttys" ] && cp -a "$FBSDLIB/etc/ttys" "$WORK/etc/ttys"
-    if [ -f "$FBSDLIB/bin/echo" ]; then
-        cp -a "$FBSDLIB/bin/echo" "$WORK/usr/bin/fbsd-echo"
-    fi
-    if [ -f "$FBSDLIB/bin/sh" ]; then
-        # FreeBSD's sh becomes the default /bin/sh (the login shell).
-        cp -a "$FBSDLIB/bin/sh" "$WORK/bin/sh"
-        cp -a "$FBSDLIB/bin/sh" "$WORK/bin/fbsdsh"
-    fi
+    rm -f "$WORK/.fbsd-$$"
+
+    # The native shell stays as /bin/renux-sh; /bin/test also answers to [.
+    ln -sf test "$WORK/bin/["
+
+    # Configuration the login path reads: accounts (passwd and its databases),
+    # login classes, PAM, the getty table, name service switch, shells and
+    # the shell profiles. The accounts are FreeBSD's defaults: root has no
+    # password, as on a fresh FreeBSD install.
+    mkdir -p "$WORK/etc/pam.d" "$WORK/root" "$WORK/usr/share/misc" "$WORK/var/run" "$WORK/var/log"
+    for f in gettytab passwd master.passwd pwd.db spwd.db group login.conf \
+        login.conf.db login.access nsswitch.conf shells profile ttys termcap; do
+        [ -e "$FBSDLIB/etc/$f" ] && cp -L "$FBSDLIB/etc/$f" "$WORK/etc/$f"
+    done
+    for f in login system other passwd su; do
+        cp "$FBSDLIB/etc/pam.d/$f" "$WORK/etc/pam.d/$f"
+    done
+    for f in .profile .shrc .cshrc .login; do
+        cp "$FBSDLIB/root/$f" "$WORK/root/$f"
+    done
+    chmod 700 "$WORK/root"
+    chmod 600 "$WORK/etc/master.passwd" "$WORK/etc/spwd.db"
+    cp "$FBSDLIB/usr/share/misc/termcap.db" "$WORK/usr/share/misc/termcap.db"
+    [ -e "$FBSDLIB/usr/share/games/fortune/freebsd-tips.dat" ] && {
+        mkdir -p "$WORK/usr/share/games/fortune"
+        cp "$FBSDLIB"/usr/share/games/fortune/freebsd-tips* "$WORK/usr/share/games/fortune/"
+    }
+    # The message of the day login(1) shows (login.conf's welcome=).
+    cp "$ROOT/etc/motd.template" "$WORK/var/run/motd"
+    : > "$WORK/var/log/utx.log"
+    cp "$FBSDLIB/COPYRIGHT" "$WORK/COPYRIGHT.FreeBSD"
 fi
 
 # Pack the tree into an ext2 image. A fixed UUID and a fake time keep the image

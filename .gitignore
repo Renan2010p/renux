@@ -18,3 +18,6 @@ tools/limine/
 *.swp
 *~
 .DS_Store
+
+# Downloaded FreeBSD base system (see tools/get-freebsd.sh)
+tools/freebsd/

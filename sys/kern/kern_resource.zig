@@ -1,76 +1,97 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
-// Resource limits.
+// Resource limits and the file-creation mask.
 //
-// This is the Zig counterpart of NetBSD's sys/kern/kern_resource.c, reduced to
-// getrlimit(2) and setrlimit(2) with fixed, generous limits. FreeBSD userland
-// (libthr in particular) reads the stack limit while starting up.
+// The Zig counterpart of FreeBSD's sys/kern/kern_resource.c: each process
+// holds a soft and hard limit per resource, inherited across fork and exec.
+// The soft limit may move up to the hard limit; only root raises a hard limit.
+// Renux records them all; the ones it enforces are noted below.
 
 const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
+const proc: type = @import("../sys/proc.zig");
+const kern_proc: type = @import("kern_proc.zig");
 
 /// RLIM_INFINITY as a 64-bit signed value.
 pub const RLIM_INFINITY: i64 = 0x7fff_ffff_ffff_ffff;
 
-const RLIMIT_CPU: u64 = 0;
-const RLIMIT_FSIZE: u64 = 1;
-const RLIMIT_DATA: u64 = 2;
-const RLIMIT_STACK: u64 = 3;
-const RLIMIT_CORE: u64 = 4;
-const RLIMIT_RSS: u64 = 5;
-const RLIMIT_MEMLOCK: u64 = 6;
-const RLIMIT_NPROC: u64 = 7;
-const RLIMIT_NOFILE: u64 = 8;
-const RLIMIT_SBSIZE: u64 = 9;
-const RLIMIT_AS: u64 = 10;
-const RLIMIT_NPTS: u64 = 11;
-const RLIMIT_SWAP: u64 = 12;
-const RLIMIT_KQUEUES: u64 = 13;
-const RLIMIT_UMTXP: u64 = 14;
+// FreeBSD's resources (sys/sys/resource.h).
+const RLIMIT_STACK: usize = 3;
+const RLIMIT_NOFILE: usize = 8;
+const RLIMIT_NPROC: usize = 7;
 
-fn putI64(p: u64, v: i64) void {
-    const q: *align(1) i64 = @ptrFromInt(p);
-    q.* = v;
+/// The limits a new process starts with.
+pub fn defaults() [proc.RLIM_NLIMITS]proc.Rlimit {
+    var l: [proc.RLIM_NLIMITS]proc.Rlimit = @splat(.{ .cur = RLIM_INFINITY, .max = RLIM_INFINITY });
+    // A finite stack limit: libthr places the main thread's guard page
+    // relative to it, so RLIM_INFINITY would overflow the address.
+    l[RLIMIT_STACK] = .{ .cur = 64 * 1024 * 1024, .max = 64 * 1024 * 1024 };
+    // The descriptor table and the process table are fixed in size.
+    l[RLIMIT_NOFILE] = .{ .cur = proc.NFILE, .max = proc.NFILE };
+    l[RLIMIT_NPROC] = .{ .cur = 64, .max = 64 };
+    return l;
 }
 
-/// getrlimit(2): report the soft and hard limit for `resource`.
+/// getrlimit(2).
 pub fn sysGetrlimit(args: [sys.MAXARGS]u64) u64 {
-    const resource: u64 = args[0];
-    const rlp: u64 = args[1];
-    if (resource > RLIMIT_UMTXP) {
-        return sys.signed(-errno.EINVAL);
-    }
-    if (rlp == 0) {
-        return sys.signed(-errno.EFAULT);
-    }
-
-    var cur: i64 = RLIM_INFINITY;
-    var max: i64 = RLIM_INFINITY;
-    switch (resource) {
-        RLIMIT_STACK => {
-            // A finite stack limit: libthr places the main thread's guard page
-            // relative to it, so RLIM_INFINITY would overflow the address.
-            cur = 64 * 1024 * 1024;
-            max = 64 * 1024 * 1024;
-        },
-        RLIMIT_NOFILE => {
-            cur = 64;
-            max = 64;
-        },
-        RLIMIT_NPROC => {
-            cur = 16;
-            max = 16;
-        },
-        else => {},
-    }
-    putI64(rlp, cur);
-    putI64(rlp + 8, max);
+    if (args[0] >= proc.RLIM_NLIMITS) return sys.signed(-errno.EINVAL);
+    if (args[1] == 0) return sys.signed(-errno.EFAULT);
+    const dst: *align(1) proc.Rlimit = @ptrFromInt(args[1]);
+    dst.* = kern_proc.current.rlimits[@intCast(args[0])];
     return 0;
 }
 
-/// setrlimit(2): limits are fixed; accept the call and ignore the values.
+/// setrlimit(2): the soft limit may not exceed the hard one, and only root
+/// raises a hard limit. Limits backed by fixed tables cannot grow past them.
 pub fn sysSetrlimit(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
+    if (args[0] >= proc.RLIM_NLIMITS) return sys.signed(-errno.EINVAL);
+    if (args[1] == 0) return sys.signed(-errno.EFAULT);
+    const p = kern_proc.current;
+    const r: usize = @intCast(args[0]);
+    const new: proc.Rlimit = @as(*align(1) const proc.Rlimit, @ptrFromInt(args[1])).*;
+    if (new.cur < 0 or new.max < 0 or new.cur > new.max) return sys.signed(-errno.EINVAL);
+    if (new.max > p.rlimits[r].max and p.euid != 0) return sys.signed(-errno.EPERM);
+    var lim: proc.Rlimit = new;
+    const ceiling: proc.Rlimit = defaults()[r];
+    if (r == RLIMIT_NOFILE or r == RLIMIT_NPROC) {
+        lim.cur = @min(lim.cur, ceiling.max);
+        lim.max = @min(lim.max, ceiling.max);
+    }
+    p.rlimits[r] = lim;
+    return 0;
+}
+
+/// umask(2): set the file-creation mask, returning the old one.
+pub fn sysUmask(args: [sys.MAXARGS]u64) u64 {
+    const p = kern_proc.current;
+    const old: u16 = p.cmask;
+    p.cmask = @truncate(args[0] & 0o777);
+    return old;
+}
+
+/// getloginclass(2): `getloginclass(name, len)`.
+pub fn sysGetloginclass(args: [sys.MAXARGS]u64) u64 {
+    const p = kern_proc.current;
+    var n: usize = 0;
+    while (n < p.loginclass.len and p.loginclass[n] != 0) n += 1;
+    if (args[1] < n + 1) return sys.signed(-errno.ERANGE);
+    const dst: [*]u8 = @ptrFromInt(args[0]);
+    @memcpy(dst[0..n], p.loginclass[0..n]);
+    dst[n] = 0;
+    return 0;
+}
+
+/// setloginclass(2): root only; the class login.conf assigned.
+pub fn sysSetloginclass(args: [sys.MAXARGS]u64) u64 {
+    const p = kern_proc.current;
+    if (p.euid != 0) return sys.signed(-errno.EPERM);
+    const src: [*:0]const u8 = @ptrFromInt(args[0]);
+    var n: usize = 0;
+    while (src[n] != 0) : (n += 1) {
+        if (n + 1 >= p.loginclass.len) return sys.signed(-errno.ENAMETOOLONG);
+    }
+    @memset(&p.loginclass, 0);
+    @memcpy(p.loginclass[0..n], src[0..n]);
     return 0;
 }

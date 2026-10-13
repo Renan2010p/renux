@@ -289,6 +289,21 @@ pub fn enterUser(p: Pmap, va: u64, pa: u64, prot: Prot) void {
     map(p, va, pa, prot);
 }
 
+/// The page-table entries that translate `va` in `p`, top level first (PML4,
+/// PDPT, PD, PT); levels below a missing or large-page entry are 0. For fault
+/// reports.
+pub fn walk(p: Pmap, va: u64) [4]u64 {
+    var e: [4]u64 = .{ 0, 0, 0, 0 };
+    e[0] = table(p)[index(va, pte.L4_SHIFT)];
+    if ((e[0] & pte.P) == 0) return e;
+    e[1] = table(e[0])[index(va, pte.L3_SHIFT)];
+    if ((e[1] & pte.P) == 0 or (e[1] & pte.PS) != 0) return e;
+    e[2] = table(e[1])[index(va, pte.L2_SHIFT)];
+    if ((e[2] & pte.P) == 0 or (e[2] & pte.PS) != 0) return e;
+    e[3] = table(e[2])[index(va, pte.L1_SHIFT)];
+    return e;
+}
+
 /// Translate `va` to a physical address in page map `p`, or null if unmapped.
 pub fn extract(p: Pmap, va: u64) ?u64 {
     const pml4 = table(p);

@@ -37,9 +37,38 @@ pub fn fdalloc(p: *proc.Proc, start: usize) ?usize {
     return null;
 }
 
-/// Place `f` in descriptor `fd`.
+/// Place `f` in descriptor `fd`; a new descriptor is not close-on-exec.
 pub fn fdAffix(p: *proc.Proc, fd: usize, f: *file.File) void {
     p.fds[fd] = f;
+    p.fd_cloexec[fd] = false;
+}
+
+/// Set or clear FD_CLOEXEC on descriptor `fd`.
+pub fn fdSetCloexec(p: *proc.Proc, fd: usize, on: bool) void {
+    if (fd < proc.NFILE) {
+        p.fd_cloexec[fd] = on;
+    }
+}
+
+/// Duplicate descriptor `fd` onto the lowest free descriptor at or above
+/// `start` (dup(2), fcntl F_DUPFD). Returns the new descriptor or -errno.
+pub fn fdDup(p: *proc.Proc, fd: usize, start: usize, cloexec: bool) i64 {
+    const f: *file.File = fdGetfile(p, fd) orelse return -@as(i64, errno.EBADF);
+    const nfd: usize = fdalloc(p, start) orelse return -@as(i64, errno.EMFILE);
+    f.f_count += 1;
+    fdAffix(p, nfd, f);
+    p.fd_cloexec[nfd] = cloexec;
+    return @intCast(nfd);
+}
+
+/// Close the descriptors marked close-on-exec (at a successful execve).
+pub fn fdCloseOnExec(p: *proc.Proc) void {
+    var fd: usize = 0;
+    while (fd < proc.NFILE) : (fd += 1) {
+        if (p.fd_cloexec[fd] and p.fds[fd] != null) {
+            _ = fd_close(p, fd);
+        }
+    }
 }
 
 /// The open file behind descriptor `fd`, or null.
@@ -59,6 +88,7 @@ pub fn closeFile(f: *file.File) i32 {
         return 0;
     }
     const err: i32 = f.f_ops.close(f);
+    if (f.f_path) |path| kmem.free(@ptrCast(path));
     kmem.free(@ptrCast(f));
     return err;
 }
@@ -70,6 +100,7 @@ pub fn fd_close(p: *proc.Proc, fd: usize) i32 {
     }
     const f: *file.File = p.fds[fd] orelse return errno.EBADF;
     p.fds[fd] = null;
+    p.fd_cloexec[fd] = false;
     return closeFile(f);
 }
 

@@ -85,7 +85,9 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     while (true) {
         const gpid: i32 = libc.syscall.fork();
         if (gpid == 0) {
-            var av: [2]?[*:0]const u8 = .{ "/usr/libexec/getty", null };
+            // As /etc/ttys runs it on FreeBSD: the "Pc" gettytab entry (8-bit,
+            // no parity) on the terminal already open as stdin ("-").
+            var av: [4]?[*:0]const u8 = .{ "getty", "Pc", "-", null };
             _ = libc.syscall.execve("/usr/libexec/getty", @ptrCast(&av), envp);
             libc.syscall.exit(1);
         }

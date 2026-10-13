@@ -18,6 +18,7 @@ const kern_fork: type = @import("kern_fork.zig");
 const kern_exit: type = @import("kern_exit.zig");
 const kern_exec: type = @import("kern_exec.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
+const errno: type = @import("../sys/errno.zig");
 const kern_signal: type = @import("kern_signal.zig");
 const kern_time: type = @import("kern_time.zig");
 const kern_prot: type = @import("kern_prot.zig");
@@ -30,6 +31,9 @@ const sys_poll: type = @import("sys_poll.zig");
 const vfs_getcwd: type = @import("vfs_getcwd.zig");
 const vm_mmap: type = @import("../vm/vm_mmap.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
+const kern_cpuset: type = @import("kern_cpuset.zig");
+const kern_thr: type = @import("kern_thr.zig");
+const random: type = @import("../dev/random/random.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
 pub const Handler: type = *const fn (args: [sys.MAXARGS]u64) u64;
@@ -108,6 +112,29 @@ fn sysDup2(args: [sys.MAXARGS]u64) u64 {
     return newfd;
 }
 
+/// close_range(2): close (or, with CLOSE_RANGE_CLOEXEC, mark close-on-exec)
+/// every descriptor from `lowfd` to `highfd`.
+fn sysCloseRange(args: [sys.MAXARGS]u64) u64 {
+    const CLOSE_RANGE_CLOEXEC: u64 = 1 << 2;
+    const p = kern_proc.current;
+    if (args[0] > args[1]) return sys.signed(-errno.EINVAL);
+    var fd: u64 = args[0];
+    while (fd <= args[1] and fd < proc.NFILE) : (fd += 1) {
+        if (p.fds[@intCast(fd)] == null) continue;
+        if ((args[2] & CLOSE_RANGE_CLOEXEC) != 0) {
+            kern_descrip.fdSetCloexec(p, @intCast(fd), true);
+        } else {
+            _ = kern_descrip.fd_close(p, @intCast(fd));
+        }
+    }
+    return 0;
+}
+
+/// dup(2): the lowest free descriptor, sharing the open file.
+fn sysDup(args: [sys.MAXARGS]u64) u64 {
+    return sys.signed(kern_descrip.fdDup(kern_proc.current, @intCast(args[0]), 0, false));
+}
+
 fn sysExecve(args: [sys.MAXARGS]u64) u64 {
     const path_ptr: u64 = args[0];
     const argv_ptr: u64 = args[1];
@@ -128,6 +155,9 @@ const Entry: type = struct {
 const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_exit, .handler = sysExit },
     .{ .num = sys.SYS_fork, .handler = sysFork },
+    // vfork(2) as fork: the child may only exec or _exit, which copying the
+    // address space satisfies (the parent is simply not suspended).
+    .{ .num = sys.SYS_vfork, .handler = sysFork },
     .{ .num = sys.SYS_read, .handler = sys_generic.sysRead },
     .{ .num = sys.SYS_write, .handler = sys_generic.sysWrite },
     .{ .num = sys.SYS_open, .handler = vfs_syscalls.sysOpen },
@@ -148,6 +178,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_getuid, .handler = kern_prot.sysGetuid },
     .{ .num = sys.SYS_setuid, .handler = kern_prot.sysSetuid },
     .{ .num = sys.SYS_dup2, .handler = sysDup2 },
+    .{ .num = sys.SYS_dup, .handler = sysDup },
     .{ .num = sys.SYS_ioctl, .handler = sys_generic.sysIoctl },
     .{ .num = sys.SYS_kill, .handler = kern_signal.sysKill },
     .{ .num = sys.SYS_sigaction, .handler = kern_signal.sysSigaction },
@@ -183,13 +214,52 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_fdatasync, .handler = vfs_syscalls.sysFsync },
     .{ .num = sys.SYS_ftruncate, .handler = vfs_syscalls.sysFtruncate },
     .{ .num = sys.SYS_truncate, .handler = vfs_syscalls.sysTruncate },
-    .{ .num = sys.SYS_chmod, .handler = sysOk },
-    .{ .num = sys.SYS_fchmod, .handler = sysOk },
-    .{ .num = sys.SYS_futimens, .handler = sysOk },
-    .{ .num = sys.SYS_utimensat, .handler = sysOk },
+    .{ .num = sys.SYS_chmod, .handler = vfs_syscalls.sysChmod },
+    .{ .num = sys.SYS_fchmod, .handler = vfs_syscalls.sysFchmod },
+    .{ .num = sys.SYS_lchmod, .handler = vfs_syscalls.sysLchmod },
+    .{ .num = sys.SYS_fchmodat, .handler = vfs_syscalls.sysFchmodat },
+    .{ .num = sys.SYS_chown, .handler = vfs_syscalls.sysChown },
+    .{ .num = sys.SYS_fchown, .handler = vfs_syscalls.sysFchown },
+    .{ .num = sys.SYS_lchown, .handler = vfs_syscalls.sysLchown },
+    .{ .num = sys.SYS_fchownat, .handler = vfs_syscalls.sysFchownat },
+    .{ .num = sys.SYS_chflags, .handler = vfs_syscalls.sysChflags },
+    .{ .num = sys.SYS_fchflags, .handler = vfs_syscalls.sysFchflags },
+    .{ .num = sys.SYS_lchflags, .handler = vfs_syscalls.sysLchflags },
+    .{ .num = sys.SYS_chflagsat, .handler = vfs_syscalls.sysChflagsat },
+    .{ .num = sys.SYS_futimens, .handler = vfs_syscalls.sysFutimens },
+    .{ .num = sys.SYS_utimensat, .handler = vfs_syscalls.sysUtimensat },
     .{ .num = sys.SYS_getppid, .handler = sysGetppid },
-    .{ .num = sys.SYS_getgid, .handler = sysOk },
+    .{ .num = sys.SYS_getgid, .handler = kern_prot.sysGetgid },
+    .{ .num = sys.SYS_setgid, .handler = kern_prot.sysSetgid },
+    .{ .num = sys.SYS_setegid, .handler = kern_prot.sysSetegid },
+    .{ .num = sys.SYS_seteuid, .handler = kern_prot.sysSeteuid },
+    .{ .num = sys.SYS_setreuid, .handler = kern_prot.sysSetreuid },
+    .{ .num = sys.SYS_setregid, .handler = kern_prot.sysSetregid },
+    .{ .num = sys.SYS_getresuid, .handler = kern_prot.sysGetresuid },
+    .{ .num = sys.SYS_getresgid, .handler = kern_prot.sysGetresgid },
+    .{ .num = sys.SYS_getgroups, .handler = kern_prot.sysGetgroups },
+    .{ .num = sys.SYS_setgroups, .handler = kern_prot.sysSetgroups },
+    .{ .num = sys.SYS_getlogin, .handler = kern_prot.sysGetlogin },
+    .{ .num = sys.SYS_getitimer, .handler = kern_time.sysGetitimer },
+    .{ .num = sys.SYS_setitimer, .handler = kern_time.sysSetitimer },
+    .{ .num = sys.SYS_nanosleep, .handler = kern_time.sysNanosleep },
+    .{ .num = sys.SYS_getpriority, .handler = kern_time.sysGetpriority },
+    .{ .num = sys.SYS_setpriority, .handler = kern_time.sysSetpriority },
+    .{ .num = sys.SYS_close_range, .handler = sysCloseRange },
+    .{ .num = sys.SYS_minherit, .handler = vm_mmap.sysMinherit },
+    .{ .num = sys.SYS_thr_self, .handler = kern_thr.sysThrSelf },
+    .{ .num = sys.SYS_thr_kill, .handler = kern_thr.sysThrKill },
+    .{ .num = sys.SYS_getrandom, .handler = random.sysGetrandom },
+    .{ .num = sys.SYS_mkdirat, .handler = vfs_syscalls.sysMkdirat },
+    .{ .num = sys.SYS_unlinkat, .handler = vfs_syscalls.sysUnlinkat },
+    .{ .num = sys.SYS_fchdir, .handler = vfs_syscalls.sysFchdir },
+    .{ .num = sys.SYS_umask, .handler = kern_resource.sysUmask },
+    .{ .num = sys.SYS_getloginclass, .handler = kern_resource.sysGetloginclass },
+    .{ .num = sys.SYS_setloginclass, .handler = kern_resource.sysSetloginclass },
     .{ .num = sys.SYS_poll, .handler = sys_poll.sysPoll },
+    .{ .num = sys.SYS_readlink, .handler = vfs_syscalls.sysReadlink },
+    .{ .num = sys.SYS_readlinkat, .handler = vfs_syscalls.sysReadlinkat },
+    .{ .num = sys.SYS_cpuset_getaffinity, .handler = kern_cpuset.sysCpusetGetaffinity },
 };
 
 /// Number-to-handler table, indexed by system call number.

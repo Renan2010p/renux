@@ -14,6 +14,7 @@ const param: type = @import("../sys/param.zig");
 const descrip: type = @import("kern_descrip.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const prf: type = @import("subr_prf.zig");
+const kern_resource: type = @import("kern_resource.zig");
 
 /// Maximum number of processes. FreeBSD's init restarts a getty as soon as it
 /// exits, so a supervisor-style userland easily keeps several processes (a
@@ -41,14 +42,30 @@ pub fn init() void {
         var fd: usize = 0;
         while (fd < proc.NFILE) : (fd += 1) {
             p.fds[fd] = null;
+            p.fd_cloexec[fd] = false;
         }
         p.cwd = null;
         p.cwd_len = 0;
         p.brk = 0;
         p.mmap_next = 0;
+        p.inherit_zero = @splat(.{});
         p.uid = 0;
+        p.euid = 0;
+        p.svuid = 0;
+        p.gid = 0;
+        p.egid = 0;
+        p.svgid = 0;
+        p.ngroups = 1;
+        p.groups[0] = 0;
+        @memset(&p.login, 0);
+        @memset(&p.loginclass, 0);
+        p.cmask = 0o022;
+        p.rlimits = kern_resource.defaults();
         p.name_len = 0;
         p.sig_pending = 0;
+        p.itimer_due = 0;
+        p.itimer_interval = 0;
+        p.nice = 0;
         p.sig_mask = 0;
         var s: usize = 0;
         while (s < signal.NSIG) : (s += 1) {
@@ -67,27 +84,45 @@ pub fn alloc() ?*proc.Proc {
             continue;
         }
         const map = arch.pmap.create() orelse return null;
-        const kpage = vm_page.physalloc() orelse return null;
+        const kpage = vm_page.physallocContig(param.KSTACK_PAGES) orelse return null;
         p.pid = next_pid;
         next_pid += 1;
         p.parent = null;
         p.exit_status = 0;
         p.pmap = map;
         p.kstack_page = kpage;
-        p.kstack_top = kpage + hhdm + param.PAGE_SIZE;
+        p.kstack_top = kpage + hhdm + param.KSTACK_PAGES * param.PAGE_SIZE;
+        // The canary sits at the bottom of the stack (stacks grow down).
+        @as(*u64, @ptrFromInt(kpage + hhdm)).* = param.KSTACK_CANARY;
         p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
         var fd: usize = 0;
         while (fd < proc.NFILE) : (fd += 1) {
             p.fds[fd] = null;
+            p.fd_cloexec[fd] = false;
         }
         p.cwd = null;
         p.cwd_len = 0;
         p.brk = 0;
         p.mmap_next = 0;
+        p.inherit_zero = @splat(.{});
         p.uid = 0;
+        p.euid = 0;
+        p.svuid = 0;
+        p.gid = 0;
+        p.egid = 0;
+        p.svgid = 0;
+        p.ngroups = 1;
+        p.groups[0] = 0;
+        @memset(&p.login, 0);
+        @memset(&p.loginclass, 0);
+        p.cmask = 0o022;
+        p.rlimits = kern_resource.defaults();
         p.name_len = 0;
         p.sig_pending = 0;
+        p.itimer_due = 0;
+        p.itimer_interval = 0;
+        p.nice = 0;
         p.sig_mask = 0;
         var s: usize = 0;
         while (s < signal.NSIG) : (s += 1) {
@@ -112,7 +147,7 @@ pub fn free(p: *proc.Proc) void {
         }
     }
     if (p.kstack_page != 0) {
-        vm_page.physfree(p.kstack_page);
+        vm_page.physfreeContig(p.kstack_page, param.KSTACK_PAGES);
     }
     p.state = .unused;
     p.pid = 0;

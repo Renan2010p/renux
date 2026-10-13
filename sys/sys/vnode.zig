@@ -75,6 +75,20 @@ pub const VnodeOps: type = struct {
     readdir: *const fn (vp: *Vnode, offset: u64, buf: []u8, eofflag: *bool) isize,
     /// Called when the kernel is done with `vp` and may reclaim it.
     inactive: *const fn (vp: *Vnode) void,
+    /// Change the attributes set in `sa`; returns 0 or errno. Filesystems
+    /// that cannot store attributes leave it null (EROFS/EOPNOTSUPP).
+    setattr: ?*const fn (vp: *Vnode, sa: *const Setattr) i32 = null,
+};
+
+/// Attribute changes for VnodeOps.setattr (FreeBSD's VOP_SETATTR with a
+/// partly filled struct vattr); a null field is left unchanged.
+pub const Setattr: type = struct {
+    /// Permission bits only (the file type cannot change).
+    mode: ?u16 = null,
+    uid: ?u32 = null,
+    gid: ?u32 = null,
+    atime: ?i64 = null,
+    mtime: ?i64 = null,
 };
 
 /// Vnode flags (NetBSD's VROOT and friends).

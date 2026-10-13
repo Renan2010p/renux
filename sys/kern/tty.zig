@@ -225,6 +225,17 @@ pub fn ioctl(t: *Tty, cmd: u64, arg: u64) i32 {
             }
             return 0;
         },
+        ttycom.FIODGNAME => {
+            // The console terminal is FreeBSD's first virtual terminal, so
+            // ttyname(3) says /dev/ttyv0 (the name /etc/ttys knows).
+            const a: *align(1) const ttycom.FiodgnameArg = @ptrFromInt(arg);
+            const name: []const u8 = "ttyv0";
+            const dst: [*]u8 = a.buf orelse return -@as(i32, errno.EFAULT);
+            if (a.len <= name.len) return -@as(i32, errno.EINVAL);
+            @memcpy(dst[0..name.len], name);
+            dst[name.len] = 0;
+            return 0;
+        },
         ttycom.FIONREAD => {
             const dst: *align(1) i32 = @ptrFromInt(arg);
             dst.* = if (t.have_line) @intCast(t.ready_len - t.ready_pos) else 0;

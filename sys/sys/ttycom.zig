@@ -33,3 +33,12 @@ pub const TIOCGPGRP: u64 = ioc(IOC_OUT, 't', 119, @sizeOf(c_int));
 pub const TIOCSPGRP: u64 = ioc(IOC_IN, 't', 118, @sizeOf(c_int));
 /// Get the number of bytes available to read (an int).
 pub const FIONREAD: u64 = ioc(IOC_OUT, 'f', 127, @sizeOf(c_int));
+
+/// struct fiodgname_arg (sys/filio.h): the buffer FIODGNAME fills.
+pub const FiodgnameArg: type = extern struct {
+    len: c_int,
+    buf: ?[*]u8,
+};
+
+/// Get the device name of a descriptor (what ttyname(3) and devname(3) use).
+pub const FIODGNAME: u64 = ioc(IOC_IN, 'f', 120, @sizeOf(FiodgnameArg));

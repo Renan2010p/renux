@@ -14,6 +14,7 @@ const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const prf: type = @import("subr_prf.zig");
+const param: type = @import("../sys/param.zig");
 
 /// Fork the current process. Returns the child's pid in the parent, 0 in the
 /// child, or -1 on failure.
@@ -28,8 +29,18 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
         return -1;
     };
 
-    // Copy the parent's user pages into the child's address space.
+    // Copy the parent's user pages into the child's address space, then zero
+    // the ranges marked INHERIT_ZERO (minherit(2)).
     arch.pmap.copyUser(child.pmap, parent.pmap, hhdm);
+    child.inherit_zero = parent.inherit_zero;
+    for (parent.inherit_zero) |r| {
+        var va: u64 = r.start;
+        while (va < r.end) : (va += param.PAGE_SIZE) {
+            const pa: u64 = arch.pmap.extract(child.pmap, va) orelse continue;
+            const page: [*]u8 = @ptrFromInt((pa & ~@as(u64, param.PAGE_SIZE - 1)) + hhdm);
+            @memset(page[0..param.PAGE_SIZE], 0);
+        }
+    }
 
     // The child resumes from the same user frame, but fork() returns 0 in it.
     // The carry flag must be cleared too: FreeBSD's fork stub branches to its
@@ -44,6 +55,7 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     var fd: usize = 0;
     while (fd < proc.NFILE) : (fd += 1) {
         child.fds[fd] = parent.fds[fd];
+        child.fd_cloexec[fd] = parent.fd_cloexec[fd];
         if (child.fds[fd]) |openfile| {
             openfile.f_count += 1;
         }
@@ -55,9 +67,24 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     child.brk = parent.brk;
     child.mmap_next = parent.mmap_next;
     child.uid = parent.uid;
+    child.euid = parent.euid;
+    child.svuid = parent.svuid;
+    child.gid = parent.gid;
+    child.egid = parent.egid;
+    child.svgid = parent.svgid;
+    child.ngroups = parent.ngroups;
+    child.groups = parent.groups;
+    child.login = parent.login;
+    child.loginclass = parent.loginclass;
+    child.cmask = parent.cmask;
+    child.rlimits = parent.rlimits;
     // The child shares the parent's thread pointer (TLS) until it execs; without
     // this, libc's per-thread state (errno, ...) faults on the first access.
     child.fsbase = parent.fsbase;
+
+    // The child runs the same program until it execs (FreeBSD's p_comm).
+    child.name = parent.name;
+    child.name_len = parent.name_len;
 
     // Copy the working-directory path.
     var k: usize = 0;
@@ -72,6 +99,10 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
         child.sig_handler[sg] = parent.sig_handler[sg];
     }
     child.sig_pending = 0;
+    // Timers are not inherited (POSIX); the nice value is.
+    child.itimer_due = 0;
+    child.itimer_interval = 0;
+    child.nice = parent.nice;
     child.sig_mask = parent.sig_mask;
 
     kern_sched.prepareContext(child);

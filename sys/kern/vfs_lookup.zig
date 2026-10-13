@@ -21,10 +21,17 @@ const MAXSYMLINKS: u32 = 16;
 /// Resolve `path` starting from `start` (or the root, for an absolute path or
 /// when `start` is null), or null when any component is missing.
 pub fn nameiAt(start: ?*vnode.Vnode, path: []const u8) ?*vnode.Vnode {
-    return nameiDepth(start, path, 0);
+    return nameiDepth(start, path, 0, true);
 }
 
-fn nameiDepth(start: ?*vnode.Vnode, path: []const u8, depth: u32) ?*vnode.Vnode {
+/// Like nameiAt(), but a symbolic link in the last component is returned
+/// itself instead of being followed (FreeBSD's NOFOLLOW, for readlink(2) and
+/// lstat(2)).
+pub fn nameiAtNoFollow(start: ?*vnode.Vnode, path: []const u8) ?*vnode.Vnode {
+    return nameiDepth(start, path, 0, false);
+}
+
+fn nameiDepth(start: ?*vnode.Vnode, path: []const u8, depth: u32, follow_last: bool) ?*vnode.Vnode {
     if (depth > MAXSYMLINKS or path.len >= param.MAXPATHLEN) {
         return null;
     }
@@ -75,8 +82,8 @@ fn nameiDepth(start: ?*vnode.Vnode, path: []const u8, depth: u32) ?*vnode.Vnode 
         const next: *vnode.Vnode = vfs_mount.cross(found);
 
         // Follow a symbolic link (in a helper so this frame stays small).
-        if (next.v_type == .vlnk) {
-            return followLink(next, vp, buf[i..len], depth);
+        if (next.v_type == .vlnk and (follow_last or !islast)) {
+            return followLink(next, vp, buf[i..len], depth, follow_last);
         }
 
         vp = next;
@@ -89,7 +96,7 @@ fn nameiDepth(start: ?*vnode.Vnode, path: []const u8, depth: u32) ?*vnode.Vnode 
 /// continue the lookup, resolving the target from `vp` (a relative target) or
 /// from the root (an absolute one), appending `rest` (the path left after the
 /// link).
-fn followLink(next: *vnode.Vnode, vp: *vnode.Vnode, rest: []const u8, depth: u32) ?*vnode.Vnode {
+fn followLink(next: *vnode.Vnode, vp: *vnode.Vnode, rest: []const u8, depth: u32, follow_last: bool) ?*vnode.Vnode {
     var lbuf: [param.MAXPATHLEN]u8 = undefined;
     const ln: isize = next.v_op.read(next, 0, &lbuf);
     if (ln <= 0) {
@@ -115,7 +122,7 @@ fn followLink(next: *vnode.Vnode, vp: *vnode.Vnode, rest: []const u8, depth: u32
     }
 
     const base: ?*vnode.Vnode = if (link.len > 0 and link[0] == '/') null else vp;
-    return nameiDepth(base, tmp[0..tl], depth + 1);
+    return nameiDepth(base, tmp[0..tl], depth + 1, follow_last);
 }
 
 /// Resolve an absolute or root-relative `path` (used before a process exists).

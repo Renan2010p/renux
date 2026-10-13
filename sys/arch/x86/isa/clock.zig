@@ -16,6 +16,7 @@ const intrdefs: type = @import("../include/intrdefs.zig");
 const pic: type = @import("../x86/i8259.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 const kern_sched: type = @import("../../../kern/kern_sched.zig");
+const kern_time: type = @import("../../../kern/kern_time.zig");
 const sysinit: type = @import("../../../sys/sysinit.zig");
 
 /// Tick rate in Hz.
@@ -60,7 +61,9 @@ fn tick() void {
     if (heartbeat and ticks % HZ == 0) {
         prf.print(".");
     }
-    // Wake anyone waiting in poll(2) so it can re-check readiness / time out.
+    // Fire interval timers (SIGALRM), then wake anyone waiting in poll(2) or
+    // nanosleep(2) so it can re-check readiness / time out.
+    kern_time.hardclock(ticks);
     kern_sched.wakeup(pollChannel());
 }
 

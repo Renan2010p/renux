@@ -1,0 +1,8 @@
+Renux 0.1-CURRENT: a modern operating system that runs FreeBSD programs.
+
+This userland is FreeBSD's own: login(1), sh(1) and the base utilities run
+unchanged on the Renux kernel through the FreeBSD/amd64 ABI.
+
+Source and documentation: https://github.com/Renan2010p/renux
+
+Edit /var/run/motd to change this login announcement.

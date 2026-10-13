@@ -21,6 +21,7 @@ const rootimage: type = @import("../fs/rootimage.zig");
 const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
+const kern_syscall: type = @import("kern_syscall.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const vfs_mount: type = @import("vfs_mount.zig");
@@ -84,6 +85,8 @@ fn bootFlags(_: ?*const anyopaque) callconv(.c) void {
             }
         } else if (strStarts(word, "boot_single")) {
             boothowto |= RB_SINGLE;
+        } else if (strStarts(word, "truss=")) {
+            kern_syscall.setTruss(word["truss=".len..]);
         } else if (strStarts(word, "console=")) {
             // The loader's console choice: comconsole, vidconsole, or both
             // (comma separated).

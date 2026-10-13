@@ -29,6 +29,7 @@ const tmpfs_vnodeops: vnode.VnodeOps = .{
     .write = tmpfsWrite,
     .truncate = tmpfsTruncate,
     .getattr = tmpfsGetattr,
+    .setattr = tmpfsSetattr,
     .readdir = tmpfsReaddir,
     .inactive = tmpfsInactive,
 };
@@ -186,6 +187,16 @@ fn tmpfsTruncate(vp: *vnode.Vnode, length: u64) i32 {
         return errno.EISDIR;
     }
     tmpfs_subr.regTruncate(node, length);
+    return 0;
+}
+
+fn tmpfsSetattr(vp: *vnode.Vnode, sa: *const vnode.Setattr) i32 {
+    const node: *tmpfs.Node = nodeOf(vp);
+    if (sa.mode) |m| node.mode = (node.mode & ~@as(u16, 0o7777)) | (m & 0o7777);
+    if (sa.uid) |u| node.uid = u;
+    if (sa.gid) |g| node.gid = g;
+    if (sa.atime) |t| node.atime = t;
+    if (sa.mtime) |t| node.mtime = t;
     return 0;
 }
 

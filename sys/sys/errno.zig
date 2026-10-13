@@ -39,3 +39,4 @@ pub const ENAMETOOLONG: i32 = 63;
 pub const ENOTEMPTY: i32 = 66;
 pub const EOPNOTSUPP: i32 = 45;
 pub const ENOSYS: i32 = 78;
+pub const ERANGE: i32 = 34; // result too large

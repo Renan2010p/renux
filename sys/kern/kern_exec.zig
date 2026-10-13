@@ -17,6 +17,7 @@ const exec_elf: type = @import("exec_elf.zig");
 const vnode: type = @import("../sys/vnode.zig");
 const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
+const kern_descrip: type = @import("kern_descrip.zig");
 const signal: type = @import("../sys/signal.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
@@ -498,15 +499,22 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
 
     p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;
+    p.inherit_zero = @splat(.{});
     if (!setupInitialTls(p, newmap, main)) {
         return -errno.ENOMEM;
     }
 
-    // Caught signals revert to their default action across exec.
+    // Caught signals revert to their default action across exec; ignored
+    // ones stay ignored (POSIX).
     var sg: usize = 0;
     while (sg < signal.NSIG) : (sg += 1) {
-        p.sig_handler[sg] = signal.SIG_DFL;
+        if (p.sig_handler[sg] != signal.SIG_IGN) {
+            p.sig_handler[sg] = signal.SIG_DFL;
+        }
     }
+
+    // Descriptors marked close-on-exec do not survive the new image.
+    kern_descrip.fdCloseOnExec(p);
     p.sig_pending = 0;
 
     const oldmap: arch.pmap.Pmap = p.pmap;

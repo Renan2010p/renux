@@ -161,6 +161,10 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
             return;
         }
         prf.log(prf.LOG_ERR, "pid %d (%s): page fault at %x error %x rip %x", .{ kern_proc.current.pid, kern_proc.current.name[0..kern_proc.current.name_len], readCr2(), frame.error_code, frame.rip });
+        // The translation path, so a malformed entry (error bit 3, RSVD) or a
+        // missing level shows at once.
+        const e = pmap.walk(kern_proc.current.pmap, readCr2());
+        prf.log(prf.LOG_ERR, "  pml4e %x pdpte %x pde %x pte %x", .{ e[0], e[1], e[2], e[3] });
         // A fault from user mode kills the process (as SIGSEGV); only a kernel
         // fault panics.
         if ((frame.error_code & 0x4) != 0) {
