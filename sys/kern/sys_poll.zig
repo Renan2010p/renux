@@ -3,9 +3,10 @@
 //
 // poll(2).
 //
-// This is the Zig counterpart of NetBSD's sys/kern/sys_poll.c, reduced to what
-// an interactive program needs: report whether the console has input, and wait
-// until it does or the timeout elapses. The timeout is measured with the system
+// This is the Zig counterpart of NetBSD's sys/kern/sys_poll.c: report the
+// readiness of each descriptor (through its FileOps.poll, such as a pipe's;
+// the console's input for devices without one; regular files always ready),
+// and wait until one is ready or the timeout elapses. The timeout is measured with the system
 // tick, and poll() sleeps on the clock's poll channel, which every tick wakes
 // so the wait can be re-checked.
 
@@ -14,10 +15,9 @@ const errno: type = @import("../sys/errno.zig");
 const cons: type = @import("../dev/cons.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_sched: type = @import("kern_sched.zig");
-
-/// Event bits (FreeBSD poll.h).
-const POLLIN: i16 = 0x0001;
-const POLLOUT: i16 = 0x0004;
+const kern_proc: type = @import("kern_proc.zig");
+const kern_descrip: type = @import("kern_descrip.zig");
+const file: type = @import("../sys/file.zig");
 
 /// Largest pollfd array accepted.
 const MAXPOLL: usize = 256;
@@ -37,6 +37,26 @@ fn load16(p: [*]const u8, off: usize) u16 {
 fn store16(p: [*]u8, off: usize, v: u16) void {
     p[off] = @truncate(v);
     p[off + 1] = @truncate(v >> 8);
+}
+
+/// The poll(2) events of `fd` that hold now, among `events` (POLLHUP,
+/// POLLERR and POLLNVAL are always reported).
+fn readiness(fd: i32, events: i16) i16 {
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return @bitCast(file.POLLNVAL);
+    const always: u16 = file.POLLHUP | file.POLLERR | file.POLLNVAL;
+    const want: u16 = @as(u16, @bitCast(events)) | always;
+    var ev: u16 = 0;
+    if (f.f_ops.poll) |pollfn| {
+        ev = pollfn(f);
+    } else if (f.f_type == file.DTYPE_VNODE) {
+        // Regular files and directories never block.
+        ev = file.POLLIN | file.POLLOUT;
+    } else {
+        // Devices: the console is the only one with input to wait for.
+        if (cons.cnInputReady()) ev |= file.POLLIN;
+        ev |= file.POLLOUT;
+    }
+    return @bitCast(ev & want);
 }
 
 /// poll(2): wait for one of `nfds` descriptors to become ready.
@@ -64,14 +84,7 @@ pub fn sysPoll(args: [sys.MAXARGS]u64) u64 {
             const events: i16 = @bitCast(load16(p, base + 4));
             var revents: i16 = 0;
             if (fd >= 0) {
-                // The console is the only descriptor with input to wait for;
-                // regular files are always ready.
-                if ((events & POLLIN) != 0 and cons.cnInputReady()) {
-                    revents |= POLLIN;
-                }
-                if ((events & POLLOUT) != 0) {
-                    revents |= POLLOUT;
-                }
+                revents = readiness(fd, events);
             }
             store16(p, base + 6, @bitCast(revents));
             if (revents != 0) {

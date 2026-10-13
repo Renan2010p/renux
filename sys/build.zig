@@ -17,9 +17,11 @@ pub fn build(b: *Builder) !void {
 
     const target: Builder.ResolvedTarget = b.resolveTargetQuery(query);
 
-    const optimize: builtin.OptimizeMode = b.standardOptimizeOption(.{
-        .preferred_optimize_mode = .fast,
-    });
+    // The kernel is always built ReleaseFast: a debug kernel is many times
+    // slower (the console, the scheduler and every system call) and needs far
+    // deeper kernel stacks. Debug output does not depend on it: boot -v and
+    // truss=<comm> work in the optimized kernel.
+    const optimize: builtin.OptimizeMode = .ReleaseFast;
 
     const kern_mod: *Builder.Module = b.createModule(.{
         .target = target,

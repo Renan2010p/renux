@@ -85,7 +85,12 @@ pub fn sysClockGettime(args: [sys.MAXARGS]u64) u64 {
             sec = @intCast(boottime + ticks / hz);
             nsec = @intCast((ticks % hz) * (1_000_000_000 / hz));
         },
-        CLOCK_MONOTONIC, CLOCK_MONOTONIC_PRECISE, CLOCK_MONOTONIC_FAST, CLOCK_UPTIME, CLOCK_UPTIME_PRECISE, CLOCK_UPTIME_FAST, CLOCK_SECOND => {
+        // CLOCK_SECOND is the time of day in whole seconds (time(3) uses it).
+        CLOCK_SECOND => {
+            sec = @intCast(boottime + ticks / hz);
+            nsec = 0;
+        },
+        CLOCK_MONOTONIC, CLOCK_MONOTONIC_PRECISE, CLOCK_MONOTONIC_FAST, CLOCK_UPTIME, CLOCK_UPTIME_PRECISE, CLOCK_UPTIME_FAST => {
             sec = @intCast(ticks / hz);
             nsec = @intCast((ticks % hz) * (1_000_000_000 / hz));
         },
@@ -214,5 +219,15 @@ pub fn sysSetpriority(args: [sys.MAXARGS]u64) u64 {
     const clamped: i32 = @intCast(@max(-20, @min(20, prio)));
     if (clamped < p.nice and p.euid != 0) return sys.signed(-errno.EACCES);
     p.nice = clamped;
+    return 0;
+}
+
+/// clock_getres(2): every clock advances by one tick.
+pub fn sysClockGetres(args: [sys.MAXARGS]u64) u64 {
+    if (args[0] > 15) return sys.signed(-errno.EINVAL);
+    if (args[1] != 0) {
+        const ts: *align(1) Timespec = @ptrFromInt(args[1]);
+        ts.* = .{ .tv_sec = 0, .tv_nsec = @intCast(1_000_000_000 / arch.clock.HZ) };
+    }
     return 0;
 }

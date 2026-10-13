@@ -94,8 +94,9 @@ Each subproject keeps its own working `zig-out/` (`sys/zig-out`,
 
 Notes:
 
-- Plain `zig build` (root or `sys/`) produces a **debug** kernel (large, with
-  full debug info). In `sys/`, add `-Drelease=true` for an optimized image.
+- The kernel is always built **ReleaseFast** (`sys/build.zig`); boot with
+  `-v` for verbose messages and `truss=<command>` to trace a program's system
+  calls.
 - The kernel targets `x86_64-freestanding-none` with `abi=none`,
   `code_model=kernel`, `red_zone=false`, and `pic=false`.
 

@@ -30,11 +30,20 @@ pub fn sysWrite(args: [sys.MAXARGS]u64) u64 {
         return sys.signed(-errno.EBADF);
     }
     const bytes: [*]u8 = @ptrFromInt(buf);
-    const n: isize = f.f_ops.write(f, bytes[0..@intCast(count)]);
-    if (n < 0) {
-        return sys.signed(n);
+    const again: isize = -@as(isize, errno.EAGAIN);
+    // A full pipe returns -EAGAIN; wait for room as read() waits for data.
+    while (true) {
+        arch.cpu.enable_interrupts();
+        const n: isize = f.f_ops.write(f, bytes[0..@intCast(count)]);
+        arch.cpu.disable_interrupts();
+        if (n != again) {
+            if (n < 0) {
+                return sys.signed(n);
+            }
+            return @intCast(n);
+        }
+        kern_sched.yield();
     }
-    return @intCast(n);
 }
 
 /// An I/O vector (FreeBSD's struct iovec).

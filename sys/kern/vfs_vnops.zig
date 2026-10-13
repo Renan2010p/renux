@@ -64,7 +64,7 @@ pub fn fillStat(vp: *vnode.Vnode, st: *stat.Stat) i32 {
     st.blksize = 4096;
     st.flags = 0;
     st.gen = 0;
-    st.lspare = 0;
+    st.spare = @splat(0);
     st.birthtim = .{ .sec = vap.ctime, .nsec = 0 };
     return 0;
 }
@@ -232,6 +232,40 @@ pub fn vn_remove(start: ?*vnode.Vnode, path: []const u8, require_dir: bool) i32 
         cnp.flags |= namei.REQUIREDIR;
     }
     return dvp.v_op.remove(dvp, &cnp);
+}
+
+/// Split `path` into its parent directory (looked up from `start`) and the
+/// final component name.
+fn splitLast(start: ?*vnode.Vnode, path: []const u8) ?struct { dvp: *vnode.Vnode, name: []const u8 } {
+    var slash: ?usize = null;
+    for (path, 0..) |c, i| {
+        if (c == '/') slash = i;
+    }
+    const parent_path: []const u8 = if (slash) |s| path[0..s] else "";
+    const name: []const u8 = if (slash) |s| path[s + 1 ..] else path;
+    const dvp: *vnode.Vnode = if (parent_path.len == 0)
+        (parentDir(start, path) orelse return null)
+    else
+        (vfs_lookup.nameiAt(start, parent_path) orelse return null);
+    return .{ .dvp = dvp, .name = name };
+}
+
+/// Rename `from` to `to` (rename(2)). Returns 0 or errno.
+pub fn vn_rename(start: ?*vnode.Vnode, from: []const u8, to: []const u8) i32 {
+    const f = splitLast(start, from) orelse return errno.ENOENT;
+    const t = splitLast(start, to) orelse return errno.ENOENT;
+    if (f.name.len == 0 or t.name.len == 0) return errno.EINVAL;
+    if (isDots(f.name) or isDots(t.name)) return errno.EINVAL;
+    if (f.dvp.v_type != .vdir or t.dvp.v_type != .vdir) return errno.ENOTDIR;
+    if (f.dvp.v_mount != t.dvp.v_mount) return errno.EXDEV;
+    const op = f.dvp.v_op.rename orelse return errno.EROFS;
+    const fcnp: namei.Componentname = .{ .nameptr = f.name.ptr, .namelen = f.name.len, .nameiop = namei.DELETE, .flags = namei.ISLASTCN };
+    const tcnp: namei.Componentname = .{ .nameptr = t.name.ptr, .namelen = t.name.len, .nameiop = namei.CREATE, .flags = namei.ISLASTCN };
+    return op(f.dvp, &fcnp, t.dvp, &tcnp);
+}
+
+fn isDots(name: []const u8) bool {
+    return (name.len == 1 and name[0] == '.') or (name.len == 2 and name[0] == '.' and name[1] == '.');
 }
 
 /// The directory a path with no slash component starts from: the root for an

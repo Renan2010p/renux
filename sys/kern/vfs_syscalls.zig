@@ -127,7 +127,7 @@ pub fn sysFstat(args: [sys.MAXARGS]u64) u64 {
         .blksize = 0,
         .flags = 0,
         .gen = 0,
-        .lspare = 0,
+        .spare = @splat(0),
         .birthtim = .{ .sec = 0, .nsec = 0 },
     };
     const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.ERROR;
@@ -288,6 +288,23 @@ fn mkdirCommon(path_ptr: u64, mode_arg: u64) u64 {
     const vp: *vnode.Vnode = vfs_vnops.vn_mkdir(cwd, path, mode) orelse return sys.signed(-errno.ENOENT);
     vfs_subr.vrele(vp);
     return 0;
+}
+
+/// rename(2): `rename(from, to)`.
+pub fn sysRename(args: [sys.MAXARGS]u64) u64 {
+    return renameCommon(args[0], args[1]);
+}
+
+/// renameat(2): `renameat(fromfd, from, tofd, to)`.
+pub fn sysRenameat(args: [sys.MAXARGS]u64) u64 {
+    return renameCommon(args[1], args[3]);
+}
+
+fn renameCommon(from_ptr: u64, to_ptr: u64) u64 {
+    const from: []const u8 = subr_syscall.userStr(from_ptr) orelse return sys.signed(-errno.EFAULT);
+    const to: []const u8 = subr_syscall.userStr(to_ptr) orelse return sys.signed(-errno.EFAULT);
+    const err: i32 = vfs_vnops.vn_rename(kern_proc.current.cwd, from, to);
+    return if (err == 0) 0 else sys.signed(-err);
 }
 
 /// unlinkat(2): `unlinkat(fd, path, flag)`; AT_REMOVEDIR removes a directory.
@@ -583,4 +600,114 @@ pub fn sysUtimensat(args: [sys.MAXARGS]u64) u64 {
 /// futimens(2): `futimens(fd, times)`.
 pub fn sysFutimens(args: [sys.MAXARGS]u64) u64 {
     return setattrVp(fdVnode(args[0]), timesArg(args[1]));
+}
+
+/// getdirentries(2): `getdirentries(fd, buf, nbytes, basep)`, getdents(2)
+/// that also reports where the read started (what libc's readdir(3) uses
+/// since FreeBSD 12, with the 64-bit struct dirent).
+pub fn sysGetdirentries(args: [sys.MAXARGS]u64) u64 {
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(args[0])) orelse return sys.signed(-errno.EBADF);
+    const base: u64 = f.f_offset;
+    const r: u64 = sysGetdents(.{ args[0], args[1], args[2], 0, 0, 0 });
+    if (args[3] != 0 and @as(i64, @bitCast(r)) >= 0) {
+        const basep: *align(1) i64 = @ptrFromInt(args[3]);
+        basep.* = @intCast(base);
+    }
+    return r;
+}
+
+// -- pathconf --------------------------------------------------------------------
+
+/// The limits pathconf(2) reports (FreeBSD's _PC_* names). Renux has no
+/// ACLs, MAC labels or capabilities on files, which ls -l asks about.
+fn pathconfValue(name: u64) ?i64 {
+    return switch (name) {
+        1 => 32767, // _PC_LINK_MAX
+        2, 3 => 255, // _PC_MAX_CANON, _PC_MAX_INPUT
+        4 => 255, // _PC_NAME_MAX
+        5 => param.MAXPATHLEN, // _PC_PATH_MAX
+        6 => 512, // _PC_PIPE_BUF
+        7 => 1, // _PC_CHOWN_RESTRICTED
+        8 => 1, // _PC_NO_TRUNC
+        9 => 0xff, // _PC_VDISABLE
+        12 => 64, // _PC_FILESIZEBITS
+        18 => param.MAXPATHLEN, // _PC_SYMLINK_MAX
+        59, 64 => 0, // _PC_ACL_EXTENDED, _PC_ACL_NFS4: none
+        60 => 0, // _PC_ACL_PATH_MAX
+        61, 62, 63 => 0, // _PC_CAP_PRESENT, _PC_INF_PRESENT, _PC_MAC_PRESENT
+        else => null,
+    };
+}
+
+fn pathconfOf(vp_opt: ?*vnode.Vnode, name: u64) u64 {
+    const vp: *vnode.Vnode = vp_opt orelse return sys.signed(-errno.ENOENT);
+    vfs_subr.vrele(vp);
+    const v: i64 = pathconfValue(name) orelse return sys.signed(-errno.EINVAL);
+    return @bitCast(v);
+}
+
+pub fn sysPathconf(args: [sys.MAXARGS]u64) u64 {
+    return pathconfOf(pathVnode(args[0], true), args[1]);
+}
+
+pub fn sysLpathconf(args: [sys.MAXARGS]u64) u64 {
+    return pathconfOf(pathVnode(args[0], false), args[1]);
+}
+
+pub fn sysFpathconf(args: [sys.MAXARGS]u64) u64 {
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(args[0])) orelse return sys.signed(-errno.EBADF);
+    _ = f;
+    const v: i64 = pathconfValue(args[1]) orelse return sys.signed(-errno.EINVAL);
+    return @bitCast(v);
+}
+
+// -- copy_file_range -------------------------------------------------------------
+
+/// copy_file_range(2): `copy_file_range(infd, inoffp, outfd, outoffp, len,
+/// flags)`, copying through a kernel buffer. With an offset pointer the
+/// descriptor's own offset is left alone and *offp advances instead.
+pub fn sysCopyFileRange(args: [sys.MAXARGS]u64) u64 {
+    if (args[5] != 0) return sys.signed(-errno.EINVAL);
+    const p = kern_proc.current;
+    const in: *file.File = kern_descrip.fdGetfile(p, @intCast(args[0])) orelse return sys.signed(-errno.EBADF);
+    const out: *file.File = kern_descrip.fdGetfile(p, @intCast(args[2])) orelse return sys.signed(-errno.EBADF);
+    if ((in.f_flag & file.FREAD) == 0 or (out.f_flag & file.FWRITE) == 0) return sys.signed(-errno.EBADF);
+    if (in.f_type != file.DTYPE_VNODE or out.f_type != file.DTYPE_VNODE) return sys.signed(-errno.EINVAL);
+
+    const in_off: ?*align(1) i64 = if (args[1] != 0) @ptrFromInt(args[1]) else null;
+    const out_off: ?*align(1) i64 = if (args[3] != 0) @ptrFromInt(args[3]) else null;
+    const saved_in: u64 = in.f_offset;
+    const saved_out: u64 = out.f_offset;
+    if (in_off) |o| in.f_offset = @intCast(o.*);
+    if (out_off) |o| out.f_offset = @intCast(o.*);
+
+    var buf: [4096]u8 = undefined;
+    var done: u64 = 0;
+    var err: isize = 0;
+    while (done < args[4]) {
+        const want: usize = @intCast(@min(args[4] - done, buf.len));
+        const n: isize = in.f_ops.read(in, buf[0..want]);
+        if (n <= 0) {
+            err = n;
+            break;
+        }
+        const w: isize = out.f_ops.write(out, buf[0..@intCast(n)]);
+        if (w < 0) {
+            err = w;
+            break;
+        }
+        done += @intCast(w);
+        if (w < n) break;
+    }
+
+    if (in_off) |o| {
+        o.* = @intCast(in.f_offset);
+        in.f_offset = saved_in;
+    }
+    if (out_off) |o| {
+        o.* = @intCast(out.f_offset);
+        out.f_offset = saved_out;
+    }
+    if (done == 0 and err < 0) return sys.signed(err);
+    return done;
 }

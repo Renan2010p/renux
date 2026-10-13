@@ -78,6 +78,9 @@ pub const VnodeOps: type = struct {
     /// Change the attributes set in `sa`; returns 0 or errno. Filesystems
     /// that cannot store attributes leave it null (EROFS/EOPNOTSUPP).
     setattr: ?*const fn (vp: *Vnode, sa: *const Setattr) i32 = null,
+    /// Move entry `fcnp` of directory `fdvp` to `tcnp` in `tdvp` (both on
+    /// this filesystem), replacing an existing target; returns 0 or errno.
+    rename: ?*const fn (fdvp: *Vnode, fcnp: *const namei.Componentname, tdvp: *Vnode, tcnp: *const namei.Componentname) i32 = null,
 };
 
 /// Attribute changes for VnodeOps.setattr (FreeBSD's VOP_SETATTR with a

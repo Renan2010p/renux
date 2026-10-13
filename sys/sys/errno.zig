@@ -34,6 +34,7 @@ pub const ENOTTY: i32 = 25;
 pub const ENOSPC: i32 = 28;
 pub const ESPIPE: i32 = 29;
 pub const EROFS: i32 = 30;
+pub const EPIPE: i32 = 32;
 pub const EMLINK: i32 = 31;
 pub const ENAMETOOLONG: i32 = 63;
 pub const ENOTEMPTY: i32 = 66;

@@ -24,7 +24,10 @@ DEST="${FREEBSD_DIR:-$HERE/freebsd}"
 TXZ="$DEST/base-$RELEASE.txz"
 ROOT="$DEST/root"
 
-if [ -f "$ROOT/.release" ] && [ "$(cat "$ROOT/.release")" = "$RELEASE" ]; then
+# Bump when the set of unpacked files changes, so an old tree is redone.
+LAYOUT=2
+
+if [ -f "$ROOT/.release" ] && [ "$(cat "$ROOT/.release")" = "$RELEASE.$LAYOUT" ]; then
     echo "get-freebsd: $RELEASE already unpacked in $ROOT"
     exit 0
 fi
@@ -52,7 +55,7 @@ tar -xJf "$TXZ" -C "$ROOT" \
     --exclude './usr/include' --exclude './usr/lib32' \
     --exclude './usr/share/doc' --exclude './usr/share/man' \
     --exclude './usr/share/examples' --exclude './usr/share/i18n' \
-    --exclude './usr/share/locale' --exclude './rescue' \
+    --exclude './rescue' \
     --exclude './boot' 2>/dev/null || true
-echo "$RELEASE" > "$ROOT/.release"
+echo "$RELEASE.$LAYOUT" > "$ROOT/.release"
 echo "get-freebsd: $RELEASE ready in $ROOT"

@@ -150,14 +150,18 @@ pub const Stat: type = extern struct {
     atim: Timespec,
     mtim: Timespec,
     ctim: Timespec,
+    birthtim: Timespec,
     size: i64,
     blocks: i64,
     blksize: i32,
     flags: u32,
-    gen: u32,
-    lspare: u32,
-    birthtim: Timespec,
+    gen: u64,
+    spare: [10]u64,
 };
+
+comptime {
+    if (@sizeOf(Stat) != 224) @compileError("struct stat must be 224 bytes (FreeBSD/amd64)");
+}
 
 /// Issue a system call with up to six arguments.
 pub fn syscall(number: u64, args: [6]u64) u64 {

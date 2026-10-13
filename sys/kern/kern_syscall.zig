@@ -12,6 +12,7 @@ const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const prf: type = @import("subr_prf.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const subr_syscall: type = @import("subr_syscall.zig");
 
 /// A call with no handler (FreeBSD's nosys). Under bootverbose it is logged
 /// as FreeBSD's kern.lognosys does, which lists exactly what a FreeBSD
@@ -49,14 +50,41 @@ fn traced() bool {
 /// register. Unimplemented calls return ENOSYS (like FreeBSD's nosys), so a
 /// program built for FreeBSD can tell "not supported" from a real error.
 pub fn syscall(number: u64, args: [sys.MAXARGS]u64) u64 {
+    // Copy a traced call's pathname first: execve(2) replaces the address
+    // space it lives in.
+    const tracing: bool = traced();
+    var pbuf: [128]u8 = undefined;
+    var plen: usize = 0;
+    var has_path: bool = false;
+    if (tracing) {
+        if (pathArg(number)) |i| {
+            if (subr_syscall.userStr(args[i])) |path| {
+                plen = @min(path.len, pbuf.len);
+                @memcpy(pbuf[0..plen], path[0..plen]);
+                has_path = true;
+            }
+        }
+    }
     const r: u64 = dispatch(number, args);
-    if (traced()) {
+    if (tracing) {
         const p = kern_proc.current;
-        prf.printf("%s[%d]: sys %u(%x, %x, %x, %x) = %d\n", .{
+        prf.printf("%s[%d]: sys %u(%x, %x, %x, %x) = %d", .{
             p.name[0..p.name_len], p.pid, number, args[0], args[1], args[2], args[3], @as(i64, @bitCast(r)),
         });
+        // Show the pathname of calls that take one.
+        if (has_path) prf.printf(" \"%s\"", .{pbuf[0..plen]});
+        prf.print("\n");
     }
     return r;
+}
+
+/// Which argument of system call `number` is a pathname, for tracing.
+fn pathArg(number: u64) ?usize {
+    return switch (number) {
+        5, 10, 12, 15, 16, 33, 34, 58, 59, 128, 136, 137 => 0, // open .. rmdir
+        490, 491, 496, 499, 500, 503, 552 => 1, // the *at calls
+        else => null,
+    };
 }
 
 fn dispatch(number: u64, args: [sys.MAXARGS]u64) u64 {

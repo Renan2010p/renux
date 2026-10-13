@@ -9,6 +9,7 @@
 // most one vnode, created lazily and cached on the node.
 
 const tmpfs: type = @import("tmpfs.zig");
+const kern_time: type = @import("../../kern/kern_time.zig");
 const tmpfs_subr: type = @import("tmpfs_subr.zig");
 const vnode: type = @import("../../sys/vnode.zig");
 const mount: type = @import("../../sys/mount.zig");
@@ -30,6 +31,7 @@ const tmpfs_vnodeops: vnode.VnodeOps = .{
     .truncate = tmpfsTruncate,
     .getattr = tmpfsGetattr,
     .setattr = tmpfsSetattr,
+    .rename = tmpfsRename,
     .readdir = tmpfsReaddir,
     .inactive = tmpfsInactive,
 };
@@ -149,6 +151,56 @@ fn tmpfsRemove(dvp: *vnode.Vnode, cnp: *const namei.Componentname) i32 {
     return 0;
 }
 
+/// Move an entry, as FreeBSD's tmpfs_rename(): the target name, if it
+/// exists, is replaced (a directory only by a directory, and only if empty);
+/// a directory may not move into its own subtree.
+fn tmpfsRename(fdvp: *vnode.Vnode, fcnp: *const namei.Componentname, tdvp: *vnode.Vnode, tcnp: *const namei.Componentname) i32 {
+    const fdir: *tmpfs.Node = nodeOf(fdvp);
+    const tdir: *tmpfs.Node = nodeOf(tdvp);
+    if (fdir.type != .vdir or tdir.type != .vdir) return errno.ENOTDIR;
+
+    const fde: *tmpfs.Dirent = tmpfs_subr.dirLookup(fdir, fcnp) orelse return errno.ENOENT;
+    const node: *tmpfs.Node = fde.node;
+
+    // A directory cannot become its own descendant.
+    if (node.type == .vdir) {
+        var up: ?*tmpfs.Node = tdir;
+        while (up) |d| {
+            if (d == node) return errno.EINVAL;
+            if (d.parent == d) break;
+            up = d.parent;
+        }
+    }
+
+    if (tmpfs_subr.dirLookup(tdir, tcnp)) |tde| {
+        const target: *tmpfs.Node = tde.node;
+        if (target == node) return 0; // same file: nothing to do
+        if (target.type == .vdir) {
+            if (node.type != .vdir) return errno.EISDIR;
+            if (target.entries != null) return errno.ENOTEMPTY;
+            tdir.nlink -= 1;
+        } else if (node.type == .vdir) {
+            return errno.ENOTDIR;
+        }
+        _ = tmpfs_subr.dirDetach(tdir, tde);
+        tmpfs_subr.freeDirent(tde);
+        target.nlink = 0;
+    }
+
+    const nde: *tmpfs.Dirent = tmpfs_subr.allocDirent(tcnp.nameptr[0..tcnp.namelen]) orelse return errno.ENOSPC;
+    nde.node = node;
+    tmpfs_subr.dirAttach(tdir, nde);
+    _ = tmpfs_subr.dirDetach(fdir, fde);
+    tmpfs_subr.freeDirent(fde);
+
+    if (node.type == .vdir and fdir != tdir) {
+        node.parent = tdir;
+        fdir.nlink -= 1;
+        tdir.nlink += 1;
+    }
+    return 0;
+}
+
 fn tmpfsOpen(vp: *vnode.Vnode, mode: i32) i32 {
     const node: *tmpfs.Node = nodeOf(vp);
     if (node.type == .vdir and (mode & file.FWRITE) != 0) {
@@ -178,7 +230,12 @@ fn tmpfsWrite(vp: *vnode.Vnode, offset: u64, buf: []const u8) isize {
     if (node.type != .vreg and node.type != .vlnk) {
         return -errno.EISDIR;
     }
-    return @intCast(tmpfs_subr.regWrite(node, offset, buf));
+    const n: usize = tmpfs_subr.regWrite(node, offset, buf);
+    if (n > 0) {
+        node.mtime = @intCast(kern_time.now());
+        node.ctime = node.mtime;
+    }
+    return @intCast(n);
 }
 
 fn tmpfsTruncate(vp: *vnode.Vnode, length: u64) i32 {

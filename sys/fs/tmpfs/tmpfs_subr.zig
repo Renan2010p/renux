@@ -10,6 +10,7 @@
 const tmpfs: type = @import("tmpfs.zig");
 const vnode: type = @import("../../sys/vnode.zig");
 const namei: type = @import("../../sys/namei.zig");
+const kern_time: type = @import("../../kern/kern_time.zig");
 const kmem: type = @import("../../kern/subr_kmem.zig");
 
 /// Allocate a node of `v_type`, with a fresh inode number.
@@ -28,6 +29,12 @@ pub fn allocNode(mnt: *tmpfs.TmpfsMount, v_type: vnode.Vtype) ?*tmpfs.Node {
     node.data_head = null;
     node.data_tail = null;
     node.nchunks = 0;
+    // A new file is born now (the files unpacked from the root image too:
+    // they come into existence at boot).
+    const now: i64 = @intCast(kern_time.now());
+    node.atime = now;
+    node.mtime = now;
+    node.ctime = now;
     return node;
 }
 

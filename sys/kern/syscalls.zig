@@ -33,6 +33,7 @@ const vm_mmap: type = @import("../vm/vm_mmap.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 const kern_cpuset: type = @import("kern_cpuset.zig");
 const kern_thr: type = @import("kern_thr.zig");
+const sys_pipe: type = @import("sys_pipe.zig");
 const random: type = @import("../dev/random/random.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
@@ -253,6 +254,15 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_mkdirat, .handler = vfs_syscalls.sysMkdirat },
     .{ .num = sys.SYS_unlinkat, .handler = vfs_syscalls.sysUnlinkat },
     .{ .num = sys.SYS_fchdir, .handler = vfs_syscalls.sysFchdir },
+    .{ .num = sys.SYS_pipe2, .handler = sys_pipe.sysPipe2 },
+    .{ .num = sys.SYS_rename, .handler = vfs_syscalls.sysRename },
+    .{ .num = sys.SYS_renameat, .handler = vfs_syscalls.sysRenameat },
+    .{ .num = sys.SYS_getdirentries, .handler = vfs_syscalls.sysGetdirentries },
+    .{ .num = sys.SYS_pathconf, .handler = vfs_syscalls.sysPathconf },
+    .{ .num = sys.SYS_fpathconf, .handler = vfs_syscalls.sysFpathconf },
+    .{ .num = sys.SYS_lpathconf, .handler = vfs_syscalls.sysLpathconf },
+    .{ .num = sys.SYS_clock_getres, .handler = kern_time.sysClockGetres },
+    .{ .num = sys.SYS_copy_file_range, .handler = vfs_syscalls.sysCopyFileRange },
     .{ .num = sys.SYS_umask, .handler = kern_resource.sysUmask },
     .{ .num = sys.SYS_getloginclass, .handler = kern_resource.sysGetloginclass },
     .{ .num = sys.SYS_setloginclass, .handler = kern_resource.sysSetloginclass },

@@ -39,10 +39,11 @@ pub const Stat: type = extern struct {
     padding1: i32,
     /// Device number, for special files.
     rdev: u64,
-    /// Access, modification and status-change times.
+    /// Access, modification, status-change and creation times.
     atim: Timespec,
     mtim: Timespec,
     ctim: Timespec,
+    birthtim: Timespec,
     /// Total size in bytes.
     size: i64,
     /// Number of 512-byte blocks allocated.
@@ -52,8 +53,15 @@ pub const Stat: type = extern struct {
     /// User-defined flags (unused).
     flags: u32,
     /// File generation number (unused).
-    gen: u32,
-    lspare: u32,
-    /// Creation time.
-    birthtim: Timespec,
+    gen: u64,
+    spare: [10]u64,
 };
+
+// FreeBSD/amd64's struct stat (sys/sys/stat.h since FreeBSD 12): FreeBSD
+// programs read these offsets, so check them at compile time.
+comptime {
+    if (@sizeOf(Stat) != 224) @compileError("struct stat must be 224 bytes");
+    if (@offsetOf(Stat, "birthtim") != 96) @compileError("st_birthtim offset");
+    if (@offsetOf(Stat, "size") != 112) @compileError("st_size offset");
+    if (@offsetOf(Stat, "blksize") != 128) @compileError("st_blksize offset");
+}

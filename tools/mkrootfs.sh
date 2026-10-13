@@ -116,7 +116,7 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         usr/bin/false usr/bin/yes usr/bin/printf usr/bin/which
         usr/bin/stat usr/bin/du usr/bin/tee usr/bin/xargs usr/bin/logname
         usr/bin/tty usr/bin/uptime usr/bin/w usr/bin/who usr/bin/hexdump
-        usr/bin/fortune
+        usr/bin/fortune usr/bin/resizewin
     "
     # PAM modules the login service stack loads (etc/pam.d/login, system).
     FBSD_PAM="pam_self pam_unix pam_securetty pam_nologin pam_login_access
@@ -162,10 +162,22 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         fbsd_install "usr/lib/$mod.so.6"
         ln -sf "$mod.so.6" "$WORK/usr/lib/$mod.so"
     done
-    rm -f "$WORK/.fbsd-$$"
+    mv "$WORK/.fbsd-$$" "$WORK/.fbsd-list"
 
     # The native shell stays as /bin/renux-sh; /bin/test also answers to [.
     ln -sf test "$WORK/bin/["
+
+    # A native Renux tool in /bin would shadow FreeBSD's copy of the same
+    # command in /usr/bin (PATH searches /bin first): let FreeBSD's win.
+    for prog in $FBSD_PROGS; do
+        case "$prog" in
+        usr/bin/*)
+            name="${prog#usr/bin/}"
+            [ -e "$WORK/bin/$name" ] && ! grep -qx "bin/$name" "$WORK/.fbsd-list" && rm -f "$WORK/bin/$name"
+            ;;
+        esac
+    done
+    rm -f "$WORK/.fbsd-list"
 
     # Configuration the login path reads: accounts (passwd and its databases),
     # login classes, PAM, the getty table, name service switch, shells and
@@ -173,7 +185,7 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     # password, as on a fresh FreeBSD install.
     mkdir -p "$WORK/etc/pam.d" "$WORK/root" "$WORK/usr/share/misc" "$WORK/var/run" "$WORK/var/log"
     for f in gettytab passwd master.passwd pwd.db spwd.db group login.conf \
-        login.conf.db login.access nsswitch.conf shells profile ttys termcap; do
+        login.conf.db login.access nsswitch.conf shells profile ttys; do
         [ -e "$FBSDLIB/etc/$f" ] && cp -L "$FBSDLIB/etc/$f" "$WORK/etc/$f"
     done
     for f in login system other passwd su; do
@@ -184,7 +196,16 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     done
     chmod 700 "$WORK/root"
     chmod 600 "$WORK/etc/master.passwd" "$WORK/etc/spwd.db"
-    cp "$FBSDLIB/usr/share/misc/termcap.db" "$WORK/usr/share/misc/termcap.db"
+    # The terminal database (ncurses reads termcap on FreeBSD); /etc/termcap
+    # is a link to it, as on FreeBSD.
+    cp "$FBSDLIB/usr/share/misc/termcap" "$FBSDLIB/usr/share/misc/termcap.db" "$WORK/usr/share/misc/"
+    ln -sf /usr/share/misc/termcap "$WORK/etc/termcap"
+    # The C.UTF-8 locale, FreeBSD's default (login.conf's lang=C.UTF-8), so
+    # the shell and the utilities handle UTF-8 text.
+    if [ -d "$FBSDLIB/usr/share/locale/C.UTF-8" ]; then
+        mkdir -p "$WORK/usr/share/locale"
+        cp -R "$FBSDLIB/usr/share/locale/C.UTF-8" "$WORK/usr/share/locale/"
+    fi
     [ -e "$FBSDLIB/usr/share/games/fortune/freebsd-tips.dat" ] && {
         mkdir -p "$WORK/usr/share/games/fortune"
         cp "$FBSDLIB"/usr/share/games/fortune/freebsd-tips* "$WORK/usr/share/games/fortune/"

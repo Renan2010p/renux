@@ -18,6 +18,14 @@ pub const FWRITE: i32 = 0x0002;
 /// File types (the f_type field), matching NetBSD's DTYPE_*.
 pub const DTYPE_VNODE: u8 = 1;
 pub const DTYPE_SOCKET: u8 = 2;
+pub const DTYPE_PIPE: u8 = 3;
+
+/// poll(2) event bits (FreeBSD's sys/poll.h), as FileOps.poll reports them.
+pub const POLLIN: u16 = 0x0001;
+pub const POLLOUT: u16 = 0x0004;
+pub const POLLERR: u16 = 0x0008;
+pub const POLLHUP: u16 = 0x0010;
+pub const POLLNVAL: u16 = 0x0020;
 
 /// Operations on an open file (NetBSD's struct fileops).
 pub const FileOps: type = struct {
@@ -33,6 +41,10 @@ pub const FileOps: type = struct {
     stat: *const fn (f: *File, st: *stat.Stat) i32,
     /// Drop the descriptor's reference to the file.
     close: *const fn (f: *File) i32,
+    /// Readiness for poll(2): the POLL* bits that hold now. Files without it
+    /// are treated as the console (input when the console has some) for
+    /// devices, and always ready otherwise.
+    poll: ?*const fn (f: *File) u16 = null,
 };
 
 /// An open file (NetBSD's struct file).

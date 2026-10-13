@@ -77,7 +77,7 @@ fn devStat(f: *file.File, st: *stat.Stat) i32 {
     st.blksize = 4096;
     st.flags = 0;
     st.gen = 0;
-    st.lspare = 0;
+    st.spare = @splat(0);
     st.birthtim = .{ .sec = 0, .nsec = 0 };
     return 0;
 }
