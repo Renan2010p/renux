@@ -48,6 +48,7 @@ comptime {
     _ = @import("../../x86/include/intrdefs.zig");
     _ = @import("../../x86/x86/intr.zig");
     _ = @import("../../x86/isa/clock.zig");
+    _ = @import("../../x86/isa/atrtc.zig");
     _ = @import("../amd64/locore.zig");
     _ = @import("../amd64/gdt.zig");
     _ = @import("../amd64/vector.zig");

@@ -12,6 +12,7 @@
 
 const termios: type = @import("../sys/termios.zig");
 const ttycom: type = @import("../sys/ttycom.zig");
+const consio: type = @import("../sys/consio.zig");
 const signal: type = @import("../sys/signal.zig");
 const errno: type = @import("../sys/errno.zig");
 const cons: type = @import("../dev/cons.zig");
@@ -207,6 +208,21 @@ pub fn ioctl(t: *Tty, cmd: u64, arg: u64) i32 {
         ttycom.TIOCSPGRP => {
             const src: *align(1) const i32 = @ptrFromInt(arg);
             t.fg_pid = src.*;
+            return 0;
+        },
+        consio.KDGETMODE => {
+            const dst: *align(1) i32 = @ptrFromInt(arg);
+            dst.* = if (cons.cnGraphics()) consio.KD_GRAPHICS else consio.KD_TEXT;
+            return 0;
+        },
+        consio.KDSETMODE => {
+            // _IOWINT: the mode is the argument itself, not a pointer.
+            const mode: i64 = @bitCast(arg);
+            switch (mode) {
+                consio.KD_TEXT => cons.cnSetGraphics(false, 0),
+                consio.KD_GRAPHICS => cons.cnSetGraphics(true, kern_proc.current.pid),
+                else => return -@as(i32, errno.EINVAL),
+            }
             return 0;
         },
         ttycom.FIONREAD => {

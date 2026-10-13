@@ -12,6 +12,7 @@ const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const prf: type = @import("subr_prf.zig");
+const cons: type = @import("../dev/cons.zig");
 
 /// Terminate the current process with `status`. Never returns.
 pub fn exit(status: i32) noreturn {
@@ -19,6 +20,9 @@ pub fn exit(status: i32) noreturn {
     p.exit_status = status;
     p.state = .zombie;
     prf.log(prf.LOG_DEBUG, "exit: pid %d status %d", .{ p.pid, status });
+
+    // A graphical program that dies in KD_GRAPHICS gives the screen back.
+    cons.cnProcExit(p.pid);
 
     // Wake a parent blocked in wait().
     if (p.parent) |parent| {

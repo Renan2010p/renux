@@ -53,14 +53,15 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
     prf.log(prf.LOG_DEBUG, "vm: %u free pages", .{vm_page.freeCount()});
 }
 
-/// Total usable physical memory reported by the boot protocol.
+/// Physical RAM reported by the boot protocol: free memory plus what the
+/// loader and the kernel occupy (FreeBSD's "real memory").
 fn totalMemory() u64 {
     var total: u64 = 0;
     const entries: usize = arch.boot.memmapEntryCount() orelse 0;
     var i: usize = 0;
     while (i < entries) : (i += 1) {
         const entry: *arch.boot.MemmapEntry = arch.boot.memmapEntry(i) orelse continue;
-        if (entry.type == arch.boot.MemmapEntry.USABLE) {
+        if (arch.boot.memmapIsRam(entry)) {
             total += entry.length;
         }
     }

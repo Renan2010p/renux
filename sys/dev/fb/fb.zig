@@ -11,43 +11,20 @@
 
 const conf: type = @import("../../sys/conf.zig");
 const errno: type = @import("../../sys/errno.zig");
+const fbio: type = @import("../../sys/fbio.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
 const prf: type = @import("../../kern/subr_prf.zig");
+const subr_bus: type = @import("../../kern/subr_bus.zig");
 const rasops: type = @import("../rasops/rasops.zig");
+const param: type = @import("../../sys/param.zig");
 
 /// Major number of /dev/fb0.
 pub const FB_MAJOR: usize = 4;
 
-/// FreeBSD's FBTYPE_EFIFB (sys/sys/fbio.h): the framebuffer came from the
-/// firmware's graphical output protocol (Limine hands us one the same way).
-const FBTYPE_EFIFB: i32 = 31;
-
-// ioctl numbers, encoded as the BSD _IOR/_IOW macros do (direction in the top
-// two bits, size in bits 16..29, 'F' in bits 8..15, number in bits 0..7).
-const FBIOGTYPE: u64 = 0x80184600; // _IOR('F', 0, struct fbtype)
-const FBIOPUTCMAP: u64 = 0x40204603; // _IOW('F', 3, struct fbcmap)
-const FBIOGETCMAP: u64 = 0x40204604; // _IOW('F', 4, struct fbcmap)
-const FBIO_GETWINORG: u64 = 0x80046b00; // _IOR('F', 107, u_int)
-const FBIO_SETWINORG: u64 = 0x40046c00; // _IOW('F', 108, u_int)
-const FBIO_GETLINEWIDTH: u64 = 0x80046f00; // _IOR('F', 111, u_int)
-const FBIO_BLANK: u64 = 0x40047300; // _IOW('F', 115, int)
-const FBIO_GETRGBOFFS: u64 = 0x800c7400; // _IOR('F', 116, struct fb_rgboffs)
-
-/// struct fbtype (sys/sys/fbio.h).
-const FbType: type = extern struct {
-    fb_type: i32,
-    fb_height: i32,
-    fb_width: i32,
-    fb_depth: i32,
-    fb_cmsize: i32,
-    fb_size: i32,
-};
-
-/// struct fb_rgboffs (sys/sys/fbio.h).
-const FbRgbOffs: type = extern struct {
-    red: i32,
-    green: i32,
-    blue: i32,
+const fb_dev: subr_bus.Device = .{
+    .name = "fb",
+    .desc = "boot framebuffer",
+    .parent = "nexus0",
 };
 
 /// The framebuffer, captured at console attach time. `attach` runs before the
@@ -110,36 +87,54 @@ fn fbIoctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
         return -errno.ENXIO;
     }
     switch (cmd) {
-        FBIOGTYPE => {
-            const t: FbType = .{
-                .fb_type = FBTYPE_EFIFB,
+        fbio.FBIOGTYPE => {
+            const t: fbio.FbType = .{
+                .fb_type = fbio.FBTYPE_EFIFB,
                 .fb_height = @intCast(raster.height),
                 .fb_width = @intCast(raster.width),
                 .fb_depth = @intCast(raster.depth),
                 .fb_cmsize = 0,
                 .fb_size = @intCast(size_bytes),
             };
-            copyOut(arg, @as([*]const u8, @ptrCast(&t))[0..@sizeOf(FbType)]);
+            copyOut(arg, @as([*]const u8, @ptrCast(&t))[0..@sizeOf(fbio.FbType)]);
             return 0;
         },
-        FBIO_GETLINEWIDTH => {
+        fbio.FBIO_GETLINEWIDTH => {
             putU32(arg, raster.stride);
             return 0;
         },
-        FBIO_GETRGBOFFS => {
-            const o: FbRgbOffs = .{
+        fbio.FBIO_GETRGBOFFS => {
+            const o: fbio.FbRgbOffs = .{
                 .red = @intCast(raster.red_mask_shift),
                 .green = @intCast(raster.green_mask_shift),
                 .blue = @intCast(raster.blue_mask_shift),
             };
-            copyOut(arg, @as([*]const u8, @ptrCast(&o))[0..@sizeOf(FbRgbOffs)]);
+            copyOut(arg, @as([*]const u8, @ptrCast(&o))[0..@sizeOf(fbio.FbRgbOffs)]);
             return 0;
         },
-        FBIO_GETWINORG => {
+        fbio.FBIO_GETWINORG => {
+            // A linear framebuffer is one window at offset 0.
             putU32(arg, 0);
             return 0;
         },
-        FBIO_SETWINORG, FBIO_BLANK, FBIOPUTCMAP, FBIOGETCMAP => return 0,
+        fbio.FBIO_GETDISPSTART => {
+            const d: fbio.DisplayStart = .{ .x = 0, .y = 0 };
+            copyOut(arg, @as([*]const u8, @ptrCast(&d))[0..@sizeOf(fbio.DisplayStart)]);
+            return 0;
+        },
+        fbio.FBIO_SETWINORG, fbio.FBIO_SETDISPSTART => {
+            // Only the origin the hardware already uses is accepted.
+            const v: *align(1) const u32 = @ptrFromInt(arg);
+            return if (v.* == 0) 0 else -errno.EINVAL;
+        },
+        fbio.FBIO_BLANK => {
+            // There is no display power management; accept "on" and refuse
+            // the blanking levels honestly.
+            const v: *align(1) const i32 = @ptrFromInt(arg);
+            return if (v.* == fbio.V_DISPLAY_ON) 0 else -errno.ENODEV;
+        },
+        // A direct-colour framebuffer has no colour map.
+        fbio.FBIOGETCMAP, fbio.FBIOPUTCMAP => return -errno.ENODEV,
         else => return -errno.ENOTTY,
     }
 }
@@ -149,10 +144,13 @@ fn fbIoctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
 fn fbMmap(ctx: ?*anyopaque, offset: u64, prot: u32) ?u64 {
     _ = ctx;
     _ = prot;
-    if (!have_raster or offset >= size_bytes) {
+    // Whole pages only: the last page may extend past the visible buffer but
+    // never past the page that holds its last byte.
+    const span: u64 = param.alignUp(size_bytes + (phys_base % param.PAGE_SIZE), param.PAGE_SIZE);
+    if (!have_raster or offset >= span) {
         return null;
     }
-    return phys_base + offset;
+    return (phys_base & ~@as(u64, param.PAGE_SIZE - 1)) + offset;
 }
 
 const fb_cdevsw: conf.Cdevsw = .{
@@ -167,9 +165,16 @@ const fb_cdevsw: conf.Cdevsw = .{
 
 fn fbInit(_: ?*const anyopaque) callconv(.c) void {
     conf.registerCdev(FB_MAJOR, &fb_cdevsw);
-    prf.log(prf.LOG_INFO, "fb: framebuffer device registered", .{});
+    if (have_raster and prf.bootverbose) {
+        subr_bus.announce(&fb_dev, " %ux%u %u bpp, %u bytes at %x", .{
+            raster.width, raster.height, raster.depth, size_bytes, phys_base,
+        });
+        if (!rasops.supported(&raster)) {
+            subr_bus.device_printf(&fb_dev, "pixel format not supported by the text console\n", .{});
+        }
+    }
 }
 
 comptime {
-    sysinit.SYSINIT("sysinit_fb", sysinit.SI_SUB_DRIVERS, sysinit.SI_ORDER_SECOND, fbInit, null);
+    sysinit.SYSINIT("sysinit_fb", sysinit.SI_SUB_CONFIGURE, sysinit.SI_ORDER_FIFTH, fbInit, null);
 }

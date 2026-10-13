@@ -19,6 +19,14 @@ const cons: type = @import("../../../dev/cons.zig");
 const rasops: type = @import("../../../dev/rasops/rasops.zig");
 const rcons: type = @import("../../../dev/wscons/wscons_raster.zig");
 const wsemul: type = @import("../../../dev/wscons/wsemul_vt100.zig");
+const subr_bus: type = @import("../../../kern/subr_bus.zig");
+const sysinit: type = @import("../../../sys/sysinit.zig");
+
+const uart_dev: subr_bus.Device = .{
+    .name = "uart",
+    .desc = "16550 or compatible",
+    .parent = "isa0",
+};
 
 /// The conventional first serial port, COM1.
 const com1: com.Port = .{
@@ -26,15 +34,44 @@ const com1: com.Port = .{
     .iobase = 0x3f8,
 };
 
-/// Bring up the early consoles: COM1 always, plus a raster console when the
-/// bootloader provided a framebuffer. Both receive kernel output.
-pub fn consinit(framebuffer: ?rasops.Raster) void {
-    com.init(com1);
-    cons.cn_attach(com.console());
+/// Whether COM1 was attached as a console, for the uart0 announcement.
+var serial_console: bool = false;
 
-    if (framebuffer) |raster| {
-        rcons.attach(raster);
-        wsemul.init();
-        cons.cn_attach(wsemul.console());
+/// Bring up the early consoles: COM1 when `serial` is set, and a raster
+/// console on `framebuffer` when there is one. Both receive kernel output.
+/// The UART is always initialised, so it can be attached later.
+pub fn consinit(framebuffer: ?rasops.Raster, serial: bool) void {
+    com.init(com1);
+    if (serial) {
+        cons.cn_attach(com.console());
+        serial_console = true;
     }
+
+    // A framebuffer in a pixel format rasops cannot draw (8-bit palette
+    // modes) is left alone; the serial console still works.
+    if (framebuffer) |raster| {
+        if (rcons.attach(raster)) {
+            wsemul.init();
+            cons.cn_attach(wsemul.console());
+        }
+    }
+    // Never boot without a console: fall back to the serial port.
+    if (!cons.cn_attached()) {
+        cons.cn_attach(com.console());
+        serial_console = true;
+    }
+}
+
+/// Announce the UART with the ISA devices. "flags 0x10" marks the console,
+/// as in FreeBSD's uart(4).
+fn uartAttach(_: ?*const anyopaque) callconv(.c) void {
+    if (serial_console) {
+        subr_bus.announce(&uart_dev, " port 0x3f8-0x3ff irq 4 flags 0x10", .{});
+    } else {
+        subr_bus.announce(&uart_dev, " port 0x3f8-0x3ff irq 4", .{});
+    }
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_uart", sysinit.SI_SUB_CONFIGURE, sysinit.SI_ORDER_FOURTH, uartAttach, null);
 }

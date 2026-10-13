@@ -41,6 +41,9 @@ pub const Console: type = struct {
     appCursor: ?*const fn () bool = null,
     /// Report whether a character is ready to read, without consuming it.
     inputReady: ?*const fn () bool = null,
+    /// Stop drawing text so a program can own the display (true), or take the
+    /// display back and repaint (false). Only screen consoles have it.
+    setGraphics: ?*const fn (graphics: bool) void = null,
 };
 
 var consoles: [MAX_CONSOLES]Console = undefined;
@@ -130,6 +133,35 @@ pub fn cnSetColor(r: u8, g: u8, b: u8) void {
         if (consoles[i].setfg) |setfg| {
             setfg(r, g, b);
         }
+    }
+}
+
+/// Process that put the console in graphics mode, or 0 in text mode.
+var graphics_owner: i32 = 0;
+
+/// Switch the screen consoles between text and graphics mode (KDSETMODE).
+/// `pid` is the requesting process: if it exits without switching back, the
+/// console returns to text mode by itself (see cnProcExit).
+pub fn cnSetGraphics(graphics: bool, pid: i32) void {
+    graphics_owner = if (graphics) pid else 0;
+    var i: usize = 0;
+    while (i < nconsoles) : (i += 1) {
+        if (consoles[i].setGraphics) |f| {
+            f(graphics);
+        }
+    }
+}
+
+/// True while a program owns the display (KDGETMODE).
+pub fn cnGraphics() bool {
+    return graphics_owner != 0;
+}
+
+/// A process exited: give the display back to the console if it owned it, so
+/// a crashed graphical program does not leave the screen dead.
+pub fn cnProcExit(pid: i32) void {
+    if (graphics_owner != 0 and graphics_owner == pid) {
+        cnSetGraphics(false, 0);
     }
 }
 

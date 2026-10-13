@@ -28,14 +28,15 @@ pub const Sysinit: type = extern struct {
     udata: ?*const anyopaque,
 };
 
-// Subsystem identifiers, as FreeBSD's sys/sys/kernel.h defines them.
+// Subsystem identifiers, as FreeBSD's sys/sys/kernel.h defines them (in run
+// order).
 pub const SI_SUB_COPYRIGHT: u32 = 0x0800001; // first use of console
 pub const SI_SUB_CPU: u32 = 0x0900000; // CPU identification
 pub const SI_SUB_VM: u32 = 0x1000000; // virtual memory system init
 pub const SI_SUB_INTR: u32 = 0x2800000; // interrupt threads
-pub const SI_SUB_CONFIGURE: u32 = 0x3800000; // configure devices
-pub const SI_SUB_VFS: u32 = 0x2000000; // filesystems
 pub const SI_SUB_DRIVERS: u32 = 0x3100000; // device drivers
+pub const SI_SUB_CONFIGURE: u32 = 0x3800000; // configure devices
+pub const SI_SUB_VFS: u32 = 0x4000000; // filesystems
 pub const SI_SUB_CLOCKS: u32 = 0x4800000; // real time and stat clocks
 pub const SI_SUB_LAST: u32 = 0xfffffff; // final initialization
 
@@ -46,6 +47,7 @@ pub const SI_ORDER_THIRD: u32 = 0x0000002;
 pub const SI_ORDER_FOURTH: u32 = 0x0000003;
 pub const SI_ORDER_FIFTH: u32 = 0x0000004;
 pub const SI_ORDER_MIDDLE: u32 = 0x1000000;
+pub const SI_ORDER_ANY: u32 = 0xfffffff; // last
 
 /// Name of the section that holds the linker set.
 const section: []const u8 = "set_sysinit_set";

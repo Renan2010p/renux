@@ -3,10 +3,9 @@
 //
 // /sbin/init: the first user process.
 //
-// Following the BSD startup sequence, init runs the system startup script
-// /etc/rc and then brings up a login shell. A real init would also start the
-// system daemons from /etc/rc.d and spawn getty/login on each terminal; only
-// the single-user path exists so far.
+// Following the BSD startup sequence: in a single-user boot (the kernel passes
+// -s) init first offers a shell on the console; then it runs the system
+// startup script /etc/rc and keeps a getty running on the console.
 
 const libc: type = @import("libc");
 
@@ -15,9 +14,44 @@ comptime {
     _ = @import("csu").crt0;
 }
 
+/// Run `path` (a shell) in a child and wait for it.
+fn runShell(path: [*:0]const u8, envp: [*]?[*:0]const u8) void {
+    const pid: i32 = libc.syscall.fork();
+    if (pid == 0) {
+        var av: [2]?[*:0]const u8 = .{ path, null };
+        _ = libc.syscall.execve(path, @ptrCast(&av), envp);
+        libc.stdio.puts("init: cannot exec the shell");
+        libc.syscall.exit(1);
+    }
+    _ = libc.syscall.wait(null);
+}
+
+/// Single-user mode, as FreeBSD's init does it: offer a shell on the console
+/// and, when it exits, continue to multi-user operation.
+fn singleUser(envp: [*]?[*:0]const u8) void {
+    libc.syslog.msg("init", "single user mode");
+    libc.stdio.printf("Enter full pathname of shell or RETURN for /bin/sh: ", .{});
+    var buf: [128:0]u8 = undefined;
+    var n: usize = 0;
+    while (n < buf.len) {
+        var c: [1]u8 = undefined;
+        if (libc.syscall.read(0, &c) != 1 or c[0] == '\n' or c[0] == '\r') break;
+        buf[n] = c[0];
+        n += 1;
+    }
+    buf[n] = 0;
+    const shell: [*:0]const u8 = if (n == 0) "/bin/sh" else &buf;
+    runShell(shell, envp);
+}
+
 export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) callconv(.c) i32 {
-    _ = argc;
-    _ = argv;
+    // The kernel passes -s for a single-user boot.
+    var single: bool = false;
+    var a: usize = 1;
+    while (a < @as(usize, @intCast(argc))) : (a += 1) {
+        const arg = argv[a] orelse continue;
+        if (arg[0] == '-' and arg[1] == 's') single = true;
+    }
 
     // Attach the console as stdin, stdout and stderr: like the BSD init, open
     // /dev/console and dup2() it onto 0, 1 and 2.
@@ -31,8 +65,11 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         }
     }
 
+    if (single) {
+        singleUser(envp);
+    }
+
     // Run /etc/rc in a child so init survives it, then wait for it to finish.
-    libc.stdio.puts("init: running /etc/rc");
     libc.syslog.msg("init", "startup: running /etc/rc");
     const pid: i32 = libc.syscall.fork();
     if (pid == 0) {

@@ -12,6 +12,19 @@ const keymap: type = @import("wskbdmap_mfii.zig");
 const cons: type = @import("../cons.zig");
 const arch: type = @import("../../arch/arch.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
+const subr_bus: type = @import("../../kern/subr_bus.zig");
+
+const kbdc_dev: subr_bus.Device = .{
+    .name = "atkbdc",
+    .desc = "Keyboard controller (i8042)",
+    .parent = "isa0",
+};
+
+const kbd_dev: subr_bus.Device = .{
+    .name = "atkbd",
+    .desc = "AT Keyboard",
+    .parent = "atkbdc0",
+};
 
 // Scan codes for the modifier keys (set 1).
 const SC_LSHIFT: u8 = 0x2a;
@@ -135,8 +148,10 @@ pub fn init() void {
 
 fn pckbdInit(_: ?*const anyopaque) callconv(.c) void {
     init();
+    subr_bus.announce(&kbdc_dev, " port 0x60,0x64", .{});
+    subr_bus.announce(&kbd_dev, " irq 1", .{});
 }
 
 comptime {
-    sysinit.SYSINIT("sysinit_pckbd", sysinit.SI_SUB_DRIVERS, sysinit.SI_ORDER_FIRST, pckbdInit, null);
+    sysinit.SYSINIT("sysinit_pckbd", sysinit.SI_SUB_CONFIGURE, sysinit.SI_ORDER_THIRD, pckbdInit, null);
 }

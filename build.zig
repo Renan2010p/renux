@@ -35,7 +35,9 @@ fn zig(b: *Builder) []const u8 {
 pub fn build(b: *Builder) !void {
     // zig build buildkernel
     const buildkernel_step: *Builder.Step = b.step("buildkernel", "Build the Renux kernel");
+    const devbuild: bool = b.option(bool, "devbuild", "Stamp the kernel with the build date, user and host") orelse false;
     const buildkernel: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
+    if (devbuild) buildkernel.addArg("-Ddevbuild=true");
     buildkernel.setCwd(b.path("sys"));
     const install_kernel: *Builder.Step.InstallFile =
         b.addInstallFileWithDir(b.path("sys/zig-out/bin/kernel"), .bin, "kernel");
@@ -98,7 +100,7 @@ pub fn build(b: *Builder) !void {
     // zig build bootloader  (our own UEFI boot loader, stand/amd64/uefi)
     const bootloader_step: *Builder.Step = b.step("bootloader", "Build the Renux UEFI boot loader (BOOTX64.EFI)");
     const bootloader: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build" });
-    bootloader.setCwd(b.path("stand/amd64/uefi"));
+    bootloader.setCwd(b.path("stand/efi/loader"));
     bootloader_step.dependOn(&bootloader.step);
 
     // zig build rootfs  (the root image embedded in the kernel; needs the userland)
@@ -121,6 +123,7 @@ pub fn build(b: *Builder) !void {
     const iso: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "iso" });
     iso.setCwd(b.path("sys"));
     iso.step.dependOn(&install_kernel.step);
+    iso.step.dependOn(bootloader_step);
     iso.step.dependOn(buildbin_step);
     iso.step.dependOn(buildsbin_step);
     iso.step.dependOn(buildlibexec_step);
@@ -138,11 +141,24 @@ pub fn build(b: *Builder) !void {
     run.step.dependOn(buildsbin_step);
     run_step.dependOn(&run.step);
 
+    // zig build run-efi  (UEFI + the Renux loader, in a graphical window)
+    const run_efi_step: *Builder.Step = b.step("run-efi", "Boot Renux in QEMU through UEFI, in a window");
+    const run_efi: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "build", "run-efi" });
+    run_efi.setCwd(b.path("sys"));
+    run_efi.step.dependOn(iso_step);
+    run_efi_step.dependOn(&run_efi.step);
+
     // zig build test  (host unit tests for the pure, portable parts)
     const test_step: *Builder.Step = b.step("test", "Run the host unit tests");
     const unit: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "test", "sys/vm/phys_bitmap.zig" });
     unit.setCwd(b.path("."));
     test_step.dependOn(&unit.step);
+    const clock_unit: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "test", "sys/kern/subr_clock.zig" });
+    clock_unit.setCwd(b.path("."));
+    test_step.dependOn(&clock_unit.step);
+    const ioc_unit: *Builder.Step.Run = b.addSystemCommand(&.{ zig(b), "test", "sys/sys/ioccom.zig" });
+    ioc_unit.setCwd(b.path("."));
+    test_step.dependOn(&ioc_unit.step);
 
     // zig build all
     const all_step: *Builder.Step = b.step("all", "Build the kernel, library, userland and ISO");

@@ -30,22 +30,92 @@ const vfs_subr: type = @import("vfs_subr.zig");
 const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
+const subr_clock: type = @import("subr_clock.zig");
+const vers: type = @import("vers");
+const builtin: type = @import("builtin");
 
 /// Copyright notice (cf. FreeBSD's sys/conf/copyright).
 const copyright: []const u8 =
-    "Copyright (c) 2026 The Renux Project.  All rights reserved.\n\n";
+    "Copyright (c) 2026 The Renux Project. All rights reserved.\n";
 
 /// Trademark notice (cf. FreeBSD's sys/conf/trademark).
 const trademark: []const u8 =
-    "Renux is a trademark of The Renux Project.\n\n";
+    "Renux is a trademark of The Renux Project.\n";
 
-/// Build identification, printed as "version machine" then the compiler line,
-/// as FreeBSD's print_version() does: the release and config line, the build
-/// path, then the compiler that produced the kernel.
-const version: []const u8 =
-    "Renux 0.1-RELEASE #0: Sat Oct 10 12:00:00 UTC 2026\n" ++
-    "\tbuild@renux:/usr/obj/usr/src/amd64.amd64/sys/GENERIC amd64\n" ++
-    "Renux clang version 22.1.8 (https://github.com/llvm/llvm-project.git) target: x86_64-unknown-renux\n";
+/// Machine name, as uname -m reports it.
+const machine: []const u8 = switch (builtin.target.cpu.arch) {
+    .x86_64 => "amd64",
+    else => @tagName(builtin.target.cpu.arch),
+};
+
+/// FreeBSD's boothowto: the boot flags (sys/sys/reboot.h).
+pub var boothowto: u32 = 0;
+pub const RB_SINGLE: u32 = 0x002; // -s: boot to single user
+pub const RB_VERBOSE: u32 = 0x800; // -v: print all potentially useful info
+
+/// Parse the kernel arguments the loader passed: the FreeBSD boot flags (`-v`,
+/// `-s`) and the loader variables that mean the same (`boot_verbose`,
+/// `boot_single`, optionally `=YES`).
+fn bootFlags(_: ?*const anyopaque) callconv(.c) void {
+    const args: []const u8 = arch.boot.cmdline() orelse return;
+    var i: usize = 0;
+    while (i < args.len) {
+        while (i < args.len and args[i] == ' ') : (i += 1) {}
+        const start: usize = i;
+        while (i < args.len and args[i] != ' ') : (i += 1) {}
+        var word: []const u8 = args[start..i];
+        if (word.len == 0) {
+            continue;
+        }
+        if (word[0] == '-') {
+            for (word[1..]) |c| {
+                switch (c) {
+                    'v' => boothowto |= RB_VERBOSE,
+                    's' => boothowto |= RB_SINGLE,
+                    else => {},
+                }
+            }
+            continue;
+        }
+        if (strStarts(word, "boot_verbose")) {
+            word = word["boot_verbose".len..];
+            if (word.len == 0 or strEq(word, "=YES") or strEq(word, "=1")) {
+                boothowto |= RB_VERBOSE;
+            }
+        } else if (strStarts(word, "boot_single")) {
+            boothowto |= RB_SINGLE;
+        } else if (strStarts(word, "console=")) {
+            // The loader's console choice: comconsole, vidconsole, or both
+            // (comma separated).
+            // Values naming neither are ignored.
+            const list: []const u8 = word["console=".len..];
+            const video: bool = contains(list, "vidconsole");
+            const serial: bool = contains(list, "comconsole");
+            if (video or serial) {
+                console_video = video;
+                console_serial = serial;
+            }
+        }
+    }
+    prf.bootverbose = (boothowto & RB_VERBOSE) != 0;
+}
+
+/// Consoles to attach (the loader's `console` variable); both by default.
+var console_video: bool = true;
+var console_serial: bool = true;
+
+fn contains(hay: []const u8, needle: []const u8) bool {
+    if (needle.len > hay.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= hay.len) : (i += 1) {
+        if (strEq(hay[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn strStarts(s: []const u8, prefix: []const u8) bool {
+    return s.len >= prefix.len and strEq(s[0..prefix.len], prefix);
+}
 
 /// Build a machine-independent raster from the boot framebuffer.
 fn bootRaster() ?rasops.Raster {
@@ -69,7 +139,7 @@ fn bootRaster() ?rasops.Raster {
 /// Find and initialise the console, for early messages (NetBSD's consinit()).
 fn consinit(_: ?*const anyopaque) callconv(.c) void {
     const r: ?rasops.Raster = bootRaster();
-    arch.consinit.consinit(r);
+    arch.consinit.consinit(if (console_video) r else null, console_serial);
     // Publish the framebuffer to userland as /dev/fb0 (FreeBSD's fbio.h ABI),
     // which is what a graphical server's scfb(4) driver mmaps and paints.
     if (r) |rr| {
@@ -84,9 +154,14 @@ fn consinit(_: ?*const anyopaque) callconv(.c) void {
 
 /// Print the copyright notice.
 fn announce(_: ?*const anyopaque) callconv(.c) void {
-    // The loader-and-kernel hand-off line, as FreeBSD's loader prints it before
-    // the kernel banner.
-    prf.printLine("Loading kernel...");
+    // A foreign loader (Limine) prints nothing of its own, so say what it did,
+    // as FreeBSD's loader would; the Renux loader has already reported the
+    // load. It belongs to the loader stage, so it goes to the console only and
+    // dmesg(8) starts at the boot mark instead.
+    if (!arch.boot.renuxLoader()) {
+        prf.cnprint("Loading kernel...\n");
+    }
+    prf.msgbufBootMark();
     prf.print(copyright);
 }
 
@@ -95,33 +170,49 @@ fn printTrademark(_: ?*const anyopaque) callconv(.c) void {
     prf.print(trademark);
 }
 
-/// Print the version and compiler identification.
+/// Print the version and compiler identification exactly as FreeBSD's
+/// print_version() prints the string newvers.sh made, then the machine:
+///
+/// a reproducible build (the default, like FreeBSD releases):
+///   Renux 0.1-CURRENT main-n96-6627e9f4b9c7 GENERIC amd64
+///
+/// a developer build (zig build -Ddevbuild=true):
+///   Renux 0.1-CURRENT #0 main-n96-6627e9f4b9c7: Tue Oct 13 01:02:03 UTC 2026
+///       renan@host:/home/renan/renux/sys GENERIC amd64
+///
+/// followed by the compiler line.
 fn printVersion(_: ?*const anyopaque) callconv(.c) void {
-    prf.print(version);
+    if (vers.devbuild) {
+        var buf: [subr_clock.TIME_LEN]u8 = undefined;
+        prf.printf("Renux %s-%s #0 %s: %s\n    %s %s %s\n", .{
+            vers.revision,                                vers.branch,  vers.source,
+            subr_clock.formatTime(vers.build_time, &buf), vers.builder, vers.ident,
+            machine,
+        });
+    } else {
+        prf.printf("Renux %s-%s %s %s %s\n", .{ vers.revision, vers.branch, vers.source, vers.ident, machine });
+    }
+    prf.printf("Zig version %s (LLVM)\n", .{builtin.zig_version_string});
 }
 
-/// Configure the system hardware: attach the legacy ISA devices and enable
-/// interrupts (FreeBSD's SI_SUB_CONFIGURE). The device lines are printed in
-/// FreeBSD's newbus dmesg format, `name<unit>: <description> ... on <parent>`
-/// (sys/kern/subr_bus.c bus_print_child_header/footer), with the descriptions
-/// FreeBSD's drivers use (sys/x86/isa/atpic.c, sys/x86/isa/atrtc.c,
-/// sys/dev/atkbdc/atkbdc.c, sys/dev/uart/uart_bus_isa.c).
-fn configure(_: ?*const anyopaque) callconv(.c) void {
-    // CPU topology (sys/x86/x86/mp_x86.c cpu_mp_announce()), a single package
-    // with one core and no hardware threads on this machine.
-    prf.printLine("FreeBSD/SMP: 1 package(s) x 1 core(s)");
-    prf.printLine("atpic0: <AT PIC> port 0x20-0x21,0xa0-0xa1 irq 0 on isa0");
-    prf.printLine("atrtc0: <AT realtime clock> port 0x70-0x71 irq 8 on isa0");
-    prf.printLine("atkbdc0: <Keyboard controller (i8042)> port 0x60,0x64 irq 1 on isa0");
-    prf.printLine("atkbd0: <AT Keyboard> irq 1 on atkbdc0");
-    prf.printLine("uart0: <16550 or compatible> port 0x3f8-0x3ff irq 4 flags 0x10 on isa0");
-    if (arch.boot.framebuffer(0)) |fb| {
-        prf.print("vt0: <Generic> resolution ");
-        prf.printDec(fb.width);
-        prf.print("x");
-        prf.printDec(fb.height);
-        prf.printLine(" on isa0");
+/// Report the virtual terminal's mode, FreeBSD's "VT(efifb): resolution WxH",
+/// right after the version, where FreeBSD's vt(4) reports it.
+fn printVt(_: ?*const anyopaque) callconv(.c) void {
+    // The framebuffer came from UEFI GOP (efifb) under the Renux loader; a
+    // foreign loader may have set a VBE mode, so name it generically then.
+    if (!console_video) {
+        return;
     }
+    if (arch.boot.framebuffer(0)) |fb| {
+        const name: []const u8 = if (arch.boot.renuxLoader()) "efifb" else "fb";
+        prf.printf("VT(%s): resolution %ux%u\n", .{ name, fb.width, fb.height });
+    }
+}
+
+/// Finish device configuration (FreeBSD's configure_final()): every driver
+/// has attached and announced itself at SI_SUB_CONFIGURE (see
+/// kern/subr_bus.zig), so interrupts can be enabled.
+fn configure_final(_: ?*const anyopaque) callconv(.c) void {
     arch.cpu.enable_interrupts();
 }
 
@@ -214,7 +305,7 @@ fn unpackImage(image: []const u8) bool {
     }
     // Show a spinner while the image is unpacked, as the loader does while it
     // loads the kernel and modules.
-    prf.spinBegin("Loading configured modules... ");
+    prf.spinBegin("Unpacking the root image... ");
     const copied: bool = copyDir(&mnt, ext2fs.ROOT_INO, &.{});
     prf.spinEnd();
     if (!copied) {
@@ -319,46 +410,50 @@ fn copyDir(mnt: *ext2fs.Ext2Mount, ino: u64, dir_path: []const u8) bool {
     return true;
 }
 
-/// Mount a tmpfs as the system root.
-fn mountTmpfs() ?*mount.Mount {
-    prf.printLine("Trying to mount root from tmpfs []...");
+/// Mount a tmpfs as the system root, reporting it the way FreeBSD's
+/// vfs_mountroot does: "Trying to mount root from <fs>:<device> [<opts>]...".
+fn mountTmpfs(from: []const u8) ?*mount.Mount {
+    prf.printf("Trying to mount root from tmpfs:%s []...\n", .{from});
     const mp: *mount.Mount = vfs_mount.mountFs("tmpfs", null) orelse {
-        prf.log(prf.LOG_ERR, "cannot mount root filesystem", .{});
+        prf.printLine("Mounting from tmpfs failed: cannot allocate the file system.");
         return null;
     };
     vfs_mount.setRoot(mp);
-    prf.log(prf.LOG_DEBUG, "tmpfs: mounted on /", .{});
     return mp;
 }
 
-/// Mount the system root: a tmpfs, populated from the whole-filesystem image
-/// loaded as the /root.img module when present (so the medium carries one
-/// filesystem image instead of one boot module per file), or from the
-/// individual boot modules otherwise.
+/// Mount the system root: a tmpfs, populated from the root image. The image is
+/// embedded in the kernel (FreeBSD's MD_ROOT) or, failing that, loaded as the
+/// /root.img module; either is announced as md0 like FreeBSD's md(4) does.
+/// Without an image the root is populated from the individual boot modules.
 fn mountRoot() ?*mount.Mount {
-    const mp: *mount.Mount = mountTmpfs() orelse return null;
+    var root: ?*mount.Mount = null;
 
-    // FreeBSD's MD_ROOT: the root image is embedded in the kernel itself, so
-    // the loader has to load nothing but the kernel.
     if (rootimage.bytes.len > 0) {
-        prf.log(prf.LOG_INFO, "expanding the embedded root image (%u bytes)", .{rootimage.bytes.len});
+        prf.printf("md0: Embedded image %u bytes at %p\n", .{ rootimage.bytes.len, rootimage.bytes.ptr });
+        root = mountTmpfs("/dev/md0") orelse return null;
         if (unpackImage(rootimage.bytes)) {
-            return mp;
+            return root;
         }
-        prf.log(prf.LOG_WARNING, "cannot expand the embedded root; trying modules", .{});
+        prf.printLine("WARNING: cannot expand the embedded root image; trying modules");
     }
 
-    // Fall back to an image loaded as a boot module, then to per-file modules.
     if (findModule("/root.img")) |image| {
-        prf.log(prf.LOG_INFO, "expanding /root.img (%u bytes) into the root", .{image.len});
-        if (unpackImage(image)) {
-            return mp;
+        prf.printf("md0: Preloaded image </root.img> %u bytes at %p\n", .{ image.len, image.ptr });
+        if (root == null) {
+            root = mountTmpfs("/dev/md0") orelse return null;
         }
-        prf.log(prf.LOG_WARNING, "cannot expand /root.img; using the modules", .{});
+        if (unpackImage(image)) {
+            return root;
+        }
+        prf.printLine("WARNING: cannot expand /root.img; using the boot modules");
     }
 
+    if (root == null) {
+        root = mountTmpfs("modules") orelse return null;
+    }
     populateRoot();
-    return mp;
+    return root;
 }
 
 /// Create directory `path` when it does not already exist.
@@ -427,7 +522,11 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
 
     // Build init's initial argument block: argv = ["/sbin/init"], envp has a
     // default TERM so full-screen programs (ncurses) can start on the console.
-    const args: []const []const u8 = &.{"/sbin/init"};
+    // As FreeBSD's start_init(), pass the single-user flag on to init.
+    const args: []const []const u8 = if ((boothowto & RB_SINGLE) != 0)
+        &.{ "/sbin/init", "-s" }
+    else
+        &.{"/sbin/init"};
     const env: []const []const u8 = &.{"TERM=xterm"};
     const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env, &.{}) orelse {
         prf.log(prf.LOG_ERR, "cannot build init stack", .{});
@@ -488,11 +587,13 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
 }
 
 comptime {
-    sysinit.SYSINIT("sysinit_console", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_FIRST, consinit, null);
-    sysinit.SYSINIT("sysinit_announce", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_SECOND, announce, null);
-    sysinit.SYSINIT("sysinit_trademark", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_THIRD, printTrademark, null);
-    sysinit.SYSINIT("sysinit_version", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_FOURTH, printVersion, null);
-    sysinit.SYSINIT("sysinit_configure", sysinit.SI_SUB_CONFIGURE, sysinit.SI_ORDER_MIDDLE, configure, null);
+    sysinit.SYSINIT("sysinit_bootflags", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_FIRST, bootFlags, null);
+    sysinit.SYSINIT("sysinit_console", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_SECOND, consinit, null);
+    sysinit.SYSINIT("sysinit_announce", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_THIRD, announce, null);
+    sysinit.SYSINIT("sysinit_trademark", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_FOURTH, printTrademark, null);
+    sysinit.SYSINIT("sysinit_version", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_FIFTH, printVersion, null);
+    sysinit.SYSINIT("sysinit_vt", sysinit.SI_SUB_COPYRIGHT, sysinit.SI_ORDER_MIDDLE, printVt, null);
+    sysinit.SYSINIT("sysinit_configure", sysinit.SI_SUB_CONFIGURE, sysinit.SI_ORDER_ANY, configure_final, null);
     sysinit.SYSINIT("sysinit_start_init", sysinit.SI_SUB_LAST, sysinit.SI_ORDER_FIRST, start_init, null);
 }
 

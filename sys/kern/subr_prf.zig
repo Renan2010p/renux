@@ -17,14 +17,42 @@ var msgbuf: [MSGBUF_SIZE]u8 = undefined;
 var msg_head: usize = 0; // next write position
 var msg_count: usize = 0; // valid bytes
 
-/// Emit one character on the console and record it in the message buffer.
-pub fn putchar(c: u8) void {
+/// FreeBSD's bootverbose: set by `boot -v` (the `-v` or `boot_verbose` kernel
+/// argument). The terse boot log shows only what FreeBSD shows; subsystems keep
+/// their internal progress messages behind this flag.
+pub var bootverbose: bool = false;
+
+/// Record one character in the message buffer only (what dmesg(8) reads).
+fn msgbufPutc(c: u8) void {
     msgbuf[msg_head] = c;
     msg_head = (msg_head + 1) % MSGBUF_SIZE;
     if (msg_count < MSGBUF_SIZE) {
         msg_count += 1;
     }
+}
+
+/// Emit one character on the console and record it in the message buffer.
+pub fn putchar(c: u8) void {
+    msgbufPutc(c);
     cons.cnputc(c);
+}
+
+/// Mark the start of a boot in the message buffer, as FreeBSD's msgbuf does,
+/// so dmesg(8) output begins with "---<<BOOT>>---". It is not shown on the
+/// console.
+pub fn msgbufBootMark() void {
+    for ("---<<BOOT>>---\n") |c| {
+        msgbufPutc(c);
+    }
+}
+
+/// Emit a byte string on the console only, bypassing the message buffer. For
+/// output that belongs to the loader stage (the spinner, "Loading kernel...")
+/// and would only clutter dmesg(8).
+pub fn cnprint(s: []const u8) void {
+    for (s) |c| {
+        cons.cnputc(c);
+    }
 }
 
 /// Copy the kernel message buffer into `dst`, oldest byte first, returning the
@@ -122,12 +150,42 @@ pub fn printSigned(value: i64) void {
     }
 }
 
+/// Print `value` as FreeBSD's "%b" conversion does: the value in hexadecimal,
+/// then the names of the set bits in angle brackets, comma separated, e.g.
+/// `0x78bfbfd<FPU,DE,PSE,...>`. `names[i]` names bit i; set bits without a name
+/// are shown as `b<i>`.
+pub fn printBits(value: u64, names: []const []const u8) void {
+    printHexTrim(value);
+    if (value == 0) {
+        return;
+    }
+    putchar('<');
+    var first: bool = true;
+    var bit: u7 = 0;
+    while (bit < 64) : (bit += 1) {
+        if ((value >> @intCast(bit)) & 1 == 0) {
+            continue;
+        }
+        if (!first) {
+            putchar(',');
+        }
+        first = false;
+        if (bit < names.len and names[bit].len > 0) {
+            print(names[bit]);
+        } else {
+            putchar('b');
+            printDec(bit);
+        }
+    }
+    putchar('>');
+}
+
 /// Minimal printf. Supported conversions:
 ///
 ///   %%  literal percent      %c  single character
 ///   %s  byte string          %u  unsigned decimal
-///   %d  signed decimal       %x  hexadecimal (prefixed with 0x)
-///   %p  pointer (hex)
+///   %d  signed decimal       %x  hexadecimal, no leading zeros (0x...)
+///   %p  pointer (16 hex digits)
 ///
 /// The format string is comptime known, so the argument list is type checked
 /// and the loop is fully unrolled.
@@ -150,7 +208,7 @@ pub fn printf(comptime fmt: []const u8, args: anytype) void {
                 's' => print(args[arg_index]),
                 'u' => printDec(@intCast(args[arg_index])),
                 'd' => printSigned(@intCast(args[arg_index])),
-                'x' => printHex(@intCast(args[arg_index])),
+                'x' => printHexTrim(@intCast(args[arg_index])),
                 'p' => printPtr(@intFromPtr(args[arg_index])),
                 else => {
                     putchar('%');
@@ -187,9 +245,15 @@ pub fn setLogMax(level: u8) void {
 
 /// FreeBSD's log(9): format a message and emit it subject to the priority
 /// filter. Subsystems report boot progress through this rather than raw
-/// printf(), so a single knob can quiet them.
+/// printf(), so a single knob can quiet them. Informational messages
+/// (LOG_INFO and below in severity) are only shown under bootverbose, which
+/// keeps the default boot log as terse as FreeBSD's; warnings and errors are
+/// always shown.
 pub fn log(comptime level: u8, comptime fmt: []const u8, args: anytype) void {
     if (level > log_max) {
+        return;
+    }
+    if (level >= LOG_INFO and !bootverbose) {
         return;
     }
     printf(fmt, args);
@@ -206,10 +270,13 @@ const spin_frames: []const u8 = "|/-\\";
 var spin_frame: usize = 0;
 var spin_open: bool = false;
 
+// The spinner writes to the console only: it is loader-stage decoration and
+// would fill the message buffer with backspaces.
+
 /// Open a spinner line `label`; spin() advances it and spinEnd() closes it.
 pub fn spinBegin(label: []const u8) void {
-    print(label);
-    putchar(spin_frames[0]);
+    cnprint(label);
+    cons.cnputc(spin_frames[0]);
     spin_frame = 1;
     spin_open = true;
 }
@@ -219,8 +286,8 @@ pub fn spin() void {
     if (!spin_open) {
         return;
     }
-    putchar(0x08); // backspace: redraw over the previous glyph
-    putchar(spin_frames[spin_frame]);
+    cons.cnputc(0x08); // backspace: redraw over the previous glyph
+    cons.cnputc(spin_frames[spin_frame]);
     spin_frame = (spin_frame + 1) % spin_frames.len;
 }
 
@@ -229,7 +296,9 @@ pub fn spinEnd() void {
     if (!spin_open) {
         return;
     }
-    putchar('\n');
+    // Erase the glyph so the finished line reads "<label>done".
+    cons.cnputc(0x08);
+    cnprint("done\n");
     spin_open = false;
 }
 

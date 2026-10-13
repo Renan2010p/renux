@@ -4,4 +4,5 @@
 #
 # /etc/rc.d/syslogd -- start the system log daemon.
 
+echo Starting syslogd.
 /usr/sbin/syslogd &

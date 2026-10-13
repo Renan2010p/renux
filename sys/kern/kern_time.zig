@@ -4,16 +4,30 @@
 // Time of day.
 //
 // This is the Zig counterpart of NetBSD's sys/kern/kern_time.c, reduced to
-// gettimeofday(2). There is no real-time clock yet, so the time is the boot
-// epoch plus the ticks the system clock has counted since boot.
+// gettimeofday(2). The time is the boot time, read from the real-time clock at
+// boot (arch/x86/isa/atrtc.zig), plus the ticks the system clock has counted
+// since.
 
 const sys: type = @import("../sys/syscall.zig");
 const arch: type = @import("../arch/arch.zig");
 const errno: type = @import("../sys/errno.zig");
 
-/// Seconds at boot, 2026-01-01T00:00:00Z (there is no RTC to read). Published so
-/// sysctl kern.boottime reports it and uptime is measured from boot.
-pub const EPOCH: u64 = 1767225600;
+/// Boot time used when no real-time clock can be read, 2026-01-01T00:00:00Z.
+const DEFAULT_BOOTTIME: u64 = 1767225600;
+
+/// Seconds since the epoch at boot (FreeBSD's boottime). Published so sysctl
+/// kern.boottime reports it and uptime is measured from boot.
+pub var boottime: u64 = DEFAULT_BOOTTIME;
+
+/// Set the time of day to `now` seconds since the epoch, as FreeBSD's
+/// inittodr() does from the RTC: the boot time is `now` less the uptime.
+pub fn setBoottime(now: i64) void {
+    if (now <= 0) {
+        return;
+    }
+    const up: u64 = arch.clock.tickCount() / arch.clock.HZ;
+    boottime = @as(u64, @intCast(now)) -| up;
+}
 
 /// A time value (NetBSD's struct timeval).
 pub const Timeval: type = extern struct {
@@ -29,7 +43,7 @@ pub fn sysGettimeofday(args: [sys.MAXARGS]u64) u64 {
 
     if (tv_ptr != 0) {
         const tv: *Timeval = @ptrFromInt(tv_ptr);
-        tv.tv_sec = @intCast(EPOCH + ticks / hz);
+        tv.tv_sec = @intCast(boottime + ticks / hz);
         tv.tv_usec = @intCast((ticks % hz) * (1_000_000 / hz));
     }
     return 0;
@@ -63,7 +77,7 @@ pub fn sysClockGettime(args: [sys.MAXARGS]u64) u64 {
     var nsec: i64 = 0;
     switch (clockid) {
         CLOCK_REALTIME, CLOCK_REALTIME_PRECISE, CLOCK_REALTIME_FAST => {
-            sec = @intCast(EPOCH + ticks / hz);
+            sec = @intCast(boottime + ticks / hz);
             nsec = @intCast((ticks % hz) * (1_000_000_000 / hz));
         },
         CLOCK_MONOTONIC, CLOCK_MONOTONIC_PRECISE, CLOCK_MONOTONIC_FAST, CLOCK_UPTIME, CLOCK_UPTIME_PRECISE, CLOCK_UPTIME_FAST, CLOCK_SECOND => {

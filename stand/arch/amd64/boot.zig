@@ -51,6 +51,12 @@ fn span(ptr: [*:0]const u8) []const u8 {
 
 // -- Accessors ---------------------------------------------------------------
 
+/// True when the Renux loader (stand/efi/loader) booted the kernel, false for
+/// a foreign loader (Limine).
+pub fn renuxLoader() bool {
+    return info() != null;
+}
+
 pub fn cmdline() ?[]const u8 {
     if (info()) |i| {
         const c = i.cmdline orelse return null;
@@ -81,6 +87,18 @@ pub fn memmapEntry(index: usize) ?*MemmapEntry {
     }
     const m = limine.memmapEntry(index) orelse return null;
     return @ptrCast(m);
+}
+
+/// True when memory map entry `e` is RAM: free memory, or memory the loader
+/// and the kernel image occupy (what FreeBSD reports as "real memory"). The
+/// two protocols number the types differently.
+pub fn memmapIsRam(e: *const MemmapEntry) bool {
+    if (info() != null) {
+        return e.type == MemmapEntry.USABLE or e.type == MemmapEntry.BOOTLOADER_RECLAIMABLE or
+            e.type == MemmapEntry.EXECUTABLE_AND_MODULES;
+    }
+    // Limine: USABLE 0, BOOTLOADER_RECLAIMABLE 5, EXECUTABLE_AND_MODULES 6.
+    return e.type == 0 or e.type == 5 or e.type == 6;
 }
 
 pub fn framebufferCount() ?usize {

@@ -364,7 +364,7 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             // FreeBSD's securelevel is -1 when unset (the kernel runs without a
             // securelevel); init reads this to decide whether to raise it.
             KERN_SECURELEVEL => return reportInt(oldp, oldlenp, -1),
-            KERN_BOOTTIME => return reportLong(oldp, oldlenp, @intCast(kern_time.EPOCH)),
+            KERN_BOOTTIME => return reportLong(oldp, oldlenp, @intCast(kern_time.boottime)),
             KERN_USRSTACK => return reportLong(oldp, oldlenp, @intCast(arch.vmparam.USER_STACK_TOP)),
             KERN_PID_MAX => return reportInt(oldp, oldlenp, 99999),
             KERN_CONSOLE => return report(oldp, oldlenp, "\x00"),

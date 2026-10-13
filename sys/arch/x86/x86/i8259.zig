@@ -11,6 +11,14 @@
 const bus_space: type = @import("bus_space.zig");
 const isa: type = @import("../../../dev/isa/isareg.zig");
 const pic: type = @import("../include/i8259.zig");
+const subr_bus: type = @import("../../../kern/subr_bus.zig");
+const sysinit: type = @import("../../../sys/sysinit.zig");
+
+const dev: subr_bus.Device = .{
+    .name = "atpic",
+    .desc = "AT PIC",
+    .parent = "isa0",
+};
 
 fn outb(port: u16, value: u8) void {
     bus_space.write1(.io, port, 0, value);
@@ -66,4 +74,15 @@ pub fn eoi(vector: u8) void {
         outb(isa.IO_PIC2, pic.OCW2_EOI);
     }
     outb(isa.IO_PIC1, pic.OCW2_EOI);
+}
+
+/// Announce the controller once devices are configured. It was programmed
+/// much earlier, at SI_SUB_INTR; like FreeBSD's atpic it only shows up in the
+/// device list when the ISA devices attach.
+fn atpicAttach(_: ?*const anyopaque) callconv(.c) void {
+    subr_bus.announce(&dev, " port 0x20-0x21,0xa0-0xa1", .{});
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_atpic", sysinit.SI_SUB_CONFIGURE, sysinit.SI_ORDER_FIRST, atpicAttach, null);
 }

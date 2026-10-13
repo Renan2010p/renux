@@ -4,46 +4,53 @@
 // Raster console painter.
 //
 // This is the Zig counterpart of NetBSD's sys/dev/wscons/wscons_raster.h (the
-// "rcons" layer) reduced to a painter: it owns the raster, the font and the
-// colours, and draws individual cells. It keeps no screen contents and no
-// cursor of its own; the terminal emulator (wsemul_vt100.zig) owns the screen
-// grid and the cursor, exactly as NetBSD splits wsemul_* from rcons.
+// "rcons" layer) reduced to a painter: it owns the raster and the font and
+// draws individual cells in the colours it is given. It keeps no screen
+// contents and no cursor of its own; the terminal emulator (wsemul_vt100.zig)
+// owns the screen grid and the cursor, exactly as NetBSD splits wsemul_* from
+// rcons.
+//
+// While a program owns the display (KD_GRAPHICS, see sys/consio.zig) the
+// painter is suspended and draws nothing; the emulator keeps updating its grid
+// and repaints everything on resume.
 
 const wsfont: type = @import("../wsfont/wsfont.zig");
 const spleen8x16: type = @import("../wsfont/spleen8x16.zig");
 const rasops: type = @import("../rasops/rasops.zig");
-const rasops32: type = @import("../rasops/rasops32.zig");
 
 /// Raster console state.
 pub const Rcons: type = struct {
     raster: rasops.Raster,
     font: *const wsfont.Font,
-    fg: u32,
-    bg: u32,
     cols: u32,
     rows: u32,
 };
 
 var rcons: Rcons = undefined;
 var attached: bool = false;
+var suspended: bool = false;
 
 /// Attach a raster console to `framebuffer` using the default built-in font.
-pub fn attach(framebuffer: rasops.Raster) void {
-    attachWithFont(framebuffer, &spleen8x16.font);
+/// Returns false, attaching nothing, when the raster's pixel format cannot be
+/// drawn on (the serial console still works).
+pub fn attach(framebuffer: rasops.Raster) bool {
+    return attachWithFont(framebuffer, &spleen8x16.font);
 }
 
 /// Attach a raster console using an explicit font.
-pub fn attachWithFont(framebuffer: rasops.Raster, font: *const wsfont.Font) void {
+pub fn attachWithFont(framebuffer: rasops.Raster, font: *const wsfont.Font) bool {
+    if (!rasops.supported(&framebuffer)) {
+        return false;
+    }
     rcons = .{
         .raster = framebuffer,
         .font = font,
-        .fg = rasops.pixel(&framebuffer, 0xff, 0xff, 0xff),
-        .bg = rasops.pixel(&framebuffer, 0x00, 0x00, 0x00),
         .cols = rasops.cols(&framebuffer, font.width),
         .rows = rasops.rows(&framebuffer, font.height),
     };
     attached = true;
-    rasops32.clear(&rcons.raster, rcons.bg);
+    rasops.clear(&rcons.raster, 0);
+    return true;
 }
 
 /// True once a raster is attached.
@@ -53,33 +60,54 @@ pub fn isAttached() bool {
 
 /// Screen size in character cells.
 pub fn dims() struct { cols: u32, rows: u32 } {
+    if (!attached) {
+        return .{ .cols = 0, .rows = 0 };
+    }
     return .{ .cols = rcons.cols, .rows = rcons.rows };
 }
 
-/// Set the foreground colour (RGB) used for normal (non-reversed) text.
-pub fn setForeground(r: u8, g: u8, b: u8) void {
-    if (attached) {
-        rcons.fg = rasops.pixel(&rcons.raster, r, g, b);
+/// Stop (true) or resume (false) drawing, for KD_GRAPHICS / KD_TEXT.
+pub fn setSuspended(s: bool) void {
+    suspended = s;
+}
+
+/// True while drawing is suspended.
+pub fn isSuspended() bool {
+    return suspended;
+}
+
+fn active() bool {
+    return attached and !suspended;
+}
+
+/// Fill the whole screen with the 0xRRGGBB colour `bg`.
+pub fn blank(bg: u32) void {
+    if (active()) {
+        rasops.clear(&rcons.raster, rasops.pixelRgb(&rcons.raster, bg));
     }
 }
 
-/// Fill the whole screen with the background colour.
-pub fn blank() void {
-    rasops32.clear(&rcons.raster, rcons.bg);
-}
-
-/// Draw one cell: `ch` in the foreground over the background, swapping the two
-/// when `reverse` (used for the cursor and for standout attributes).
-pub fn paintCell(row: u32, col: u32, ch: u8, reverse: bool) void {
-    if (!attached or row >= rcons.rows or col >= rcons.cols) {
+/// Draw one cell: character `code` (see rasops.SPECIAL) in `fg` over `bg`,
+/// both 0xRRGGBB, optionally underlined.
+pub fn paintCell(row: u32, col: u32, code: u16, fg: u32, bg: u32, underline: bool) void {
+    if (!active() or row >= rcons.rows or col >= rcons.cols) {
         return;
     }
-    var fg: u32 = rcons.fg;
-    var bg: u32 = rcons.bg;
-    if (reverse) {
-        const t: u32 = fg;
-        fg = bg;
-        bg = t;
+    const r: *const rasops.Raster = &rcons.raster;
+    rasops.putchar(r, col, row, rasops.pixelRgb(r, fg), rasops.pixelRgb(r, bg), code, rcons.font, underline);
+}
+
+/// Move `n` text rows from `src` to `dst` on the screen, for scrolling.
+/// Returns false when nothing was copied (suspended or detached); the caller
+/// must then repaint instead.
+pub fn copyRows(dst: u32, src: u32, n: u32) bool {
+    if (!active() or n == 0) {
+        return false;
     }
-    rasops32.putchar(&rcons.raster, col, row, fg, bg, ch, rcons.font);
+    if (dst + n > rcons.rows or src + n > rcons.rows) {
+        return false;
+    }
+    const h: u32 = rcons.font.height;
+    rasops.copyRows(&rcons.raster, dst * h, src * h, n * h);
+    return true;
 }
