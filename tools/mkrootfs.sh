@@ -3,51 +3,37 @@
 # Copyright (C) 2026 The Renux Project
 #
 # Build the root filesystem image that is embedded in the kernel (FreeBSD's
-# MD_ROOT): stage the userland into a tree, pack it into an ext2 image, and
-# leave it at kernel/root.img so kernel/fs/rootimage.zig can @embedFile() it.
+# MD_ROOT): stage the system into a tree, pack it into an ext2 image.
 #
-# The image is only replaced when its bytes actually change, so the kernel is
-# not rebuilt when nothing changed.
+# Usage: mkrootfs.sh <userland> <image>
+#
+# <userland> is the native userland as `zig build` installs it
+# (zig-out/userland: bin/, sbin/, usr/bin/, ...); the FreeBSD userland is
+# added when it has been fetched (tools/get-freebsd.sh, get-freebsd-pkg.sh).
+# The image is byte-for-byte reproducible, so an unchanged system does not
+# rebuild the kernel that embeds it.
 set -eu
+
+[ $# -eq 2 ] || {
+    echo "usage: mkrootfs.sh <userland> <image>" >&2
+    exit 2
+}
+STAGE="$1"
+OUT="$2"
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
-KERNEL_DIR="$ROOT/kernel"
-USERLAND="$ROOT/userland"
-
-OUT="${OUT:-$KERNEL_DIR/root.img}"
-WORK="${WORK:-$KERNEL_DIR/zig-out/rootfs}"
-INIT="${INIT:-$USERLAND/sbin/zig-out/bin/init}"
-GETTY="${GETTY:-$USERLAND/libexec/zig-out/bin/getty}"
-LOGIN="${LOGIN:-$USERLAND/usr/bin/zig-out/bin/login}"
-STAT="${STAT:-$USERLAND/usr/bin/zig-out/bin/stat}"
-SH="${SH:-$USERLAND/bin/zig-out/bin/sh}"
-LS="${LS:-$USERLAND/bin/zig-out/bin/ls}"
-CAT="${CAT:-$USERLAND/bin/zig-out/bin/cat}"
-ECHO="${ECHO:-$USERLAND/bin/zig-out/bin/echo}"
-PWDCMD="${PWDCMD:-$USERLAND/bin/zig-out/bin/pwd}"
-MKDIR="${MKDIR:-$USERLAND/bin/zig-out/bin/mkdir}"
-RM="${RM:-$USERLAND/bin/zig-out/bin/rm}"
-RMDIR="${RMDIR:-$USERLAND/bin/zig-out/bin/rmdir}"
-HELLO="${HELLO:-$USERLAND/bin/zig-out/bin/hello}"
-WC="${WC:-$USERLAND/bin/zig-out/bin/wc}"
-FBDRAW="${FBDRAW:-$USERLAND/bin/zig-out/bin/fbdraw}"
-TUI="${TUI:-$USERLAND/bin/zig-out/bin/tui}"
-NANO="${NANO:-$USERLAND/bin/zig-out/bin/nano}"
-DMESG="${DMESG:-$USERLAND/bin/zig-out/bin/dmesg}"
-LOGGER="${LOGGER:-$USERLAND/bin/zig-out/bin/logger}"
-SYSLOGD="${SYSLOGD:-$USERLAND/bin/zig-out/bin/syslogd}"
-RC="${RC:-$USERLAND/etc/rc}"
+ETC="$ROOT/userland/etc"
+WORK="${WORK:-$(dirname -- "$OUT")/rootfs}"
 # The FreeBSD base system (tools/get-freebsd.sh); used when it is present.
 FBSDLIB="${FBSDLIB:-$ROOT/tools/freebsd/root}"
 # FreeBSD packages (tools/get-freebsd-pkg.sh: bash, nano); used when present.
 PKGROOT="${PKGROOT:-$ROOT/tools/freebsd/pkgroot}"
 
-# Build whatever is missing.
-[ -f "$INIT" ] || ( cd "$USERLAND/sbin" && zig build )
-[ -f "$GETTY" ] || ( cd "$USERLAND/libexec" && zig build )
-[ -f "$SH" ] || ( cd "$USERLAND/bin" && zig build )
-[ -f "$LOGIN" ] || ( cd "$USERLAND/usr/bin" && zig build )
+[ -x "$STAGE/sbin/init" ] || {
+    echo "mkrootfs: no native userland in $STAGE (run 'zig build userland')" >&2
+    exit 1
+}
 
 command -v mke2fs >/dev/null 2>&1 || {
     echo "mkrootfs: 'mke2fs' is required" >&2
@@ -61,33 +47,16 @@ mkdir -p "$WORK/boot" \
     "$WORK/dev" "$WORK/tmp" "$WORK/var" "$WORK/var/log" "$WORK/var/run" \
     "$WORK/mnt" "$WORK/home"
 
-cp -a "$INIT" "$WORK/sbin/init"
-cp -a "$GETTY" "$WORK/usr/libexec/getty"
-cp -a "$LOGIN" "$WORK/usr/bin/login"
-cp -a "$STAT" "$WORK/usr/bin/stat"
-cp -a "$SH" "$WORK/bin/sh"
+# The native userland, at its system paths.
+cp -a "$STAGE/." "$WORK/"
 # The native shell stays available as /bin/renux-sh; when a FreeBSD userland is
-# present it replaces /bin/sh (the default login shell).
-cp -a "$SH" "$WORK/bin/renux-sh"
-cp -a "$LS" "$WORK/bin/ls"
-cp -a "$CAT" "$WORK/bin/cat"
-cp -a "$ECHO" "$WORK/bin/echo"
-cp -a "$PWDCMD" "$WORK/bin/pwd"
-cp -a "$MKDIR" "$WORK/bin/mkdir"
-cp -a "$RM" "$WORK/bin/rm"
-cp -a "$RMDIR" "$WORK/bin/rmdir"
-cp -a "$HELLO" "$WORK/bin/hello"
-cp -a "$WC" "$WORK/bin/wc"
-cp -a "$FBDRAW" "$WORK/bin/fbdraw"
-cp -a "$TUI" "$WORK/bin/tui"
-cp -a "$NANO" "$WORK/bin/nano"
-cp -a "$NANO" "$WORK/bin/edit"
-cp -a "$DMESG" "$WORK/bin/dmesg"
-cp -a "$LOGGER" "$WORK/usr/bin/logger"
-cp -a "$SYSLOGD" "$WORK/usr/sbin/syslogd"
-cp -a "$RC" "$WORK/etc/rc"
-cp -a "$USERLAND/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
-cp -a "$USERLAND/etc/fstab" "$WORK/etc/fstab"
+# present it replaces /bin/sh (the default login shell). Renux's nano also
+# answers to "edit".
+cp -a "$WORK/bin/sh" "$WORK/bin/renux-sh"
+cp -a "$WORK/bin/nano" "$WORK/bin/edit"
+cp -a "$ETC/rc" "$WORK/etc/rc"
+cp -a "$ETC/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
+cp -a "$ETC/fstab" "$WORK/etc/fstab"
 
 # The FreeBSD userland. Renux runs FreeBSD's own programs (FreeBSD/amd64 ABI),
 # so when the base system is present (tools/get-freebsd.sh) the console login
@@ -243,7 +212,7 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     fi
 
     # The message of the day login(1) shows (login.conf's welcome=).
-    cp "$USERLAND/etc/motd.template" "$WORK/var/run/motd"
+    cp "$ETC/motd.template" "$WORK/var/run/motd"
     : > "$WORK/var/log/utx.log"
     cp "$FBSDLIB/COPYRIGHT" "$WORK/COPYRIGHT.FreeBSD"
 fi
@@ -263,10 +232,5 @@ E2FSPROGS_FAKE_TIME=1000000000 mke2fs -q -t ext2 -b 1024 -I 128 -m 0 -i 4096 \
     exit 1
 }
 
-if [ -f "$OUT" ] && cmp -s "$tmp" "$OUT"; then
-    rm -f "$tmp"
-    echo "mkrootfs: $OUT unchanged"
-else
-    mv -f "$tmp" "$OUT"
-    echo "mkrootfs: $OUT ($(wc -c < "$OUT") bytes)"
-fi
+mv -f "$tmp" "$OUT"
+echo "mkrootfs: $(wc -c < "$OUT") bytes"

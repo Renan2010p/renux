@@ -9,7 +9,7 @@ set -eu
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
 
-SYSDIR="${SYSROOT:-$ROOT/lib/zig-out/sysroot}"
+SYSDIR="${SYSROOT:-$ROOT/zig-out/sysroot}"
 
 if [ ! -f "$SYSDIR/lib/libc.a" ]; then
     "$HERE/mksysroot.sh"

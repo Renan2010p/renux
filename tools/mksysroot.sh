@@ -9,12 +9,12 @@ set -eu
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
 
-LIB="$ROOT/lib"
-OUT="${OUT:-$LIB/zig-out/sysroot}"
-ARCHIVE="$LIB/zig-out/lib/libc.a"
+LIB="$ROOT/userland/lib"
+OUT="${OUT:-$ROOT/zig-out/sysroot}"
+ARCHIVE="$ROOT/zig-out/lib/libc.a"
 
 if [ ! -f "$ARCHIVE" ]; then
-    ( cd "$LIB" && zig build )
+    ( cd "$ROOT" && zig build userland )
 fi
 
 rm -rf "$OUT"

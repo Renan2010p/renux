@@ -4,10 +4,11 @@
 #
 # Build a hybrid BIOS/UEFI bootable ISO for Renux/amd64.
 #
+# Usage: mkiso.sh <kernel> <loader.efi> <out.iso>     (run by `zig build iso`)
+#
 # Following FreeBSD's boot model (Handbook, "The FreeBSD Booting Process"),
 # the loader loads only the kernel; the root filesystem is embedded in the
-# kernel itself (MD_ROOT), so no modules travel on the medium. Build the
-# embedded image first with tools/mkrootfs.sh.
+# kernel itself (MD_ROOT), so no modules travel on the medium.
 #
 #   UEFI  the Renux loader (stand/efi/loader), from an El Torito FAT image
 #         holding \EFI\BOOT\BOOTX64.EFI, /boot/kernel/kernel and
@@ -22,29 +23,27 @@
 #   /boot/efi.img
 set -eu
 
+[ $# -eq 3 ] || {
+    echo "usage: mkiso.sh <kernel> <loader.efi> <out.iso>" >&2
+    exit 2
+}
+KERNEL="$1"
+LOADER="$2"
+OUT="$3"
+
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
-KERNEL_DIR="$ROOT/kernel"
-USERLAND="$ROOT/userland"
-
-KERNEL="${KERNEL:-$KERNEL_DIR/zig-out/bin/kernel}"
-LOADER="${LOADER:-$ROOT/stand/efi/loader/zig-out/BOOTX64.EFI}"
 DEFAULTS="${DEFAULTS:-$ROOT/stand/defaults/loader.conf}"
 CONF="${CONF:-$ROOT/stand/amd64/conf/limine/limine.conf}"
 LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
-OUT="${OUT:-$KERNEL_DIR/zig-out/renux.iso}"
-WORK="${WORK:-$KERNEL_DIR/zig-out/iso}"
+WORK="${WORK:-$(dirname -- "$OUT")/iso}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"
 fi
 
-[ -f "$KERNEL" ] || {
-    echo "mkiso: kernel not built at $KERNEL (run 'zig build buildkernel' first)" >&2
-    exit 1
-}
-[ -f "$LOADER" ] || {
-    echo "mkiso: loader not built at $LOADER (run 'zig build bootloader' first)" >&2
+[ -f "$KERNEL" ] && [ -f "$LOADER" ] || {
+    echo "mkiso: no kernel at $KERNEL or no loader at $LOADER" >&2
     exit 1
 }
 

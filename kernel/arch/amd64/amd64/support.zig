@@ -6,7 +6,7 @@
 // The counterpart of FreeBSD's sys/amd64/amd64/support.S: memcpy, memmove,
 // memset, memcmp, bcmp and strlen for this port. They are machine dependent
 // (x86-64 assembly), so they live with the port, not in kern/; each port
-// provides its own. The kernel is built without SIMD (see kernel/build.zig) and
+// provides its own. The kernel is built without SIMD (see build.zig) and
 // without compiler_rt, so these are the routines every @memcpy and @memset
 // compiles to. They never touch the SSE registers, which belong to the user
 // program the kernel is running for.
