@@ -1,8 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Copyright (C) 2026 The ZenBSD Project
+# Copyright (C) 2026 The Renux Project
 #
-# Compile a C program for ZenBSD with zig cc, against the sysroot built by
+# Compile a C program for Renux with zig cc, against the sysroot built by
 # tools/mksysroot.sh. Usage: tools/zcc hello.c -o hello
 set -eu
 
@@ -17,5 +17,5 @@ fi
 
 exec zig cc --target=x86_64-freestanding-none -nostdlib -fno-pie -no-pie \
     -isystem "$SYSDIR/include" \
-    -Wl,-T,"$SYSDIR/lib/zenbsd.ldscript" -Wl,-e,_start \
+    -Wl,-T,"$SYSDIR/lib/renux.ldscript" -Wl,-e,_start \
     "$@" "$SYSDIR/lib/libc.a"

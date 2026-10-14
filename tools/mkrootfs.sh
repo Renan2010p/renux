@@ -36,9 +36,6 @@ NANO="${NANO:-$ROOT/bin/zig-out/bin/nano}"
 DMESG="${DMESG:-$ROOT/bin/zig-out/bin/dmesg}"
 LOGGER="${LOGGER:-$ROOT/bin/zig-out/bin/logger}"
 SYSLOGD="${SYSLOGD:-$ROOT/bin/zig-out/bin/syslogd}"
-RTLD_SO="${RTLD_SO:-$ROOT/libexec/rtld-elf/zig-out/ld-elf.so.1}"
-LIBC_SO="${LIBC_SO:-$ROOT/lib/zig-out/libc.so.1}"
-DYNH="${DYNH:-$ROOT/examples/dynhello/zig-out/dynhello}"
 RC="${RC:-$ROOT/etc/rc}"
 # The FreeBSD base system (tools/get-freebsd.sh); used when it is present.
 FBSDLIB="${FBSDLIB:-$ROOT/tools/freebsd/root}"
@@ -50,7 +47,6 @@ PKGROOT="${PKGROOT:-$ROOT/tools/freebsd/pkgroot}"
 [ -f "$GETTY" ] || ( cd "$ROOT/libexec" && zig build )
 [ -f "$SH" ] || ( cd "$ROOT/bin" && zig build )
 [ -f "$LOGIN" ] || ( cd "$ROOT/usr.bin" && zig build )
-[ -f "$RTLD_SO" ] && [ -f "$LIBC_SO" ] && [ -f "$DYNH" ] || "$ROOT/tools/build-dyn.sh" >/dev/null
 
 command -v mke2fs >/dev/null 2>&1 || {
     echo "mkrootfs: 'mke2fs' is required" >&2
@@ -91,9 +87,6 @@ cp -a "$SYSLOGD" "$WORK/usr/sbin/syslogd"
 cp -a "$RC" "$WORK/etc/rc"
 cp -a "$ROOT/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
 cp -a "$ROOT/etc/fstab" "$WORK/etc/fstab"
-cp -a "$RTLD_SO" "$WORK/libexec/ld-elf.so.1"
-cp -a "$LIBC_SO" "$WORK/lib/libc.so.1"
-cp -a "$DYNH" "$WORK/bin/dynhello"
 
 # The FreeBSD userland. Renux runs FreeBSD's own programs (FreeBSD/amd64 ABI),
 # so when the base system is present (tools/get-freebsd.sh) the console login

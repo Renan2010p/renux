@@ -31,8 +31,11 @@ for the full text. Every source file carries an
 
 The "or later" wording keeps the project permanently open while allowing it to
 move to a future GPL version without asking every contributor for permission.
-Third-party code keeps its own license: the vendored FreeBSD `rtld-elf`, for
-instance, remains under its BSD-2-Clause terms.
+
+The source tree holds only Renux's own code. The FreeBSD userland that runs
+on Renux (its base system and packages) is fetched from FreeBSD's servers by
+`tools/get-freebsd.sh` and `tools/get-freebsd-pkg.sh`, and keeps its own
+licenses; it is never committed here.
 
 ## ABI
 
@@ -40,7 +43,8 @@ Renux's native system-call and C ABI is the **FreeBSD/amd64 ABI**: the same
 system-call numbers, the `syscall` instruction with carry-flag error reporting,
 the `Elf_Auxinfo` layout, the process-entry convention (`%rdi` points at argc),
 and the structures programs see (`stat`, `dirent`, `rlimit`, `timespec`, ...).
-The dynamic linker is FreeBSD's own `rtld-elf`.
+Dynamically linked programs use FreeBSD's own dynamic linker, `ld-elf.so.1`,
+from the fetched base system.
 
 A binary built for FreeBSD/amd64 should therefore run on Renux unchanged. That
 is what lets the project reuse the FreeBSD userland, and it is the road to
@@ -220,9 +224,10 @@ Working today:
   a syncer, and a read-write ext2 file system (FreeBSD's `ext2fs`), checked
   clean by `e2fsck`. FreeBSD's `mount`, `umount`, `df`, `sync` and
   `reboot`/`halt`/`poweroff`/`shutdown` run unchanged.
-- **Userland:** a Zig libc, shell and BSD-style utilities, a standalone C
-  toolchain, dynamic linking (`ld-elf.so.1` + `libc.so.1`), and a real FreeBSD
-  static binary (`/rescue/echo`).
+- **Userland:** FreeBSD's own (fetched): login with PAM, sh, the base
+  utilities, ee, and bash and GNU nano from packages, dynamically linked
+  against FreeBSD's `libc.so.7`. Renux's own: init, a Zig libc, native tools
+  and a standalone C toolchain (`tools/zcc`).
 
 Next:
 
