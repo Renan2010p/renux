@@ -219,13 +219,13 @@ fi
 
 # Pack the tree into an ext2 image. A fixed UUID and a fake time keep the image
 # byte-for-byte reproducible so an unchanged userland does not force a kernel
-# rebuild.
+# rebuild. 256-byte inodes hold timestamps past 2038 (128-byte ones cannot).
 find "$WORK" -exec touch -h -d @1000000000 {} + 2>/dev/null || true
 used_kb="$(du -sk "$WORK" | awk '{print $1}')"
 blocks=$((used_kb + used_kb / 2 + 8192))
 tmp="$WORK.img"
 rm -f "$tmp"
-E2FSPROGS_FAKE_TIME=1000000000 mke2fs -q -t ext2 -b 1024 -I 128 -m 0 -i 4096 \
+E2FSPROGS_FAKE_TIME=1000000000 mke2fs -q -t ext2 -b 1024 -I 256 -m 0 -i 4096 \
     -O ^resize_inode,^dir_index -U 00000000-0000-0000-0000-000000000000 \
     -d "$WORK" "$tmp" "$blocks" || {
     echo "mkrootfs: mke2fs failed" >&2
@@ -233,4 +233,3 @@ E2FSPROGS_FAKE_TIME=1000000000 mke2fs -q -t ext2 -b 1024 -I 128 -m 0 -i 4096 \
 }
 
 mv -f "$tmp" "$OUT"
-echo "mkrootfs: $(wc -c < "$OUT") bytes"

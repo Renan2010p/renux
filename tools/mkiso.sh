@@ -71,14 +71,18 @@ mcopy -i "$EFIIMG" "$LOADER" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$EFIIMG" "$KERNEL" ::/boot/kernel/kernel
 mcopy -i "$EFIIMG" "$DEFAULTS" ::/boot/defaults/loader.conf
 
-xorriso -as mkisofs -R -r -J \
+# The tools are chatty; their output is only shown when one of them fails.
+LOG="$WORK.log"
+if ! { xorriso -as mkisofs -R -r -J \
     -b boot/limine/limine-bios-cd.bin \
     -no-emul-boot -boot-load-size 4 -boot-info-table \
     -hfsplus -apm-block-size 2048 \
     --efi-boot boot/efi.img \
     -efi-boot-part --efi-boot-image --protective-msdos-label \
-    "$WORK" -o "$OUT"
-
-"$LIMINE/limine" bios-install "$OUT"
-
-echo "mkiso: $OUT"
+    "$WORK" -o "$OUT" &&
+    "$LIMINE/limine" bios-install "$OUT"; } >"$LOG" 2>&1; then
+    cat "$LOG" >&2
+    echo "mkiso: building $OUT failed" >&2
+    exit 1
+fi
+rm -f "$LOG"
