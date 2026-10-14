@@ -4,7 +4,7 @@
 #
 # Build the root filesystem image that is embedded in the kernel (FreeBSD's
 # MD_ROOT): stage the userland into a tree, pack it into an ext2 image, and
-# leave it at sys/root.img so sys/fs/rootimage.zig can @embedFile() it.
+# leave it at kernel/root.img so kernel/fs/rootimage.zig can @embedFile() it.
 #
 # The image is only replaced when its bytes actually change, so the kernel is
 # not rebuilt when nothing changed.
@@ -12,41 +12,42 @@ set -eu
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
-SYS="$ROOT/sys"
+KERNEL_DIR="$ROOT/kernel"
+USERLAND="$ROOT/userland"
 
-OUT="${OUT:-$SYS/root.img}"
-WORK="${WORK:-$SYS/zig-out/rootfs}"
-INIT="${INIT:-$ROOT/sbin/zig-out/bin/init}"
-GETTY="${GETTY:-$ROOT/libexec/zig-out/bin/getty}"
-LOGIN="${LOGIN:-$ROOT/usr.bin/zig-out/bin/login}"
-STAT="${STAT:-$ROOT/usr.bin/zig-out/bin/stat}"
-SH="${SH:-$ROOT/bin/zig-out/bin/sh}"
-LS="${LS:-$ROOT/bin/zig-out/bin/ls}"
-CAT="${CAT:-$ROOT/bin/zig-out/bin/cat}"
-ECHO="${ECHO:-$ROOT/bin/zig-out/bin/echo}"
-PWDCMD="${PWDCMD:-$ROOT/bin/zig-out/bin/pwd}"
-MKDIR="${MKDIR:-$ROOT/bin/zig-out/bin/mkdir}"
-RM="${RM:-$ROOT/bin/zig-out/bin/rm}"
-RMDIR="${RMDIR:-$ROOT/bin/zig-out/bin/rmdir}"
-HELLO="${HELLO:-$ROOT/bin/zig-out/bin/hello}"
-WC="${WC:-$ROOT/bin/zig-out/bin/wc}"
-FBDRAW="${FBDRAW:-$ROOT/bin/zig-out/bin/fbdraw}"
-TUI="${TUI:-$ROOT/bin/zig-out/bin/tui}"
-NANO="${NANO:-$ROOT/bin/zig-out/bin/nano}"
-DMESG="${DMESG:-$ROOT/bin/zig-out/bin/dmesg}"
-LOGGER="${LOGGER:-$ROOT/bin/zig-out/bin/logger}"
-SYSLOGD="${SYSLOGD:-$ROOT/bin/zig-out/bin/syslogd}"
-RC="${RC:-$ROOT/etc/rc}"
+OUT="${OUT:-$KERNEL_DIR/root.img}"
+WORK="${WORK:-$KERNEL_DIR/zig-out/rootfs}"
+INIT="${INIT:-$USERLAND/sbin/zig-out/bin/init}"
+GETTY="${GETTY:-$USERLAND/libexec/zig-out/bin/getty}"
+LOGIN="${LOGIN:-$USERLAND/usr/bin/zig-out/bin/login}"
+STAT="${STAT:-$USERLAND/usr/bin/zig-out/bin/stat}"
+SH="${SH:-$USERLAND/bin/zig-out/bin/sh}"
+LS="${LS:-$USERLAND/bin/zig-out/bin/ls}"
+CAT="${CAT:-$USERLAND/bin/zig-out/bin/cat}"
+ECHO="${ECHO:-$USERLAND/bin/zig-out/bin/echo}"
+PWDCMD="${PWDCMD:-$USERLAND/bin/zig-out/bin/pwd}"
+MKDIR="${MKDIR:-$USERLAND/bin/zig-out/bin/mkdir}"
+RM="${RM:-$USERLAND/bin/zig-out/bin/rm}"
+RMDIR="${RMDIR:-$USERLAND/bin/zig-out/bin/rmdir}"
+HELLO="${HELLO:-$USERLAND/bin/zig-out/bin/hello}"
+WC="${WC:-$USERLAND/bin/zig-out/bin/wc}"
+FBDRAW="${FBDRAW:-$USERLAND/bin/zig-out/bin/fbdraw}"
+TUI="${TUI:-$USERLAND/bin/zig-out/bin/tui}"
+NANO="${NANO:-$USERLAND/bin/zig-out/bin/nano}"
+DMESG="${DMESG:-$USERLAND/bin/zig-out/bin/dmesg}"
+LOGGER="${LOGGER:-$USERLAND/bin/zig-out/bin/logger}"
+SYSLOGD="${SYSLOGD:-$USERLAND/bin/zig-out/bin/syslogd}"
+RC="${RC:-$USERLAND/etc/rc}"
 # The FreeBSD base system (tools/get-freebsd.sh); used when it is present.
 FBSDLIB="${FBSDLIB:-$ROOT/tools/freebsd/root}"
 # FreeBSD packages (tools/get-freebsd-pkg.sh: bash, nano); used when present.
 PKGROOT="${PKGROOT:-$ROOT/tools/freebsd/pkgroot}"
 
 # Build whatever is missing.
-[ -f "$INIT" ] || ( cd "$ROOT/sbin" && zig build )
-[ -f "$GETTY" ] || ( cd "$ROOT/libexec" && zig build )
-[ -f "$SH" ] || ( cd "$ROOT/bin" && zig build )
-[ -f "$LOGIN" ] || ( cd "$ROOT/usr.bin" && zig build )
+[ -f "$INIT" ] || ( cd "$USERLAND/sbin" && zig build )
+[ -f "$GETTY" ] || ( cd "$USERLAND/libexec" && zig build )
+[ -f "$SH" ] || ( cd "$USERLAND/bin" && zig build )
+[ -f "$LOGIN" ] || ( cd "$USERLAND/usr/bin" && zig build )
 
 command -v mke2fs >/dev/null 2>&1 || {
     echo "mkrootfs: 'mke2fs' is required" >&2
@@ -85,8 +86,8 @@ cp -a "$DMESG" "$WORK/bin/dmesg"
 cp -a "$LOGGER" "$WORK/usr/bin/logger"
 cp -a "$SYSLOGD" "$WORK/usr/sbin/syslogd"
 cp -a "$RC" "$WORK/etc/rc"
-cp -a "$ROOT/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
-cp -a "$ROOT/etc/fstab" "$WORK/etc/fstab"
+cp -a "$USERLAND/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
+cp -a "$USERLAND/etc/fstab" "$WORK/etc/fstab"
 
 # The FreeBSD userland. Renux runs FreeBSD's own programs (FreeBSD/amd64 ABI),
 # so when the base system is present (tools/get-freebsd.sh) the console login
@@ -242,7 +243,7 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     fi
 
     # The message of the day login(1) shows (login.conf's welcome=).
-    cp "$ROOT/etc/motd.template" "$WORK/var/run/motd"
+    cp "$USERLAND/etc/motd.template" "$WORK/var/run/motd"
     : > "$WORK/var/log/utx.log"
     cp "$FBSDLIB/COPYRIGHT" "$WORK/COPYRIGHT.FreeBSD"
 fi

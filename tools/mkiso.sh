@@ -24,15 +24,16 @@ set -eu
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
-SYS="$ROOT/sys"
+KERNEL_DIR="$ROOT/kernel"
+USERLAND="$ROOT/userland"
 
-KERNEL="${KERNEL:-$SYS/zig-out/bin/kernel}"
+KERNEL="${KERNEL:-$KERNEL_DIR/zig-out/bin/kernel}"
 LOADER="${LOADER:-$ROOT/stand/efi/loader/zig-out/BOOTX64.EFI}"
 DEFAULTS="${DEFAULTS:-$ROOT/stand/defaults/loader.conf}"
 CONF="${CONF:-$ROOT/stand/amd64/conf/limine/limine.conf}"
 LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
-OUT="${OUT:-$SYS/zig-out/renux.iso}"
-WORK="${WORK:-$SYS/zig-out/iso}"
+OUT="${OUT:-$KERNEL_DIR/zig-out/renux.iso}"
+WORK="${WORK:-$KERNEL_DIR/zig-out/iso}"
 
 if [ ! -x "$LIMINE/limine" ]; then
     "$HERE/get-limine.sh"

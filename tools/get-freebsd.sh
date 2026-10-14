@@ -7,7 +7,7 @@
 # Renux speaks the FreeBSD/amd64 ABI, so it runs FreeBSD's own programs
 # (login, getty, sh, the base utilities) unchanged. This downloads the base
 # set of the FreeBSD release whose osreldate the kernel reports
-# (sys/kern/kern_sysctl.zig), checks it against a pinned SHA-256 and unpacks
+# (kernel/core/kern_sysctl.zig), checks it against a pinned SHA-256 and unpacks
 # it into tools/freebsd/root. Nothing here is committed; tools/mkrootfs.sh
 # copies the parts the root image needs (FBSDLIB=tools/freebsd/root).
 #

@@ -15,7 +15,7 @@ pub fn build(b: *Builder) void {
 
     // The kernel console's font, so loader and kernel text look the same.
     const font_mod: *Builder.Module = b.createModule(.{
-        .root_source_file = b.path("../../../sys/dev/wsfont/spleen8x16.zig"),
+        .root_source_file = b.path("../../../kernel/dev/wsfont/spleen8x16.zig"),
         .target = target,
         .optimize = optimize,
     });
