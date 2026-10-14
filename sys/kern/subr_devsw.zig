@@ -30,7 +30,14 @@ const dev_ops: file.FileOps = .{
     .mmap = devMmap,
     .stat = devStat,
     .close = devClose,
+    .poll = devPoll,
 };
+
+fn devPoll(f: *file.File) u16 {
+    const df: *DevFile = cast(f);
+    const hook = df.cdev.poll orelse return file.POLLIN | file.POLLOUT;
+    return hook(df.ctx);
+}
 
 fn cast(f: *file.File) *DevFile {
     const raw: ?*anyopaque = f.f_data;

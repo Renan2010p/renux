@@ -87,7 +87,17 @@ fn pathArg(number: u64) ?usize {
     };
 }
 
-fn dispatch(number: u64, args: [sys.MAXARGS]u64) u64 {
+fn dispatch(number_in: u64, args_in: [sys.MAXARGS]u64) u64 {
+    // syscall(2) (0) and __syscall(2) (198): the real number comes first and
+    // the arguments follow it (FreeBSD's nosys indirection in
+    // amd64_syscall's cpu_fetch_syscall_args). libthr's fork goes this way.
+    var number: u64 = number_in;
+    var args: [sys.MAXARGS]u64 = args_in;
+    if (number == 0 or number == 198) {
+        number = args_in[0];
+        args = .{ args_in[1], args_in[2], args_in[3], args_in[4], args_in[5], 0 };
+        if (number == 0 or number == 198) return nosys(number);
+    }
     if (number >= syscalls.table.len) {
         return nosys(number);
     }

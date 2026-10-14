@@ -27,6 +27,9 @@ pub const Cdevsw: type = struct {
     mmap: ?*const fn (ctx: ?*anyopaque, offset: u64, prot: u32) ?u64 = null,
     /// Called when the last reference to the open file is dropped.
     close: *const fn (ctx: ?*anyopaque) i32,
+    /// Readiness for poll(2)/select(2), as FreeBSD's d_poll: the POLL* bits
+    /// that hold now. Devices without it are always ready.
+    poll: ?*const fn (ctx: ?*anyopaque) u16 = null,
 };
 
 /// The registered character devices, by major number.

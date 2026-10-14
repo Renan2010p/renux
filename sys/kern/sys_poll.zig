@@ -18,6 +18,9 @@ const kern_sched: type = @import("kern_sched.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
 const file: type = @import("../sys/file.zig");
+const proc: type = @import("../sys/proc.zig");
+const kern_signal: type = @import("kern_signal.zig");
+const kern_time: type = @import("kern_time.zig");
 
 /// Largest pollfd array accepted.
 const MAXPOLL: usize = 256;
@@ -103,4 +106,107 @@ pub fn sysPoll(args: [sys.MAXARGS]u64) u64 {
         // Sleep until the next tick (or input) and re-check.
         kern_sched.sleep(arch.clock.pollChannel());
     }
+}
+
+// -- select(2) and pselect(2) ----------------------------------------------------
+//
+// Same readiness as poll(2), on FreeBSD's fd_set bitmaps (arrays of 64-bit
+// words), as in FreeBSD's sys_generic.c kern_select().
+
+const fd_set_bits: usize = 64;
+
+fn fdIsSet(set: u64, fd: usize) bool {
+    if (set == 0) return false;
+    const words: [*]align(1) const u64 = @ptrFromInt(set);
+    return (words[fd / fd_set_bits] >> @intCast(fd % fd_set_bits)) & 1 != 0;
+}
+
+fn fdZeroUpTo(set: u64, nd: usize) void {
+    if (set == 0) return;
+    const words: [*]align(1) u64 = @ptrFromInt(set);
+    var i: usize = 0;
+    while (i * fd_set_bits < nd) : (i += 1) words[i] = 0;
+}
+
+fn fdSet(set: u64, fd: usize) void {
+    const words: [*]align(1) u64 = @ptrFromInt(set);
+    words[fd / fd_set_bits] |= @as(u64, 1) << @intCast(fd % fd_set_bits);
+}
+
+/// The common body: `until` is the tick deadline (null: wait forever).
+fn selectCommon(nd_in: u64, rd: u64, wr: u64, ex: u64, until: ?u64) u64 {
+    const p = kern_proc.current;
+    const nd: usize = @intCast(@min(nd_in, proc.NFILE));
+    // Snapshot the requested sets: the user's are overwritten with results.
+    var want_r: [proc.NFILE]bool = @splat(false);
+    var want_w: [proc.NFILE]bool = @splat(false);
+    var fd: usize = 0;
+    while (fd < nd) : (fd += 1) {
+        want_r[fd] = fdIsSet(rd, fd);
+        want_w[fd] = fdIsSet(wr, fd);
+        if ((want_r[fd] or want_w[fd]) and kern_descrip.fdGetfile(p, fd) == null) return sys.signed(-errno.EBADF);
+    }
+    while (true) {
+        var ready: u64 = 0;
+        var got_r: [proc.NFILE]bool = @splat(false);
+        var got_w: [proc.NFILE]bool = @splat(false);
+        fd = 0;
+        while (fd < nd) : (fd += 1) {
+            if (!want_r[fd] and !want_w[fd]) continue;
+            const ev: u16 = @bitCast(readiness(@intCast(fd), @bitCast(@as(u16, file.POLLIN | file.POLLOUT))));
+            if (want_r[fd] and (ev & (file.POLLIN | file.POLLHUP)) != 0) {
+                got_r[fd] = true;
+                ready += 1;
+            }
+            if (want_w[fd] and (ev & (file.POLLOUT | file.POLLERR)) != 0) {
+                got_w[fd] = true;
+                ready += 1;
+            }
+        }
+        const timed_out: bool = if (until) |d| arch.clock.tickCount() >= d else false;
+        if (ready > 0 or timed_out) {
+            fdZeroUpTo(rd, nd);
+            fdZeroUpTo(wr, nd);
+            fdZeroUpTo(ex, nd); // no exceptional conditions are reported
+            fd = 0;
+            while (fd < nd) : (fd += 1) {
+                if (got_r[fd]) fdSet(rd, fd);
+                if (got_w[fd]) fdSet(wr, fd);
+            }
+            return ready;
+        }
+        if (kern_signal.interrupted(p)) return sys.signed(-errno.EINTR);
+        kern_sched.sleep(arch.clock.pollChannel());
+    }
+}
+
+fn ticksFrom(sec: i64, sub: i64, sub_per_sec: u64) u64 {
+    const hz: u64 = arch.clock.HZ;
+    return arch.clock.tickCount() + @as(u64, @intCast(@max(sec, 0))) * hz +
+        (@as(u64, @intCast(@max(sub, 0))) * hz + sub_per_sec - 1) / sub_per_sec;
+}
+
+/// select(2): `select(nd, readfds, writefds, exceptfds, timeval *timeout)`.
+pub fn sysSelect(args: [sys.MAXARGS]u64) u64 {
+    var until: ?u64 = null;
+    if (args[4] != 0) {
+        const tv: *align(1) const kern_time.Timeval = @ptrFromInt(args[4]);
+        until = ticksFrom(tv.tv_sec, tv.tv_usec, 1_000_000);
+    }
+    return selectCommon(args[0], args[1], args[2], args[3], until);
+}
+
+/// pselect(2): select with a timespec and a signal mask held for the wait.
+pub fn sysPselect(args: [sys.MAXARGS]u64) u64 {
+    const p = kern_proc.current;
+    var until: ?u64 = null;
+    if (args[4] != 0) {
+        const ts: *align(1) const kern_time.Timespec = @ptrFromInt(args[4]);
+        until = ticksFrom(ts.tv_sec, ts.tv_nsec, 1_000_000_000);
+    }
+    const saved: u64 = p.sig_mask;
+    if (args[5] != 0) p.sig_mask = @as(*align(1) const u64, @ptrFromInt(args[5])).*;
+    const r: u64 = selectCommon(args[0], args[1], args[2], args[3], until);
+    p.sig_mask = saved;
+    return r;
 }

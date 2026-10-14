@@ -118,4 +118,8 @@ pub const Vnode: type = struct {
     v_holdcnt: u32,
     /// Inode number, unique within the filesystem (used by stat/fstat).
     v_ino: u64,
+    /// flock(2) advisory lock: the open file holding it exclusively, or the
+    /// number of open files holding it shared (see kern/kern_lockf.zig).
+    v_lock_excl: ?*anyopaque = null,
+    v_lock_shared: u32 = 0,
 };

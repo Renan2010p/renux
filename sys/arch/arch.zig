@@ -77,6 +77,15 @@ pub const machine_cpu: type = machdep_impl.machine_cpu;
 /// Machine parameters (FreeBSD's <machine/param.h>): MACHINE, MACHINE_ARCH.
 pub const machine_param: type = machdep_impl.machine_param;
 
+/// User FPU state: save and restore on context switch.
+pub const fpu: type = machdep_impl.fpu;
+
+/// Signal frames, sigreturn and machine contexts.
+pub const exec_machdep: type = machdep_impl.exec_machdep;
+
+/// The machine context layout (mcontext_t).
+pub const ucontext: type = machdep_impl.ucontext;
+
 /// Boot protocol bindings provided by the port.
 pub const boot: type = machdep_impl.boot;
 

@@ -66,4 +66,8 @@ pub const File: type = struct {
     /// name. Null for everything else.
     f_path: ?[*]u8 = null,
     f_pathlen: usize = 0,
+    /// The flock(2) lock this open file holds on its vnode.
+    f_lock: Lock = .none,
+
+    pub const Lock = enum { none, shared, exclusive };
 };

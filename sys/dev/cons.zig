@@ -263,6 +263,13 @@ fn cnioctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
 }
 
 /// The /dev/console character device switch.
+fn cnpoll(ctx: ?*anyopaque) u16 {
+    _ = ctx;
+    const POLLIN: u16 = 0x0001;
+    const POLLOUT: u16 = 0x0004;
+    return POLLOUT | (if (cnInputReady()) POLLIN else 0);
+}
+
 const cons_cdevsw: conf.Cdevsw = .{
     .name = "console",
     .open = cnopen,
@@ -270,6 +277,7 @@ const cons_cdevsw: conf.Cdevsw = .{
     .write = cnwriteDev,
     .ioctl = cnioctl,
     .close = cnclose,
+    .poll = cnpoll,
 };
 
 fn consAttachDev(_: ?*const anyopaque) callconv(.c) void {

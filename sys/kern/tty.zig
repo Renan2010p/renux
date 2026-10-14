@@ -16,6 +16,7 @@ const consio: type = @import("../sys/consio.zig");
 const signal: type = @import("../sys/signal.zig");
 const errno: type = @import("../sys/errno.zig");
 const cons: type = @import("../dev/cons.zig");
+const file: type = @import("../sys/file.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_signal: type = @import("kern_signal.zig");
 
@@ -38,9 +39,18 @@ pub const Tty: type = struct {
     have_line: bool,
     /// A control character asked the reader to interrupt its read.
     interrupt: bool,
-    /// Process last attached, to receive generated signals.
-    fg_pid: i32,
+    /// The session this is the controlling terminal of (0: none) and its
+    /// foreground process group, which receives the signals ^C, ^\ and ^Z
+    /// generate and alone may read.
+    sid: i32,
+    pgrp: i32,
+    /// A process is inside the line discipline (it may be preempted there),
+    /// so rint() must not run it concurrently.
+    busy: bool,
 };
+
+/// The terminals initialised so far (the console is the only one).
+var ttys: [1]?*Tty = .{null};
 
 /// Prepare a terminal with the default attributes.
 pub fn init(t: *Tty) void {
@@ -51,7 +61,56 @@ pub fn init(t: *Tty) void {
     t.ready_pos = 0;
     t.have_line = false;
     t.interrupt = false;
-    t.fg_pid = 0;
+    t.sid = 0;
+    t.pgrp = 0;
+    t.busy = false;
+    ttys[0] = t;
+}
+
+/// Run typed characters through the line discipline even when nobody reads
+/// the terminal, so ^C and ^Z reach a foreground job that is busy or asleep
+/// (FreeBSD does this from the keyboard interrupt, ttydisc_rint). Called by
+/// the scheduler between processes.
+pub fn rint() void {
+    for (ttys) |maybe| {
+        const t = maybe orelse continue;
+        // Only for a controlling terminal: before a session owns it there
+        // is no foreground group to signal.
+        if (t.busy or t.pgrp == 0 or !cons.cnInputReady()) continue;
+        t.busy = true;
+        while (cons.cngetcPoll()) |c| {
+            input(t, c);
+        }
+        t.busy = false;
+    }
+}
+
+/// A session leader exited: the terminal it controlled is released and its
+/// foreground group gets SIGHUP (and SIGCONT, should it be stopped).
+pub fn sessionExit(sid: i32) void {
+    for (ttys) |maybe| {
+        const t = maybe orelse continue;
+        if (t.sid != sid) continue;
+        if (t.pgrp != 0) {
+            _ = kern_signal.gsignal(t.pgrp, signal.SIGHUP);
+            _ = kern_signal.gsignal(t.pgrp, signal.SIGCONT);
+        }
+        t.sid = 0;
+        t.pgrp = 0;
+    }
+}
+
+/// Post the signal a control character generates: to the foreground group,
+/// or, on a terminal no session controls, to the process using it. Returns
+/// whether anyone received it.
+fn ttySignal(t: *Tty, sig: u32) bool {
+    if (t.pgrp != 0) {
+        return kern_signal.gsignal(t.pgrp, sig) > 0;
+    }
+    const p: *@import("../sys/proc.zig").Proc = kern_proc.current;
+    if (kern_signal.handler(p, sig) == signal.SIG_IGN) return false;
+    kern_signal.psignal(p, sig);
+    return true;
 }
 
 /// Echo one byte to the terminal.
@@ -64,19 +123,28 @@ fn echo(t: *Tty, c: u8) void {
 pub fn input(t: *Tty, c: u8) void {
     const lflag: u32 = t.termios.c_lflag;
 
-    if ((lflag & termios.ISIG) != 0 and c == t.termios.c_cc[termios.VINTR]) {
-        // ^C: discard the line and post SIGINT to the reading process, unless
-        // it ignores the signal.
-        t.line_len = 0;
-        echo(t, '^');
-        echo(t, 'C');
-        echo(t, '\n');
-        const p: *@import("../sys/proc.zig").Proc = kern_proc.current;
-        if (kern_signal.handler(p, signal.SIGINT) != signal.SIG_IGN) {
-            kern_signal.psignal(p, signal.SIGINT);
-            t.interrupt = true;
+    if ((lflag & termios.ISIG) != 0) {
+        // ^C, ^\ and ^Z: discard the line and signal the foreground group.
+        const sig: u32 = if (c == t.termios.c_cc[termios.VINTR])
+            signal.SIGINT
+        else if (c == t.termios.c_cc[termios.VQUIT])
+            signal.SIGQUIT
+        else if (c == t.termios.c_cc[termios.VSUSP])
+            signal.SIGTSTP
+        else
+            0;
+        if (sig != 0) {
+            t.line_len = 0;
+            if ((lflag & termios.ECHO) != 0) {
+                echo(t, '^');
+                echo(t, c + '@');
+                echo(t, '\n');
+            }
+            if (ttySignal(t, sig) and sig != signal.SIGTSTP) {
+                t.interrupt = true;
+            }
+            return;
         }
-        return;
     }
 
     if ((lflag & termios.ICANON) == 0) {
@@ -131,13 +199,40 @@ pub fn input(t: *Tty, c: u8) void {
     }
 }
 
-/// Read up to `buf.len` bytes from the terminal, draining the device first.
-/// Returns -EAGAIN when no completed line is ready.
-pub fn read(t: *Tty, buf: []u8) isize {
-    // Pull whatever the hardware has and run it through the line discipline.
+/// Readiness for poll(2): whether a read would return data now (a whole line
+/// in canonical mode, any character in raw mode), after running pending
+/// input through the line discipline. Output never blocks.
+pub fn poll(t: *Tty) u16 {
+    t.busy = true;
     while (cons.cngetcPoll()) |c| {
         input(t, c);
     }
+    t.busy = false;
+    var ev: u16 = file.POLLOUT;
+    if (t.have_line or t.interrupt) ev |= file.POLLIN;
+    return ev;
+}
+
+/// Read up to `buf.len` bytes from the terminal, draining the device first.
+/// Returns -EAGAIN when no completed line is ready.
+pub fn read(t: *Tty, buf: []u8) isize {
+    // Only the foreground group reads its controlling terminal. A
+    // background reader is stopped with SIGTTIN; it waits (see sysRead) and
+    // tries again once continued. If it would not stop, it gets EIO.
+    const p: *@import("../sys/proc.zig").Proc = kern_proc.current;
+    if (t.sid != 0 and p.sid == t.sid and t.pgrp != 0 and p.pgid != t.pgrp) {
+        if (kern_signal.ignoredOrBlocked(p, signal.SIGTTIN)) {
+            return -errno.EIO;
+        }
+        _ = kern_signal.gsignal(p.pgid, signal.SIGTTIN);
+        return -errno.EAGAIN;
+    }
+    // Pull whatever the hardware has and run it through the line discipline.
+    t.busy = true;
+    while (cons.cngetcPoll()) |c| {
+        input(t, c);
+    }
+    t.busy = false;
     if (t.interrupt) {
         t.interrupt = false;
         return -errno.EINTR;
@@ -200,14 +295,54 @@ pub fn ioctl(t: *Tty, cmd: u64, arg: u64) i32 {
             copyIn(@ptrCast(&t.winsize), src, @sizeOf(termios.Winsize));
             return 0;
         },
-        ttycom.TIOCGPGRP => {
+        ttycom.TIOCSCTTY => {
+            // A session leader without a terminal takes this one, unless
+            // another live session holds it (root may steal it with arg 1).
+            const p = kern_proc.current;
+            if (p.sid != p.pid) return -@as(i32, errno.EPERM);
+            if (t.sid == p.sid) return 0;
+            if (t.sid != 0 and kern_proc.pfind(t.sid) != null and !(arg == 1 and p.euid == 0)) {
+                return -@as(i32, errno.EPERM);
+            }
+            t.sid = p.sid;
+            t.pgrp = p.pgid;
+            return 0;
+        },
+        ttycom.TIOCNOTTY => {
+            const p = kern_proc.current;
+            if (t.sid != p.sid) return -@as(i32, errno.ENOTTY);
+            if (p.sid == p.pid) sessionExit(p.sid);
+            return 0;
+        },
+        ttycom.TIOCGSID => {
+            if (t.sid == 0 or t.sid != kern_proc.current.sid) return -@as(i32, errno.ENOTTY);
             const dst: *align(1) i32 = @ptrFromInt(arg);
-            dst.* = t.fg_pid;
+            dst.* = t.sid;
+            return 0;
+        },
+        ttycom.TIOCGPGRP => {
+            // Only for the caller's own controlling terminal.
+            if (t.sid == 0 or t.sid != kern_proc.current.sid) return -@as(i32, errno.ENOTTY);
+            const dst: *align(1) i32 = @ptrFromInt(arg);
+            dst.* = t.pgrp;
             return 0;
         },
         ttycom.TIOCSPGRP => {
+            // The new foreground group must belong to the terminal's session.
+            const p = kern_proc.current;
+            if (t.sid == 0 or t.sid != p.sid) return -@as(i32, errno.ENOTTY);
             const src: *align(1) const i32 = @ptrFromInt(arg);
-            t.fg_pid = src.*;
+            const pgid: i32 = src.*;
+            if (pgid <= 0) return -@as(i32, errno.EINVAL);
+            var ok: bool = false;
+            for (&kern_proc.table) |*q| {
+                if (q.state != .unused and q.state != .zombie and q.pgid == pgid and q.sid == p.sid) {
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) return -@as(i32, errno.EPERM);
+            t.pgrp = pgid;
             return 0;
         },
         consio.KDGETMODE => {

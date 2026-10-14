@@ -26,6 +26,8 @@ pub const State: type = enum(u8) {
     running,
     sleeping,
     zombie,
+    /// Stopped by a job-control signal until SIGCONT.
+    stopped,
 };
 
 /// Supplementary groups a process may hold (FreeBSD allows more; login
@@ -72,7 +74,18 @@ pub const Proc: type = struct {
     pid: i32,
     state: State,
     parent: ?*Proc,
+    /// Status wait(2) reports once the process is a zombie: the exit code in
+    /// bits 8..15, or the terminating signal in the low 7 bits.
     exit_status: i32,
+    /// Process group and session (FreeBSD's p_pgrp and its pg_session),
+    /// named by their leaders' pids.
+    pgid: i32,
+    sid: i32,
+    /// The signal that stopped the process, waiting to be reported to the
+    /// parent by wait(2) with WUNTRACED (0: nothing to report).
+    stop_sig: u32,
+    /// Continued by SIGCONT, waiting to be reported with WCONTINUED.
+    cont_report: bool,
     /// Physical address of the top-level page table (CR3 value).
     pmap: u64,
     /// Kernel stack: physical page (for freeing) and top virtual address.
@@ -134,10 +147,20 @@ pub const Proc: type = struct {
     /// Scheduling priority set with setpriority(2) (-20..20); recorded, the
     /// round-robin scheduler does not weigh it yet.
     nice: i32,
+    /// thr_wake(2) arrived for the (only) thread; thr_suspend(2) consumes it.
+    thr_woken: bool,
     /// Pending signal bits.
     sig_pending: u64,
     /// Blocked signal bits.
     sig_mask: u64,
     /// Handler per signal (SIG_DFL/SIG_IGN or a user address).
     sig_handler: [signal.NSIG]u64,
+    /// sa_flags and sa_mask of each signal's action.
+    sig_flags: [signal.NSIG]u32,
+    sig_actmask: [signal.NSIG]u64,
+    /// The mask sigsuspend(2) replaced, to be restored once the signal that
+    /// ended it is handled (FreeBSD's td_oldsigmask).
+    sig_oldmask: ?u64,
+    /// The process's x87/SSE registers while it is not running.
+    fpu: arch.fpu.Savefpu,
 };

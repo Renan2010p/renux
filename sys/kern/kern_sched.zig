@@ -11,6 +11,7 @@
 const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const tty: type = @import("tty.zig");
 const prf: type = @import("subr_prf.zig");
 const param: type = @import("../sys/param.zig");
 
@@ -56,6 +57,9 @@ pub fn scheduler() noreturn {
         in_scheduler = true;
         var found: bool = false;
 
+        // Typed control characters signal the foreground job promptly.
+        tty.rint();
+
         for (&kern_proc.table) |*p| {
             if (p.state != .runnable) {
                 continue;
@@ -72,6 +76,8 @@ pub fn scheduler() noreturn {
             }
             // Restore the process's user thread pointer (TLS base).
             arch.cpu.setFsBase(p.fsbase);
+            // And its FPU registers (saved by sched() when it stopped).
+            arch.fpu.fpurestore(&p.fpu);
             in_scheduler = false;
             arch.swtch.swtch(&sched_ctx, &p.context);
         }
@@ -104,6 +110,7 @@ fn checkStack() void {
 /// Give up the CPU and let the scheduler pick another process.
 pub fn sched() void {
     checkStack();
+    arch.fpu.fpusave(&kern_proc.current.fpu);
     arch.swtch.swtch(&kern_proc.current.context, &sched_ctx);
 }
 

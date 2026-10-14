@@ -146,6 +146,30 @@ pub fn sysPread(args: [sys.MAXARGS]u64) u64 {
     return @intCast(n);
 }
 
+/// pwrite(2): write at an explicit offset, leaving the file offset alone.
+pub fn sysPwrite(args: [sys.MAXARGS]u64) u64 {
+    const fd: u64 = args[0];
+    const buf: u64 = args[1];
+    const count: u64 = args[2];
+    const off: i64 = @bitCast(args[3]);
+    if (off < 0) return sys.signed(-errno.EINVAL);
+
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
+    if ((f.f_flag & file.FWRITE) == 0) {
+        return sys.signed(-errno.EBADF);
+    }
+    if (f.f_type != file.DTYPE_VNODE) return sys.signed(-errno.ESPIPE);
+    const saved: u64 = f.f_offset;
+    f.f_offset = @intCast(off);
+    const bytes: [*]const u8 = @ptrFromInt(buf);
+    const n: isize = f.f_ops.write(f, bytes[0..@intCast(count)]);
+    f.f_offset = saved;
+    if (n < 0) {
+        return sys.signed(n);
+    }
+    return @intCast(n);
+}
+
 /// fcntl(2): implement the descriptor flags a C library probes. File status
 /// flags are derived from the descriptor's read/write mode; everything else is
 /// accepted and ignored.

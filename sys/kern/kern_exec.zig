@@ -124,14 +124,13 @@ pub fn trampolineVa() u64 {
     return arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
 }
 
-/// Map the sigreturn trampoline: a page whose first bytes execute the
-/// sigreturn system call, used as the return address of a signal handler.
+/// Map the signal trampoline: a page holding the port's sigcode, where a
+/// process resumes to run a signal handler and then call sigreturn(2).
 pub fn mapTrampoline(pmap: arch.pmap.Pmap) bool {
     const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
 
-    // mov eax, SYS_sigreturn (417); int 0x80
-    const stub: [7]u8 = .{ 0xb8, 0xa1, 0x01, 0x00, 0x00, 0xcd, 0x80 };
+    const stub = arch.exec_machdep.sigcode;
     const dst: [*]u8 = @ptrFromInt(pa + hhdm);
     var i: usize = 0;
     while (i < stub.len) : (i += 1) {
@@ -509,10 +508,16 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     // ones stay ignored (POSIX).
     var sg: usize = 0;
     while (sg < signal.NSIG) : (sg += 1) {
+        p.sig_flags[sg] = 0;
+        p.sig_actmask[sg] = 0;
         if (p.sig_handler[sg] != signal.SIG_IGN) {
             p.sig_handler[sg] = signal.SIG_DFL;
         }
     }
+
+    // The new image starts with a clean FPU (FreeBSD's fpstate_drop).
+    p.fpu = arch.fpu.initial();
+    arch.fpu.fpurestore(&p.fpu);
 
     // Descriptors marked close-on-exec do not survive the new image.
     kern_descrip.fdCloseOnExec(p);

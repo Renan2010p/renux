@@ -21,3 +21,6 @@ tools/limine/
 
 # Downloaded FreeBSD base system (see tools/get-freebsd.sh)
 tools/freebsd/
+
+# Built package helper (see tools/pkgtool)
+tools/pkgtool/pkgtool

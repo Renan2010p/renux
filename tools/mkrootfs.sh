@@ -42,6 +42,8 @@ DYNH="${DYNH:-$ROOT/examples/dynhello/zig-out/dynhello}"
 RC="${RC:-$ROOT/etc/rc}"
 # The FreeBSD base system (tools/get-freebsd.sh); used when it is present.
 FBSDLIB="${FBSDLIB:-$ROOT/tools/freebsd/root}"
+# FreeBSD packages (tools/get-freebsd-pkg.sh: bash, nano); used when present.
+PKGROOT="${PKGROOT:-$ROOT/tools/freebsd/pkgroot}"
 
 # Build whatever is missing.
 [ -f "$INIT" ] || ( cd "$ROOT/sbin" && zig build )
@@ -116,16 +118,19 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         usr/bin/false usr/bin/yes usr/bin/printf usr/bin/which
         usr/bin/stat usr/bin/du usr/bin/tee usr/bin/xargs usr/bin/logname
         usr/bin/tty usr/bin/uptime usr/bin/w usr/bin/who usr/bin/hexdump
-        usr/bin/fortune usr/bin/resizewin
+        usr/bin/fortune usr/bin/resizewin usr/bin/ee
+        usr/sbin/pwd_mkdb sbin/ldconfig
     "
+    # Programs from FreeBSD packages, when they have been fetched.
+    FBSD_PKG_PROGS="usr/local/bin/bash usr/local/bin/nano"
     # PAM modules the login service stack loads (etc/pam.d/login, system).
     FBSD_PAM="pam_self pam_unix pam_securetty pam_nologin pam_login_access
         pam_lastlog pam_xdg pam_permit pam_deny"
 
     # Locate a library by soname in the FreeBSD library directories.
     fbsd_findlib() {
-        for d in lib usr/lib; do
-            if [ -e "$FBSDLIB/$d/$1" ]; then
+        for d in lib usr/lib usr/local/lib; do
+            if [ -e "$FBSDLIB/$d/$1" ] || [ -e "$PKGROOT/$d/$1" ]; then
                 echo "$d/$1"
                 return 0
             fi
@@ -133,18 +138,28 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         return 1
     }
 
+    # Where a FreeBSD file comes from: the base system, else the packages.
+    fbsd_src() {
+        if [ -e "$FBSDLIB/$1" ]; then
+            echo "$FBSDLIB/$1"
+        else
+            echo "$PKGROOT/$1"
+        fi
+    }
+
     # Install one file (and, for an ELF object, its libraries, recursively).
     fbsd_install() {
         rel="$1"
         grep -qx "$rel" "$WORK/.fbsd-$$" && return 0
-        [ -e "$FBSDLIB/$rel" ] || {
+        src="$(fbsd_src "$rel")"
+        [ -e "$src" ] || {
             echo "mkrootfs: FreeBSD file $rel not found" >&2
             return 0
         }
         echo "$rel" >> "$WORK/.fbsd-$$"
         mkdir -p "$WORK/$(dirname "$rel")"
-        cp -L "$FBSDLIB/$rel" "$WORK/$rel"
-        for lib in $(readelf -d "$FBSDLIB/$rel" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+        cp -L "$src" "$WORK/$rel"
+        for lib in $(readelf -d "$src" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
             libpath="$(fbsd_findlib "$lib")" || {
                 echo "mkrootfs: $rel needs $lib, not found" >&2
                 continue
@@ -158,6 +173,9 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     for prog in $FBSD_PROGS; do
         fbsd_install "$prog"
     done
+    for prog in $FBSD_PKG_PROGS; do
+        [ -e "$PKGROOT/$prog" ] && fbsd_install "$prog"
+    done
     for mod in $FBSD_PAM; do
         fbsd_install "usr/lib/$mod.so.6"
         ln -sf "$mod.so.6" "$WORK/usr/lib/$mod.so"
@@ -168,15 +186,19 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     ln -sf test "$WORK/bin/["
 
     # A native Renux tool in /bin would shadow FreeBSD's copy of the same
-    # command in /usr/bin (PATH searches /bin first): let FreeBSD's win.
-    for prog in $FBSD_PROGS; do
+    # command in /usr/bin or a package's in /usr/local/bin (PATH searches
+    # /bin first): let FreeBSD's win.
+    for prog in $FBSD_PROGS $FBSD_PKG_PROGS; do
         case "$prog" in
-        usr/bin/*)
-            name="${prog#usr/bin/}"
+        usr/bin/* | usr/local/bin/*)
+            name="${prog##*/}"
+            [ -e "$WORK/$prog" ] || continue
             [ -e "$WORK/bin/$name" ] && ! grep -qx "bin/$name" "$WORK/.fbsd-list" && rm -f "$WORK/bin/$name"
             ;;
         esac
     done
+    # Renux's own nano is also installed as "edit"; GNU nano replaces both.
+    [ -e "$WORK/usr/local/bin/nano" ] && rm -f "$WORK/bin/edit"
     rm -f "$WORK/.fbsd-list"
 
     # Configuration the login path reads: accounts (passwd and its databases),
@@ -210,6 +232,18 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         mkdir -p "$WORK/usr/share/games/fortune"
         cp "$FBSDLIB"/usr/share/games/fortune/freebsd-tips* "$WORK/usr/share/games/fortune/"
     }
+    # bash (GPL) as root's login shell when the package is present, as
+    # chsh(1) would set it: the shell field of the account, /etc/shells, and
+    # the password databases rebuilt by pwd_mkdb(8) at boot (/etc/rc), since
+    # it is a FreeBSD program and does not run on the build host.
+    if [ -e "$WORK/usr/local/bin/bash" ]; then
+        sed -i 's|^\(root:[^:]*:0:0:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*\):/bin/sh$|\1:/usr/local/bin/bash|' "$WORK/etc/master.passwd"
+        sed -i 's|^\(root:[^:]*:0:0:[^:]*:[^:]*\):/bin/sh$|\1:/usr/local/bin/bash|' "$WORK/etc/passwd"
+        grep -qx /usr/local/bin/bash "$WORK/etc/shells" || echo /usr/local/bin/bash >> "$WORK/etc/shells"
+        rm -f "$WORK/etc/pwd.db" "$WORK/etc/spwd.db"
+        cp "$FBSDLIB/root/.profile" "$WORK/root/.bash_profile"
+    fi
+
     # The message of the day login(1) shows (login.conf's welcome=).
     cp "$ROOT/etc/motd.template" "$WORK/var/run/motd"
     : > "$WORK/var/log/utx.log"

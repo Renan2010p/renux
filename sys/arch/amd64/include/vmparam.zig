@@ -26,3 +26,8 @@ pub const USER_STACK_TOP: u64 = 0x0000_0000_8000_0000;
 
 /// Size of the initial user stack.
 pub const USER_STACK_SIZE: u64 = 0x0000_0000_0080_0000;
+
+/// Largest stack a process may ask for (FreeBSD's MAXSSIZ, 512 MiB on
+/// amd64): setrlimit(RLIMIT_STACK) is clamped to it. libthr places the main
+/// thread's guard page this far below the stack top, so it must be finite.
+pub const MAXSSIZ: u64 = 512 * 1024 * 1024;

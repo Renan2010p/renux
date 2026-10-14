@@ -13,6 +13,7 @@ const proc: type = @import("../sys/proc.zig");
 const file: type = @import("../sys/file.zig");
 const errno: type = @import("../sys/errno.zig");
 const kmem: type = @import("subr_kmem.zig");
+const kern_lockf: type = @import("kern_lockf.zig");
 
 /// Build a new open-file entry. Its reference count starts at one.
 pub fn newFile(f_type: u8, f_flag: i32, f_data: ?*anyopaque, f_ops: *const file.FileOps) ?*file.File {
@@ -87,6 +88,7 @@ pub fn closeFile(f: *file.File) i32 {
     if (f.f_count > 0) {
         return 0;
     }
+    kern_lockf.release(f); // a flock(2) lock ends with its open file
     const err: i32 = f.f_ops.close(f);
     if (f.f_path) |path| kmem.free(@ptrCast(path));
     kmem.free(@ptrCast(f));

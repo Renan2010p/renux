@@ -8,6 +8,20 @@
 # the actions this system actually supports and records them in the system log;
 # there are no placeholders for services that do not exist.
 
+# The shared library search path (FreeBSD's rc.d/ldconfig): packages
+# install their libraries in /usr/local/lib.
+if [ -x /sbin/ldconfig ]; then
+    echo ELF ldconfig path: /lib /usr/lib /usr/local/lib
+    /sbin/ldconfig -elf /lib /usr/lib /usr/local/lib
+fi
+
+# Rebuild the password databases when the image changed the accounts (a
+# login shell set to bash, for instance), as chpass(1) does with pwd_mkdb(8).
+if [ ! -f /etc/spwd.db ] && [ -x /usr/sbin/pwd_mkdb ]; then
+    echo Building the password databases.
+    /usr/sbin/pwd_mkdb -p /etc/master.passwd
+fi
+
 # Each rc.d script announces itself the way FreeBSD's rc.subr does
 # ("Starting syslogd."), so the console shows one line per service.
 /etc/rc.d/syslogd

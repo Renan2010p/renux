@@ -45,6 +45,11 @@ fn ttyIoctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
     return tty.ioctl(t, cmd, arg);
 }
 
+fn ttyPoll(ctx: ?*anyopaque) u16 {
+    const t: *tty.Tty = @ptrCast(@alignCast(ctx.?));
+    return tty.poll(t);
+}
+
 fn ttyClose(ctx: ?*anyopaque) i32 {
     _ = ctx;
     return 0;
@@ -58,6 +63,7 @@ const tty_cdevsw: conf.Cdevsw = .{
     .write = ttyWrite,
     .ioctl = ttyIoctl,
     .close = ttyClose,
+    .poll = ttyPoll,
 };
 
 fn ttyAttach(_: ?*const anyopaque) callconv(.c) void {

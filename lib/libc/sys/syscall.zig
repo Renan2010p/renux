@@ -20,6 +20,7 @@ pub const SYS_write: u64 = 4;
 pub const SYS_open: u64 = 5;
 pub const SYS_close: u64 = 6;
 pub const SYS_wait4: u64 = 7;
+pub const SYS_setsid: u64 = 147;
 pub const SYS_unlink: u64 = 10;
 pub const SYS_chdir: u64 = 12;
 pub const SYS_brk: u64 = 17;
@@ -65,10 +66,11 @@ pub const SIGUSR2: u64 = 31;
 pub const SIG_DFL: u64 = 0;
 pub const SIG_IGN: u64 = 1;
 
-/// An installed signal action.
+/// An installed signal action (FreeBSD's struct sigaction).
 pub const Sigaction: type = extern struct {
     handler: u64,
-    mask: u64,
+    flags: i32 = 0,
+    mask: [4]u32 = .{ 0, 0, 0, 0 },
 };
 
 /// open(2) flags (the subset in use).
@@ -319,8 +321,8 @@ pub fn nanosleep(rq: *const Timespec2, rm: ?*Timespec2) i64 {
 
 /// Set the action for signal `sig`, returning the previous handler.
 pub fn signal(sig: u64, handler: u64) u64 {
-    var act: Sigaction = .{ .handler = handler, .mask = 0 };
-    var old: Sigaction = .{ .handler = 0, .mask = 0 };
+    var act: Sigaction = .{ .handler = handler };
+    var old: Sigaction = .{ .handler = 0 };
     const r: u64 = syscall(SYS_sigaction, .{ sig, @intFromPtr(&act), @intFromPtr(&old), 0, 0, 0 });
     if (r != 0) {
         return SIG_DFL;
@@ -360,6 +362,13 @@ pub fn fork() i32 {
     return @bitCast(@as(u32, @truncate(r)));
 }
 
+/// Start a new session led by the caller; returns its id or a negative
+/// value.
+pub fn setsid() i32 {
+    const r: u64 = syscall(SYS_setsid, .{ 0, 0, 0, 0, 0, 0 });
+    return @bitCast(@as(u32, @truncate(r)));
+}
+
 /// Replace the process image with `path`, started with `argv`/`envp`. Returns
 /// only on failure.
 pub fn execve(path: [*:0]const u8, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) i64 {
@@ -369,8 +378,10 @@ pub fn execve(path: [*:0]const u8, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const
 
 /// Wait for a child to exit; returns its pid or a negative value.
 pub fn wait(status: ?*i32) i32 {
-    _ = status;
-    const r: u64 = syscall(SYS_wait4, .{ 0, 0, 0, 0, 0, 0 });
+    // wait4(WAIT_ANY, status, 0, NULL): any child, not just the caller's
+    // process group (pid 0).
+    const any: u64 = @bitCast(@as(i64, -1));
+    const r: u64 = syscall(SYS_wait4, .{ any, if (status) |s| @intFromPtr(s) else 0, 0, 0, 0, 0 });
     return @bitCast(@as(u32, @truncate(r)));
 }
 

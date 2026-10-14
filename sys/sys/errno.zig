@@ -18,7 +18,8 @@ pub const ENOEXEC: i32 = 8;
 pub const EBADF: i32 = 9;
 pub const ECHILD: i32 = 10;
 pub const EDEADLK: i32 = 11; // resource deadlock avoided
-pub const EAGAIN: i32 = 35; // resource temporarily unavailable (FreeBSD; 11 is Linux)
+pub const EAGAIN: i32 = 35;
+pub const EWOULDBLOCK: i32 = EAGAIN; // resource temporarily unavailable (FreeBSD; 11 is Linux)
 pub const ENOMEM: i32 = 12;
 pub const EACCES: i32 = 13;
 pub const EFAULT: i32 = 14;
@@ -40,5 +41,12 @@ pub const EMLINK: i32 = 31;
 pub const ENAMETOOLONG: i32 = 63;
 pub const ENOTEMPTY: i32 = 66;
 pub const EOPNOTSUPP: i32 = 45;
+pub const ETIMEDOUT: i32 = 60;
 pub const ENOSYS: i32 = 78;
 pub const ERANGE: i32 = 34; // result too large
+
+/// Kernel-internal: the system call has set up the registers to return with
+/// (sigreturn, setcontext), so the dispatcher must leave them alone. It
+/// never reaches a program; FreeBSD's EJUSTRETURN (-2) plays the same role
+/// beside its separate return value, which Renux's handlers fold into one.
+pub const EJUSTRETURN: i32 = 0x7ffe;

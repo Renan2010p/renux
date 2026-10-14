@@ -25,6 +25,7 @@ const kern_signal: type = @import("../../../kern/kern_signal.zig");
 const kern_exit: type = @import("../../../kern/kern_exit.zig");
 const kern_proc: type = @import("../../../kern/kern_proc.zig");
 const param: type = @import("../../../sys/param.zig");
+const signal: type = @import("../../../sys/signal.zig");
 const prf: type = @import("../../../kern/subr_prf.zig");
 
 /// The trap frame of the trap currently being handled (used by fork()).
@@ -33,6 +34,9 @@ var trap_frame: ?*trap.TrapFrame = null;
 /// Synthetic vector the `syscall` entry pushes so the dispatcher can apply the
 /// FreeBSD error convention (carry flag + errno).
 pub const FASTSYSCALL_VECTOR: u64 = 0x81;
+
+/// The result a handler gives when it loaded the frame itself.
+const JUSTRETURN: u64 = sys.signed(-errno.EJUSTRETURN);
 
 /// The trap frame being handled on this CPU, if any.
 pub fn currentFrame() ?*trap.TrapFrame {
@@ -115,7 +119,7 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
     trap_frame = frame;
 
     if (frame.vector == vector.SYSCALL_VECTOR) {
-        frame.rax = syscall.dispatch(
+        const result: u64 = syscall.dispatch(
             frame.rax,
             frame.rdi,
             frame.rsi,
@@ -124,6 +128,7 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
             frame.r8,
             frame.r9,
         );
+        if (result != JUSTRETURN) frame.rax = result;
         return;
     }
 
@@ -139,6 +144,8 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
             frame.r8,
             frame.r9,
         );
+        // sigreturn and setcontext have loaded the whole frame already.
+        if (result == JUSTRETURN) return;
         if (result == sys.ERROR) {
             frame.rax = @intCast(errno.EINVAL);
             frame.rflags |= 1;
@@ -168,7 +175,7 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
         // A fault from user mode kills the process (as SIGSEGV); only a kernel
         // fault panics.
         if ((frame.error_code & 0x4) != 0) {
-            kern_exit.exit(139); // 128 + SIGSEGV
+            kern_exit.exitSignal(signal.SIGSEGV);
         }
         prf.panic("unhandled page fault", null);
     }
@@ -190,7 +197,7 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
 
     // An unhandled trap from user mode kills the process; a kernel trap panics.
     if ((frame.cs & 0x3) == 0x3) {
-        kern_exit.exit(139); // 128 + SIGSEGV
+        kern_exit.exitSignal(signal.SIGSEGV);
     }
 
     prf.panic("unhandled trap", null);

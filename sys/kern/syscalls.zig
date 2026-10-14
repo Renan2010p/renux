@@ -20,6 +20,7 @@ const kern_exec: type = @import("kern_exec.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
 const errno: type = @import("../sys/errno.zig");
 const kern_signal: type = @import("kern_signal.zig");
+const kern_context: type = @import("kern_context.zig");
 const kern_time: type = @import("kern_time.zig");
 const kern_prot: type = @import("kern_prot.zig");
 const kern_sysctl: type = @import("kern_sysctl.zig");
@@ -35,6 +36,8 @@ const kern_cpuset: type = @import("kern_cpuset.zig");
 const kern_thr: type = @import("kern_thr.zig");
 const sys_pipe: type = @import("sys_pipe.zig");
 const sys_getrandom: type = @import("sys_getrandom.zig");
+const kern_lockf: type = @import("kern_lockf.zig");
+const kern_umtx: type = @import("kern_umtx.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
 pub const Handler: type = *const fn (args: [sys.MAXARGS]u64) u64;
@@ -50,13 +53,14 @@ fn sysFork(args: [sys.MAXARGS]u64) u64 {
     return sys.signed(kern_fork.fork(frame));
 }
 
+/// wait4(2): `wait4(pid, status, options, rusage)`.
 fn sysWait(args: [sys.MAXARGS]u64) u64 {
+    const sel: i32 = @bitCast(@as(u32, @truncate(args[0])));
     const status_ptr: u64 = args[1];
-    const options: u64 = args[2];
-    const WNOHANG: u64 = 1;
+    const options: u32 = @truncate(args[2]);
 
     var status: i32 = 0;
-    const pid: i32 = kern_exit.wait(&status, (options & WNOHANG) != 0);
+    const pid: i32 = kern_exit.wait(sel, &status, options);
     if (pid > 0 and status_ptr != 0) {
         const dst: *align(1) i32 = @ptrFromInt(status_ptr);
         dst.* = status;
@@ -131,6 +135,12 @@ fn sysCloseRange(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
+/// getdtablesize(2): the size of the descriptor table (RLIMIT_NOFILE).
+fn sysGetdtablesize(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    return @intCast(kern_proc.current.rlimits[8].cur);
+}
+
 /// dup(2): the lowest free descriptor, sharing the open file.
 fn sysDup(args: [sys.MAXARGS]u64) u64 {
     return sys.signed(kern_descrip.fdDup(kern_proc.current, @intCast(args[0]), 0, false));
@@ -183,7 +193,12 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_ioctl, .handler = sys_generic.sysIoctl },
     .{ .num = sys.SYS_kill, .handler = kern_signal.sysKill },
     .{ .num = sys.SYS_sigaction, .handler = kern_signal.sysSigaction },
-    .{ .num = sys.SYS_sigreturn, .handler = kern_signal.sysSigreturn },
+    .{ .num = sys.SYS_sigreturn, .handler = arch.exec_machdep.sysSigreturn },
+    .{ .num = sys.SYS_sigsuspend, .handler = kern_signal.sysSigsuspend },
+    .{ .num = sys.SYS_sigpending, .handler = kern_signal.sysSigpending },
+    .{ .num = sys.SYS_getcontext, .handler = kern_context.sysGetcontext },
+    .{ .num = sys.SYS_setcontext, .handler = kern_context.sysSetcontext },
+    .{ .num = sys.SYS_swapcontext, .handler = kern_context.sysSwapcontext },
     .{ .num = sys.SYS_execve, .handler = sysExecve },
     .{ .num = sys.SYS_fstat, .handler = vfs_syscalls.sysFstat },
     .{ .num = sys.SYS_mkdir, .handler = vfs_syscalls.sysMkdir },
@@ -201,13 +216,25 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_writev, .handler = sys_generic.sysWritev },
     .{ .num = sys.SYS_access, .handler = vfs_syscalls.sysAccess },
     .{ .num = sys.SYS_faccessat, .handler = vfs_syscalls.sysFaccessat },
+    .{ .num = sys.SYS_eaccess, .handler = vfs_syscalls.sysEaccess },
+    .{ .num = sys.SYS_flock, .handler = kern_lockf.sysFlock },
+    .{ .num = sys.SYS_getdtablesize, .handler = sysGetdtablesize },
+    .{ .num = sys.SYS_rtprio_thread, .handler = kern_thr.sysRtprioThread },
+    .{ .num = sys.SYS__umtx_op, .handler = kern_umtx.sysUmtxOp },
+    .{ .num = sys.SYS_thr_wake, .handler = kern_thr.sysThrWake },
+    .{ .num = sys.SYS_thr_suspend, .handler = kern_thr.sysThrSuspend },
+    .{ .num = sys.SYS_select, .handler = sys_poll.sysSelect },
+    .{ .num = sys.SYS_pselect, .handler = sys_poll.sysPselect },
     .{ .num = sys.SYS_geteuid, .handler = kern_prot.sysGeteuid },
     .{ .num = sys.SYS_getegid, .handler = kern_prot.sysGetegid },
     .{ .num = sys.SYS_fcntl, .handler = sys_generic.sysFcntl },
     .{ .num = sys.SYS_openat, .handler = vfs_syscalls.sysOpenat },
     .{ .num = sys.SYS_readv, .handler = sys_generic.sysReadv },
     .{ .num = sys.SYS_pread, .handler = sys_generic.sysPread },
+    .{ .num = sys.SYS_pwrite, .handler = sys_generic.sysPwrite },
     .{ .num = sys.SYS_setsid, .handler = kern_prot.sysSetsid },
+    .{ .num = sys.SYS_getpgid, .handler = kern_prot.sysGetpgid },
+    .{ .num = sys.SYS_getsid, .handler = kern_prot.sysGetsid },
     .{ .num = sys.SYS_setlogin, .handler = kern_prot.sysSetlogin },
     .{ .num = sys.SYS_getpgrp, .handler = kern_prot.sysGetpgrp },
     .{ .num = sys.SYS_setpgid, .handler = kern_prot.sysSetpgid },

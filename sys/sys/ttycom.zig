@@ -31,6 +31,12 @@ pub const TIOCSWINSZ: u64 = ioc(IOC_IN, 't', 103, @sizeOf(termios.Winsize));
 pub const TIOCGPGRP: u64 = ioc(IOC_OUT, 't', 119, @sizeOf(c_int));
 /// Set the process group of the terminal (an int).
 pub const TIOCSPGRP: u64 = ioc(IOC_IN, 't', 118, @sizeOf(c_int));
+/// Make the terminal the caller's controlling terminal (_IO('t', 97)).
+pub const TIOCSCTTY: u64 = ioccom.IOC_VOID | ('t' << 8) | 97;
+/// Give up the controlling terminal (_IO('t', 113)).
+pub const TIOCNOTTY: u64 = ioccom.IOC_VOID | ('t' << 8) | 113;
+/// Get the session of the terminal (an int).
+pub const TIOCGSID: u64 = ioc(IOC_OUT, 't', 99, @sizeOf(c_int));
 /// Get the number of bytes available to read (an int).
 pub const FIONREAD: u64 = ioc(IOC_OUT, 'f', 127, @sizeOf(c_int));
 

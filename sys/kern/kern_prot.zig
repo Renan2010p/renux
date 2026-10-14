@@ -223,21 +223,67 @@ pub fn sysSetlogin(args: [sys.MAXARGS]u64) u64 {
 
 // -- sessions and process groups -------------------------------------------------
 
-/// setsid(2): start a new session whose id is the calling process. Sessions
-/// are not modelled yet; report the new session id.
+/// setsid(2): start a new session, and a new process group in it, both led
+/// by the caller. The new session has no controlling terminal. A process
+/// group leader may not do it (its group would straddle two sessions).
 pub fn sysSetsid(args: [sys.MAXARGS]u64) u64 {
     _ = args;
-    return @intCast(cur().pid);
+    const p = cur();
+    for (&kern_proc.table) |*q| {
+        if (q.state != .unused and q.pgid == p.pid) return eperm();
+    }
+    p.sid = p.pid;
+    p.pgid = p.pid;
+    return @intCast(p.pid);
 }
 
-/// getpgrp(2): the process group. Here every process is its own group.
+/// getpgrp(2): the caller's process group.
 pub fn sysGetpgrp(args: [sys.MAXARGS]u64) u64 {
     _ = args;
-    return @intCast(cur().pid);
+    return @intCast(cur().pgid);
 }
 
-/// setpgid(2): join a process group. Not modelled; report success.
+/// The process named by a pid argument: 0 is the caller.
+fn target(arg: u64) ?*proc.Proc {
+    const pid: i32 = @bitCast(@as(u32, @truncate(arg)));
+    if (pid == 0) return cur();
+    return kern_proc.pfind(pid);
+}
+
+/// getpgid(2): the process group of `pid`.
+pub fn sysGetpgid(args: [sys.MAXARGS]u64) u64 {
+    const q = target(args[0]) orelse return sys.signed(-errno.ESRCH);
+    return @intCast(q.pgid);
+}
+
+/// getsid(2): the session of `pid`.
+pub fn sysGetsid(args: [sys.MAXARGS]u64) u64 {
+    const q = target(args[0]) orelse return sys.signed(-errno.ESRCH);
+    return @intCast(q.sid);
+}
+
+/// setpgid(2): move the caller or one of its children into process group
+/// `pgid` (0: the target's own pid), which must be a new group led by the
+/// target or an existing group of the caller's session.
 pub fn sysSetpgid(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
+    const p = cur();
+    const q = target(args[0]) orelse return sys.signed(-errno.ESRCH);
+    if (q != p and q.parent != p) return sys.signed(-errno.ESRCH);
+    const req: i32 = @bitCast(@as(u32, @truncate(args[1])));
+    if (req < 0) return sys.signed(-errno.EINVAL);
+    if (q.sid != p.sid) return eperm();
+    if (q.sid == q.pid) return eperm(); // a session leader stays put
+    const pgid: i32 = if (req == 0) q.pid else req;
+    if (pgid != q.pid) {
+        var found: bool = false;
+        for (&kern_proc.table) |*r| {
+            if (r.state != .unused and r.state != .zombie and r.pgid == pgid and r.sid == p.sid) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return eperm();
+    }
+    q.pgid = pgid;
     return 0;
 }

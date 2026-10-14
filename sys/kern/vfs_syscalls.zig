@@ -339,28 +339,65 @@ pub fn sysUnlink(args: [sys.MAXARGS]u64) u64 {
 
 /// access(2): report whether the calling process can access `path`. Only the
 /// path's existence is checked (permissions are not modelled yet).
-pub fn sysAccess(args: [sys.MAXARGS]u64) u64 {
-    const path_ptr: u64 = args[0];
+/// access(2) and friends: whether the caller may read (R_OK), write (W_OK) or
+/// execute (X_OK) a file, or only whether it exists (F_OK), following
+/// FreeBSD's vaccess(): root may read and write anything and execute anything
+/// with an execute bit (or search a directory); others get the owner, group
+/// or other bits that apply to them. `effective` selects the effective ids
+/// (eaccess(2), AT_EACCESS) instead of the real ones (access(2)).
+fn accessCommon(path_ptr: u64, mode: u64, effective: bool) u64 {
+    const R_OK: u64 = 0x04;
+    const W_OK: u64 = 0x02;
+    const X_OK: u64 = 0x01;
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
-    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
-    vfs_subr.vrele(vp);
+    const p = kern_proc.current;
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return sys.signed(-errno.ENOENT);
+    defer vfs_subr.vrele(vp);
+    if ((mode & (R_OK | W_OK | X_OK)) == 0) return 0; // F_OK
+    var va: vnode.Vattr = undefined;
+    if (vp.v_op.getattr(vp, &va) != 0) return sys.signed(-errno.EIO);
+
+    const uid: u32 = if (effective) p.euid else p.uid;
+    const gid: u32 = if (effective) p.egid else p.gid;
+    const perm: u16 = va.mode & 0o777;
+    if (uid == 0) {
+        if ((mode & X_OK) != 0 and va.type != .vdir and (perm & 0o111) == 0) return sys.signed(-errno.EACCES);
+        return 0;
+    }
+    var shift: u4 = 0; // other
+    if (uid == va.uid) {
+        shift = 6;
+    } else if (gid == va.gid or inGroups(p, va.gid)) {
+        shift = 3;
+    }
+    const granted: u64 = (perm >> shift) & 0o7;
+    if ((mode & (R_OK | W_OK | X_OK)) & ~granted != 0) return sys.signed(-errno.EACCES);
     return 0;
+}
+
+fn inGroups(p: *proc.Proc, gid: u32) bool {
+    for (p.groups[0..p.ngroups]) |g| {
+        if (g == gid) return true;
+    }
+    return false;
+}
+
+/// access(2): with the real user and group ids.
+pub fn sysAccess(args: [sys.MAXARGS]u64) u64 {
+    return accessCommon(args[0], args[1], false);
+}
+
+/// eaccess(2): with the effective ids (what test -r/-w/-x uses).
+pub fn sysEaccess(args: [sys.MAXARGS]u64) u64 {
+    return accessCommon(args[0], args[1], true);
 }
 
 /// faccessat(2): like access(2); the descriptor is only used when the path is
 /// empty.
 pub fn sysFaccessat(args: [sys.MAXARGS]u64) u64 {
-    const path_ptr: u64 = args[1];
-    if (path_ptr == 0) {
-        return 0;
-    }
-    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
-    if (path.len == 0) {
-        return 0;
-    }
-    const vp: *vnode.Vnode = vfs_lookup.nameiAt(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
-    vfs_subr.vrele(vp);
-    return 0;
+    const AT_EACCESS: u64 = 0x100;
+    if (args[1] == 0) return sys.signed(-errno.EFAULT);
+    return accessCommon(args[1], args[2], (args[3] & AT_EACCESS) != 0);
 }
 
 /// readlink(2): `readlink(path, buf, bufsize)`, the target of a symbolic link,

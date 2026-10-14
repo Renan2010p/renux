@@ -9,6 +9,9 @@
 
 const libc: type = @import("libc");
 
+/// _IO('t', 97): make the terminal the session's controlling terminal.
+const TIOCSCTTY: u64 = 0x20007461;
+
 comptime {
     // The C startup provides _start (the ELF entry point) and calls main().
     _ = @import("csu").crt0;
@@ -85,6 +88,10 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     while (true) {
         const gpid: i32 = libc.syscall.fork();
         if (gpid == 0) {
+            // A login session of its own, as FreeBSD's init gives each
+            // getty; the terminal becomes its controlling terminal.
+            _ = libc.syscall.setsid();
+            _ = libc.syscall.ioctl(0, TIOCSCTTY, 0);
             // As /etc/ttys runs it on FreeBSD: the "Pc" gettytab entry (8-bit,
             // no parity) on the terminal already open as stdin ("-").
             var av: [4]?[*:0]const u8 = .{ "getty", "Pc", "-", null };

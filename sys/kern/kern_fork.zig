@@ -98,6 +98,8 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     var sg: usize = 0;
     while (sg < signal.NSIG) : (sg += 1) {
         child.sig_handler[sg] = parent.sig_handler[sg];
+        child.sig_flags[sg] = parent.sig_flags[sg];
+        child.sig_actmask[sg] = parent.sig_actmask[sg];
     }
     child.sig_pending = 0;
     // Timers are not inherited (POSIX); the nice value is.
@@ -105,6 +107,11 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     child.itimer_interval = 0;
     child.nice = parent.nice;
     child.sig_mask = parent.sig_mask;
+    // The child joins the parent's process group and session.
+    // The parent's FPU state is live in the registers.
+    arch.fpu.fpusave(&child.fpu);
+    child.pgid = parent.pgid;
+    child.sid = parent.sid;
 
     kern_sched.prepareContext(child);
     child.state = .runnable;

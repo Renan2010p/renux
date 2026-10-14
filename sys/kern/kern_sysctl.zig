@@ -285,8 +285,8 @@ fn fillProc(k: *user.KinfoProc, p: *proc.Proc) void {
     k.ki_structsize = @intCast(@sizeOf(user.KinfoProc));
     k.ki_pid = p.pid;
     k.ki_ppid = if (p.parent) |par| par.pid else 0;
-    k.ki_pgid = p.pid;
-    k.ki_sid = p.pid;
+    k.ki_pgid = p.pgid;
+    k.ki_sid = p.sid;
     k.ki_uid = p.uid;
     k.ki_ruid = p.uid;
     k.ki_svuid = p.uid;
@@ -294,6 +294,7 @@ fn fillProc(k: *user.KinfoProc, p: *proc.Proc) void {
         .running, .runnable => 'R',
         .sleeping => 'S',
         .zombie => 'Z',
+        .stopped => 'T',
         else => 'S',
     };
     k.ki_pri = .{ .class = 0, .level = 80, .native = 80, .user = 0 };

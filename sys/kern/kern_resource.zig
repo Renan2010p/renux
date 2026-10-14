@@ -12,6 +12,7 @@ const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const arch: type = @import("../arch/arch.zig");
 
 /// RLIM_INFINITY as a 64-bit signed value.
 pub const RLIM_INFINITY: i64 = 0x7fff_ffff_ffff_ffff;
@@ -57,6 +58,13 @@ pub fn sysSetrlimit(args: [sys.MAXARGS]u64) u64 {
     if (r == RLIMIT_NOFILE or r == RLIMIT_NPROC) {
         lim.cur = @min(lim.cur, ceiling.max);
         lim.max = @min(lim.max, ceiling.max);
+    }
+    // The stack is clamped to MAXSSIZ, as FreeBSD's kern_proc_setrlimit()
+    // clamps it to maxssiz ("unlimited" from login.conf included).
+    if (r == RLIMIT_STACK) {
+        const maxssiz: i64 = @intCast(arch.vmparam.MAXSSIZ);
+        lim.cur = @min(lim.cur, maxssiz);
+        lim.max = @min(lim.max, maxssiz);
     }
     p.rlimits[r] = lim;
     return 0;

@@ -34,6 +34,10 @@ pub fn init() void {
         p.state = .unused;
         p.parent = null;
         p.exit_status = 0;
+        p.pgid = 0;
+        p.sid = 0;
+        p.stop_sig = 0;
+        p.cont_report = false;
         p.pmap = 0;
         p.kstack_page = 0;
         p.kstack_top = 0;
@@ -64,10 +68,15 @@ pub fn init() void {
         p.rlimits = kern_resource.defaults();
         p.name_len = 0;
         p.sig_pending = 0;
+        p.thr_woken = false;
         p.itimer_due = 0;
         p.itimer_interval = 0;
         p.nice = 0;
         p.sig_mask = 0;
+        p.sig_oldmask = null;
+        p.sig_flags = @splat(0);
+        p.sig_actmask = @splat(0);
+        p.fpu = arch.fpu.initial();
         var s: usize = 0;
         while (s < signal.NSIG) : (s += 1) {
             p.sig_handler[s] = 0;
@@ -90,6 +99,12 @@ pub fn alloc() ?*proc.Proc {
         next_pid += 1;
         p.parent = null;
         p.exit_status = 0;
+        // A new process leads its own group and session until fork(2)
+        // gives it the parent's.
+        p.pgid = p.pid;
+        p.sid = p.pid;
+        p.stop_sig = 0;
+        p.cont_report = false;
         p.pmap = map;
         p.kstack_page = kpage;
         p.kstack_top = kpage + hhdm + param.KSTACK_PAGES * param.PAGE_SIZE;
@@ -122,10 +137,15 @@ pub fn alloc() ?*proc.Proc {
         p.rlimits = kern_resource.defaults();
         p.name_len = 0;
         p.sig_pending = 0;
+        p.thr_woken = false;
         p.itimer_due = 0;
         p.itimer_interval = 0;
         p.nice = 0;
         p.sig_mask = 0;
+        p.sig_oldmask = null;
+        p.sig_flags = @splat(0);
+        p.sig_actmask = @splat(0);
+        p.fpu = arch.fpu.initial();
         var s: usize = 0;
         while (s < signal.NSIG) : (s += 1) {
             p.sig_handler[s] = 0;
@@ -156,4 +176,25 @@ pub fn free(p: *proc.Proc) void {
     p.pmap = 0;
     p.kstack_page = 0;
     p.kstack_top = 0;
+}
+
+/// Find a live process by pid, or null.
+pub fn pfind(pid: i32) ?*proc.Proc {
+    if (pid <= 0) return null;
+    for (&table) |*p| {
+        if (p.state != .unused and p.pid == pid) {
+            return p;
+        }
+    }
+    return null;
+}
+
+/// True when some live process belongs to process group `pgid`.
+pub fn pgfind(pgid: i32) bool {
+    for (&table) |*p| {
+        if (p.state != .unused and p.state != .zombie and p.pgid == pgid) {
+            return true;
+        }
+    }
+    return false;
 }
