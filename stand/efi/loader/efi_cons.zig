@@ -7,9 +7,10 @@
 // FreeBSD's stand/efi/libefi (efi_console.c, efipart.c, framebuffer.c):
 //
 //   - output: on a linear GOP framebuffer the loader draws its own text over
-//     the whole screen (stand/common/gfx_fb.zig) and mirrors it to COM1 with
-//     ANSI sequences, as FreeBSD's loader does; without one it falls back to
-//     the firmware's SimpleTextOutput;
+//     the whole screen (stand/common/gfx_fb.zig) and mirrors it to the serial
+//     console (the firmware's Serial I/O protocol) with ANSI sequences, as
+//     FreeBSD's loader does; without one it falls back to the firmware's
+//     SimpleTextOutput;
 //   - key input through SimpleTextInput (keyboard and serial);
 //   - file access on the boot volume, delays and reset. The machine-independent loader
 // (stand/common) reaches the firmware only through this module, imported as
@@ -41,31 +42,21 @@ var bright: bool = false;
 var use_gfx: bool = false;
 
 // -- serial mirror (graphics mode) ---------------------------------------------
+//
+// The serial port is reached through the firmware's Serial I/O protocol, as
+// FreeBSD's stand/efi/libefi/eficom.c does, not by programming a UART: the
+// firmware knows where the console port is on every architecture.
 
-const COM1: u16 = 0x3f8;
+var sio: ?*uefi.protocol.SerialIo = null;
 
-fn outb(port: u16, value: u8) void {
-    asm volatile ("outb %[v], %[p]"
-        :
-        : [v] "{al}" (value),
-          [p] "{dx}" (port),
-    );
-}
-
-fn inb(port: u16) u8 {
-    return asm volatile ("inb %[p], %[r]"
-        : [r] "={al}" (-> u8),
-        : [p] "{dx}" (port),
-    );
-}
-
-/// Write bytes to COM1, which the firmware has already set up. A missing
-/// port reads 0xff, so the ready test cannot hang.
+/// Write bytes to the serial console, when the firmware has one.
 fn serialWrite(s: []const u8) void {
-    for (s) |c| {
-        var spins: usize = 0;
-        while ((inb(COM1 + 5) & 0x20) == 0 and spins < 100_000) : (spins += 1) {}
-        outb(COM1, c);
+    const port = sio orelse return;
+    var off: usize = 0;
+    while (off < s.len) {
+        const n: usize = port.write(s[off..]) catch return;
+        if (n == 0) return;
+        off += n;
     }
 }
 
@@ -90,6 +81,7 @@ pub fn consInit() void {
         .blue_shift = shifts[2],
     });
     use_gfx = true;
+    sio = bs().locateProtocol(uefi.protocol.SerialIo, null) catch null;
     serialWrite("\x1b[2J\x1b[H");
     apply();
 }

@@ -43,11 +43,8 @@ const copyright: []const u8 =
 const trademark: []const u8 =
     "Renux is a trademark of The Renux Project.\n";
 
-/// Machine name, as uname -m reports it.
-const machine: []const u8 = switch (builtin.target.cpu.arch) {
-    .x86_64 => "amd64",
-    else => @tagName(builtin.target.cpu.arch),
-};
+/// Machine name, as uname -m reports it (the port's <machine/param.h>).
+const machine: []const u8 = arch.machine_param.MACHINE;
 
 /// FreeBSD's boothowto: the boot flags (sys/sys/reboot.h).
 pub var boothowto: u32 = 0;

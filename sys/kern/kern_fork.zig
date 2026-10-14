@@ -33,6 +33,7 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     // the ranges marked INHERIT_ZERO (minherit(2)).
     arch.pmap.copyUser(child.pmap, parent.pmap, hhdm);
     child.inherit_zero = parent.inherit_zero;
+    child.anon = parent.anon;
     for (parent.inherit_zero) |r| {
         var va: u64 = r.start;
         while (va < r.end) : (va += param.PAGE_SIZE) {

@@ -145,11 +145,22 @@ pub fn nthEntry(dir: *tmpfs.Node, index: usize) ?*tmpfs.Dirent {
 }
 
 /// Return chunk `index` of `node`, or null when it does not exist.
+/// Chunk `index` of `node` (it holds bytes [index*CHUNK_DATA, (index+1)*
+/// CHUNK_DATA) of the file), or null past the last one. The walk starts at
+/// the cursor when it can, so sequential access does not rescan the list.
 fn chunkAt(node: *tmpfs.Node, index: usize) ?*tmpfs.Chunk {
     var c: ?*tmpfs.Chunk = node.data_head;
     var n: usize = 0;
+    if (node.cur_chunk) |cur| {
+        if (node.cur_index <= index) {
+            c = cur;
+            n = node.cur_index;
+        }
+    }
     while (c) |chunk| : (c = chunk.next) {
         if (n == index) {
+            node.cur_chunk = chunk;
+            node.cur_index = n;
             return chunk;
         }
         n += 1;
@@ -157,7 +168,6 @@ fn chunkAt(node: *tmpfs.Node, index: usize) ?*tmpfs.Chunk {
     return null;
 }
 
-/// Return chunk `index` of `node`, appending empty chunks until it exists.
 fn chunkAtOrAppend(node: *tmpfs.Node, index: usize) ?*tmpfs.Chunk {
     while (node.nchunks <= index) {
         const chunk: *tmpfs.Chunk = kmem.zallocAs(tmpfs.Chunk) orelse return null;
@@ -178,80 +188,64 @@ fn chunkAtOrAppend(node: *tmpfs.Node, index: usize) ?*tmpfs.Chunk {
 /// drops every chunk; a non-zero shrink trims the last partial chunk (extending
 /// just grows the size, with holes read as zeroes).
 pub fn regTruncate(node: *tmpfs.Node, length: u64) void {
+    node.cur_chunk = null;
+    node.cur_index = 0;
     if (length >= node.size) {
-        node.size = length;
+        node.size = length; // growing: the new bytes read as zeros
         return;
     }
 
-    if (length == 0) {
-        var c: ?*tmpfs.Chunk = node.data_head;
-        while (c) |chunk| {
-            const next: ?*tmpfs.Chunk = chunk.next;
-            kmem.freeAs(tmpfs.Chunk, chunk);
-            c = next;
-        }
-        node.data_head = null;
-        node.data_tail = null;
-        node.nchunks = 0;
-        node.size = 0;
-        return;
-    }
-
-    // Trim: drop chunks wholly past `length` and shorten the one that straddles it.
-    var base: u64 = 0;
+    // Keep the chunks that hold bytes below `length`; free the rest.
+    const keep: usize = @intCast((length + tmpfs.CHUNK_DATA - 1) / tmpfs.CHUNK_DATA);
     var prev: ?*tmpfs.Chunk = null;
     var c: ?*tmpfs.Chunk = node.data_head;
-    while (c) |chunk| {
-        const end: u64 = base + chunk.len;
-        if (base >= length) {
-            // This chunk and every following one are dropped.
-            if (prev) |p| {
-                p.next = null;
-            } else {
-                node.data_head = null;
-            }
-            node.data_tail = prev;
-            var d: ?*tmpfs.Chunk = chunk;
-            while (d) |dd| {
-                const next: ?*tmpfs.Chunk = dd.next;
-                kmem.freeAs(tmpfs.Chunk, dd);
-                d = next;
-            }
-            break;
-        }
-        if (end > length) {
-            chunk.len = @intCast(length - base);
-        }
-        prev = chunk;
-        base = end;
-        c = chunk.next;
+    var n: usize = 0;
+    while (c != null and n < keep) : (n += 1) {
+        prev = c;
+        c = c.?.next;
     }
+    while (c) |chunk| {
+        const next: ?*tmpfs.Chunk = chunk.next;
+        kmem.freeAs(tmpfs.Chunk, chunk);
+        c = next;
+    }
+    if (prev) |last| {
+        last.next = null;
+        // Zero what the last chunk held past the new end, so growing the
+        // file again reads zeros, not the old bytes.
+        const used: usize = @intCast(length - (keep - 1) * tmpfs.CHUNK_DATA);
+        if (used < last.len) @memset(last.data[used..last.len], 0);
+        if (used < last.len) last.len = used;
+    } else {
+        node.data_head = null;
+    }
+    node.data_tail = prev;
+    node.nchunks = @min(node.nchunks, keep);
     node.size = length;
 }
 
 /// Read up to `buf.len` bytes of regular file `node` starting at `offset`.
 pub fn regRead(node: *tmpfs.Node, offset: u64, buf: []u8) usize {
-    var copied: usize = 0;
-    var base: u64 = 0;
-    var c: ?*tmpfs.Chunk = node.data_head;
-    while (c) |chunk| : (c = chunk.next) {
-        const start: u64 = base;
-        const end: u64 = base + chunk.len;
-        base = end;
-        if (offset >= end) {
-            continue;
-        }
-        const skip: usize = if (offset > start) @intCast(offset - start) else 0;
-        var i: usize = skip;
-        while (i < chunk.len and copied < buf.len) : (i += 1) {
-            buf[copied] = chunk.data[i];
-            copied += 1;
-        }
-        if (copied == buf.len) {
-            break;
-        }
+    if (offset >= node.size) {
+        return 0;
     }
-    return copied;
+    const total: usize = @intCast(@min(@as(u64, buf.len), node.size - offset));
+    var done: usize = 0;
+    while (done < total) {
+        const pos: u64 = offset + done;
+        const index: usize = @intCast(pos / tmpfs.CHUNK_DATA);
+        const within: usize = @intCast(pos % tmpfs.CHUNK_DATA);
+        const take: usize = @min(tmpfs.CHUNK_DATA - within, total - done);
+        if (chunkAt(node, index)) |chunk| {
+            // Chunk memory is zeroed when allocated, so a hole inside it
+            // (bytes past chunk.len) reads as zeros.
+            @memcpy(buf[done .. done + take], chunk.data[within .. within + take]);
+        } else {
+            @memset(buf[done .. done + take], 0); // a hole past the last chunk
+        }
+        done += take;
+    }
+    return done;
 }
 
 /// Write `buf` to regular file `node` at `offset`, growing the file as needed.
@@ -261,16 +255,12 @@ pub fn regWrite(node: *tmpfs.Node, offset: u64, buf: []const u8) usize {
         const pos: u64 = offset + written;
         const index: usize = @intCast(pos / tmpfs.CHUNK_DATA);
         const within: usize = @intCast(pos % tmpfs.CHUNK_DATA);
-
         const chunk: *tmpfs.Chunk = chunkAtOrAppend(node, index) orelse break;
-
-        var i: usize = within;
-        while (i < tmpfs.CHUNK_DATA and written < buf.len) : (i += 1) {
-            chunk.data[i] = buf[written];
-            written += 1;
-        }
-        if (i > chunk.len) {
-            chunk.len = i;
+        const take: usize = @min(tmpfs.CHUNK_DATA - within, buf.len - written);
+        @memcpy(chunk.data[within .. within + take], buf[written .. written + take]);
+        written += take;
+        if (within + take > chunk.len) {
+            chunk.len = within + take;
         }
     }
 

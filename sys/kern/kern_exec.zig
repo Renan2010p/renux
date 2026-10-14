@@ -500,6 +500,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;
     p.inherit_zero = @splat(.{});
+    p.anon = @splat(.{});
     if (!setupInitialTls(p, newmap, main)) {
         return -errno.ENOMEM;
     }

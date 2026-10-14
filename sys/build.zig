@@ -8,11 +8,14 @@ const Query: type = Target.Query;
 const Builder: type = std.Build;
 
 pub fn build(b: *Builder) !void {
+    const cpu_arch: std.Target.Cpu.Arch = b.graph.host.query.cpu_arch orelse b.graph.host.result.cpu.arch;
     const query: Query = Query{
-        .cpu_arch = b.graph.host.query.cpu_arch,
+        .cpu_arch = cpu_arch,
         .os_tag = .freestanding,
         .abi = .none,
         .ofmt = .elf,
+        .cpu_features_sub = kernFeaturesSub(cpu_arch),
+        .cpu_features_add = kernFeaturesAdd(cpu_arch),
     };
 
     const target: Builder.ResolvedTarget = b.resolveTargetQuery(query);
@@ -66,6 +69,10 @@ pub fn build(b: *Builder) !void {
         .use_lld = true,
         .use_llvm = true,
     });
+    // compiler_rt cannot be built without SIMD (its float routines take SSE
+    // arguments); the kernel supplies the memory routines it needs itself
+    // (kern/subr_libkern.zig), as FreeBSD's libkern does.
+    kern_exec.bundle_compiler_rt = false;
 
     // Architecture-specific linker script. amd64 is the only port so far; once
     // more ports exist this should be selected from the target CPU arch.
@@ -202,4 +209,30 @@ fn newvers(b: *Builder, devbuild: bool) *Builder.Step.Options {
     opts.addOption(i64, "build_time", build_time);
     opts.addOption([]const u8, "builder", who);
     return opts;
+}
+
+// Per-architecture kernel code generation, as FreeBSD's sys/conf/kern.mk
+// selects CFLAGS by MACHINE_CPUARCH.
+//
+// No SIMD or floating point in the kernel (FreeBSD's amd64 kernel is built
+// with -mno-mmx -mno-sse -msoft-float -mno-avx): system calls and interrupts
+// do not save the user's MMX/SSE/AVX registers, so kernel code that used
+// them (an optimised memcpy, a vectorised loop) would corrupt the
+// interrupted program's registers, and a page fault taken in the middle of a
+// vectorised copy would clobber the copy itself. x87 stays enabled only
+// because compiler_rt's long double functions need it; the kernel has no
+// floating-point code, so none is ever emitted.
+
+fn kernFeaturesSub(cpu_arch: std.Target.Cpu.Arch) std.Target.Cpu.Feature.Set {
+    return switch (cpu_arch) {
+        .x86_64 => std.Target.x86.featureSet(&.{ .mmx, .sse, .sse2, .sse3, .ssse3, .sse4_1, .sse4_2, .avx, .avx2, .avx512f }),
+        else => @panic("sys/build.zig: no kernel code generation flags for this architecture yet"),
+    };
+}
+
+fn kernFeaturesAdd(cpu_arch: std.Target.Cpu.Arch) std.Target.Cpu.Feature.Set {
+    return switch (cpu_arch) {
+        .x86_64 => std.Target.x86.featureSet(&.{.soft_float}),
+        else => @panic("sys/build.zig: no kernel code generation flags for this architecture yet"),
+    };
 }

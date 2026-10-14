@@ -95,6 +95,17 @@ pub fn cpuid(leaf: u32, subleaf: u32) Cpuid {
     return .{ .eax = a, .ebx = b, .ecx = c, .edx = d };
 }
 
+/// Read the time-stamp counter (FreeBSD's rdtsc() in <machine/cpufunc.h>).
+pub fn rdtsc() u64 {
+    var lo: u32 = undefined;
+    var hi: u32 = undefined;
+    asm volatile ("rdtsc"
+        : [lo] "={eax}" (lo),
+          [hi] "={edx}" (hi),
+    );
+    return (@as(u64, hi) << 32) | lo;
+}
+
 /// Trigger a breakpoint exception (int3). Used to exercise the IDT.
 pub fn breakpoint() void {
     asm volatile ("int3");

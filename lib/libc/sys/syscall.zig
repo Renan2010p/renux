@@ -34,6 +34,7 @@ pub const SYS_execve: u64 = 59;
 pub const SYS_dup2: u64 = 90;
 pub const SYS_munmap: u64 = 73;
 pub const SYS_gettimeofday: u64 = 116;
+pub const SYS_nanosleep: u64 = 240;
 pub const SYS_mkdir: u64 = 136;
 pub const SYS_rmdir: u64 = 137;
 pub const SYS_stat: u64 = 552; // modern stat(2) is fstatat(2) (FreeBSD 14)
@@ -300,6 +301,19 @@ pub fn munmap(addr: u64, len: u64) i64 {
 /// Fill in the current time.
 pub fn gettimeofdayRaw(tv: *Timeval) i64 {
     const r: u64 = syscall(SYS_gettimeofday, .{ @intFromPtr(tv), 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
+/// A time interval in seconds and nanoseconds (struct timespec).
+pub const Timespec2: type = extern struct {
+    tv_sec: i64,
+    tv_nsec: i64,
+};
+
+/// nanosleep(2): sleep for `rq`; the remaining time goes to `rm` when a
+/// signal cuts the sleep short.
+pub fn nanosleep(rq: *const Timespec2, rm: ?*Timespec2) i64 {
+    const r: u64 = syscall(SYS_nanosleep, .{ @intFromPtr(rq), if (rm) |p| @intFromPtr(p) else 0, 0, 0, 0, 0 });
     return @bitCast(r);
 }
 

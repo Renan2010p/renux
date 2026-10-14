@@ -56,8 +56,19 @@ pub fn build(b: *Builder) void {
         .target = target,
         .optimize = optimize,
     });
+    // The machine-dependent part (FreeBSD's stand/efi/loader/arch/<machine>).
+    const md_mod: *Builder.Module = b.createModule(.{
+        .root_source_file = b.path(switch (target.result.cpu.arch) {
+            .x86_64 => "arch/amd64/md.zig",
+            else => @panic("stand/efi/loader: no machine-dependent part for this architecture yet"),
+        }),
+        .target = target,
+        .optimize = optimize,
+    });
+
     mod.addImport("platform", platform_mod);
     mod.addImport("common", common_mod);
+    mod.addImport("loader_md", md_mod);
     mod.addImport("bootinfo", bootinfo_mod);
 
     const exe: *Builder.Step.Compile = b.addExecutable(.{

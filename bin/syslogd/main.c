@@ -7,19 +7,10 @@
  * /var/log/messages under the "kernel" tag, then polls for more.
  */
 
-#include <time.h>
 #include <syslog.h>
+#include <unistd.h>
 
 long klog(char *buf, unsigned long len);
-
-static void pause1s(void) {
-    struct timeval a;
-    struct timeval b;
-    gettimeofday(&a, 0);
-    do {
-        gettimeofday(&b, 0);
-    } while (b.tv_sec <= a.tv_sec);
-}
 
 int main(void) {
     static char buf[16384];
@@ -47,6 +38,6 @@ int main(void) {
             }
             seen = (unsigned long)n;
         }
-        pause1s();
+        sleep(1); /* the kernel sleeps us: no CPU is used while waiting */
     }
 }

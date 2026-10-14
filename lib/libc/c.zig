@@ -284,6 +284,26 @@ pub export fn time(t: ?*i64) i64 {
     return tv.tv_sec;
 }
 
+pub export fn nanosleep(rq: *const syscall.Timespec2, rm: ?*syscall.Timespec2) c_int {
+    const r: i64 = syscall.nanosleep(rq, rm);
+    if (r < 0) return errno_.set(@intCast(-r));
+    return 0;
+}
+
+/// sleep(3): the seconds left when a signal interrupts it, else 0.
+pub export fn sleep(seconds: c_uint) c_uint {
+    const rq: syscall.Timespec2 = .{ .tv_sec = seconds, .tv_nsec = 0 };
+    var rm: syscall.Timespec2 = .{ .tv_sec = 0, .tv_nsec = 0 };
+    if (syscall.nanosleep(&rq, &rm) < 0) return @intCast(rm.tv_sec);
+    return 0;
+}
+
+/// usleep(3).
+pub export fn usleep(us: c_uint) c_int {
+    const rq: syscall.Timespec2 = .{ .tv_sec = us / 1_000_000, .tv_nsec = @as(i64, us % 1_000_000) * 1000 };
+    return nanosleep(&rq, null);
+}
+
 pub export fn gettimeofday(tv: ?*syscall.Timeval, tz: ?*anyopaque) c_int {
     _ = tz;
     if (tv) |p| {

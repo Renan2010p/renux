@@ -23,6 +23,27 @@ pub fn psignal(p: *proc.Proc, sig: u32) void {
         return;
     }
     p.sig_pending |= @as(u64, 1) << @intCast(sig);
+    // A process waiting in the kernel wakes up to notice it (its wait then
+    // ends with EINTR, see interrupted()).
+    if (p.state == .sleeping) {
+        p.state = .runnable;
+    }
+}
+
+/// True when a pending, unblocked signal should end a wait in the kernel
+/// with EINTR: one that is caught or kills by default (an ignored one, or
+/// one whose default is to be discarded, does not interrupt).
+pub fn interrupted(p: *proc.Proc) bool {
+    var pend: u64 = p.sig_pending & ~p.sig_mask;
+    while (pend != 0) {
+        const sig: u32 = @intCast(@ctz(pend));
+        pend &= pend - 1;
+        const act: u64 = p.sig_handler[sig];
+        if (act == signal.SIG_IGN) continue;
+        if (act == signal.SIG_DFL and !signal.defaultTerminates(sig)) continue;
+        return true;
+    }
+    return false;
 }
 
 /// The action `p` has for `sig`.

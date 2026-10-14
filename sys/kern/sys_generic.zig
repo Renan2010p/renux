@@ -12,6 +12,7 @@ const file: type = @import("../sys/file.zig");
 const errno: type = @import("../sys/errno.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const kern_signal: type = @import("kern_signal.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
 const proc: type = @import("../sys/proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
@@ -31,7 +32,7 @@ pub fn sysWrite(args: [sys.MAXARGS]u64) u64 {
     }
     const bytes: [*]u8 = @ptrFromInt(buf);
     const again: isize = -@as(isize, errno.EAGAIN);
-    // A full pipe returns -EAGAIN; wait for room as read() waits for data.
+    // A full pipe returns -EAGAIN; sleep until there is room.
     while (true) {
         arch.cpu.enable_interrupts();
         const n: isize = f.f_ops.write(f, bytes[0..@intCast(count)]);
@@ -42,7 +43,10 @@ pub fn sysWrite(args: [sys.MAXARGS]u64) u64 {
             }
             return @intCast(n);
         }
-        kern_sched.yield();
+        if (kern_signal.interrupted(kern_proc.current)) {
+            return sys.signed(-errno.EINTR);
+        }
+        kern_sched.ioWait();
     }
 }
 
@@ -197,9 +201,8 @@ pub fn sysRead(args: [sys.MAXARGS]u64) u64 {
     const bytes: [*]u8 = @ptrFromInt(buf);
     const again: isize = -@as(isize, errno.EAGAIN);
 
-    // A device with nothing ready returns -EAGAIN; block until it does,
-    // yielding the CPU (with interrupts enabled) so the timer and other
-    // processes keep running.
+    // A device or pipe with nothing ready returns -EAGAIN: sleep until it
+    // reports activity (or a signal arrives), using no CPU meanwhile.
     while (true) {
         arch.cpu.enable_interrupts();
         const n: isize = f.f_ops.read(f, bytes[0..@intCast(count)]);
@@ -210,7 +213,10 @@ pub fn sysRead(args: [sys.MAXARGS]u64) u64 {
             }
             return @intCast(n);
         }
-        kern_sched.yield();
+        if (kern_signal.interrupted(kern_proc.current)) {
+            return sys.signed(-errno.EINTR);
+        }
+        kern_sched.ioWait();
     }
 }
 

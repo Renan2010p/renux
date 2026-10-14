@@ -40,6 +40,8 @@ int getuid(void);
 int setuid(int uid);
 void _exit(int status) __attribute__((noreturn));
 int isatty(int fd);
+unsigned int sleep(unsigned int seconds);
+int usleep(unsigned int microseconds);
 
 extern int optind;
 extern char *optarg;

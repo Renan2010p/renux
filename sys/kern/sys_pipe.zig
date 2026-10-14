@@ -27,6 +27,7 @@ const kern_proc: type = @import("kern_proc.zig");
 const kern_descrip: type = @import("kern_descrip.zig");
 const kern_signal: type = @import("kern_signal.zig");
 const kern_time: type = @import("kern_time.zig");
+const kern_sched: type = @import("kern_sched.zig");
 
 /// Bytes a pipe buffers (one page). POSIX's PIPE_BUF (writes of up to 512
 /// bytes are atomic) holds because a write only proceeds when it fits whole
@@ -67,6 +68,7 @@ fn pipeRead(f: *file.File, buf: []u8) isize {
     }
     p.head = (p.head + n) % PIPE_SIZE;
     p.count -= n;
+    kern_sched.ioWakeup(); // a writer may be waiting for room
     return @intCast(n);
 }
 
@@ -89,6 +91,7 @@ fn pipeWrite(f: *file.File, buf: []const u8) isize {
         p.buf[(tail + i) % PIPE_SIZE] = buf[i];
     }
     p.count += n;
+    kern_sched.ioWakeup(); // a reader may be waiting for data
     return @intCast(n);
 }
 
@@ -130,6 +133,8 @@ fn pipeClose(f: *file.File) i32 {
     const p: *Pipe = pipeOf(f);
     if ((f.f_flag & file.FREAD) != 0) p.readers -= 1;
     if ((f.f_flag & file.FWRITE) != 0) p.writers -= 1;
+    // The other end sees end-of-file or EPIPE now.
+    kern_sched.ioWakeup();
     if (p.readers == 0 and p.writers == 0) {
         vm_page.physfree(p.page);
         kmem.free(@ptrCast(p));

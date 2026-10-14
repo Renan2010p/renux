@@ -116,6 +116,14 @@ fn arenaClose(pmap: u64) void {
 
 /// Allocate a zeroed page and record it as belonging to `pmap`. Every page in a
 /// process's address space -- data and page tables -- is allocated through here.
+/// Like allocPage(), but the page is not zeroed: for a copy that overwrites
+/// it whole.
+fn allocPageUninit(pmap: Pmap) ?u64 {
+    const pa: u64 = vm_page.physallocUninit() orelse return null;
+    recordPage(pmap, pa);
+    return pa;
+}
+
 pub fn allocPage(pmap: Pmap) ?u64 {
     const pa: u64 = vm_page.physalloc() orelse return null;
     recordPage(pmap, pa);
@@ -251,13 +259,10 @@ pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
                     const e1: u64 = pt[idx1];
                     if ((e1 & pte.P) == 0) continue;
 
-                    const dst_pa: u64 = allocPage(dst) orelse return;
+                    const dst_pa: u64 = allocPageUninit(dst) orelse return;
                     const s: [*]const u8 = @ptrFromInt((e1 & pte.FRAME_MASK) + hhdm_offset);
                     const d: [*]u8 = @ptrFromInt(dst_pa + hhdm_offset);
-                    var k: usize = 0;
-                    while (k < param.PAGE_SIZE) : (k += 1) {
-                        d[k] = s[k];
-                    }
+                    @memcpy(d[0..param.PAGE_SIZE], s[0..param.PAGE_SIZE]);
 
                     const va: u64 = (@as(u64, idx4) << pte.L4_SHIFT) |
                         (@as(u64, idx3) << pte.L3_SHIFT) |

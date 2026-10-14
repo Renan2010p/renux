@@ -70,6 +70,13 @@ pub const clock: type = machdep_impl.clock;
 /// Machine-dependent virtual memory parameters.
 pub const vmparam: type = machdep_impl.vmparam;
 
+/// Machine-dependent CPU services (FreeBSD's <machine/cpu.h>), such as
+/// get_cyclecount().
+pub const machine_cpu: type = machdep_impl.machine_cpu;
+
+/// Machine parameters (FreeBSD's <machine/param.h>): MACHINE, MACHINE_ARCH.
+pub const machine_param: type = machdep_impl.machine_param;
+
 /// Boot protocol bindings provided by the port.
 pub const boot: type = machdep_impl.boot;
 

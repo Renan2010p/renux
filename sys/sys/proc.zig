@@ -40,6 +40,19 @@ pub const Range: type = struct {
     end: u64 = 0,
 };
 
+/// Anonymous ranges filled on demand (one zeroed page at the first touch),
+/// with the protection their pages get.
+pub const NANON: usize = 64;
+
+pub const AnonRange: type = struct {
+    start: u64 = 0,
+    end: u64 = 0,
+    exec: bool = false,
+    write: bool = true,
+    /// Registration order: where ranges overlap, the newest mapping wins.
+    seq: u64 = 0,
+};
+
 /// Resource limits a process holds (FreeBSD's RLIM_NLIMITS in 14.x).
 pub const RLIM_NLIMITS: usize = 16;
 
@@ -88,6 +101,8 @@ pub const Proc: type = struct {
     /// Ranges a fork child receives zero-filled (minherit INHERIT_ZERO), such
     /// as libc's arc4random state.
     inherit_zero: [NINHERIT]Range,
+    /// Demand-zero anonymous memory (mmap MAP_ANON), see vm/vm_fault.zig.
+    anon: [NANON]AnonRange,
     /// Value of the IA32_FS_BASE MSR: the user thread-pointer (TCB). Restored
     /// by the scheduler on every context switch.
     fsbase: u64,

@@ -14,6 +14,7 @@ const conf: type = @import("../sys/conf.zig");
 const errno: type = @import("../sys/errno.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const prf: type = @import("../kern/subr_prf.zig");
+const kern_sched: type = @import("../kern/kern_sched.zig");
 
 /// Maximum number of attached consoles.
 pub const MAX_CONSOLES: usize = 4;
@@ -64,6 +65,8 @@ pub fn cnInput(c: u8) void {
     }
     input_buf[input_tail] = c;
     input_tail = next;
+    // Wake a reader waiting for the terminal.
+    kern_sched.ioWakeup();
 }
 
 fn inputPop() ?u8 {

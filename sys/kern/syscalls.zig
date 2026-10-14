@@ -34,7 +34,7 @@ const subr_syscall: type = @import("subr_syscall.zig");
 const kern_cpuset: type = @import("kern_cpuset.zig");
 const kern_thr: type = @import("kern_thr.zig");
 const sys_pipe: type = @import("sys_pipe.zig");
-const random: type = @import("../dev/random/random.zig");
+const sys_getrandom: type = @import("sys_getrandom.zig");
 
 /// A system call handler. `args` holds up to MAXARGS register arguments.
 pub const Handler: type = *const fn (args: [sys.MAXARGS]u64) u64;
@@ -250,7 +250,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_minherit, .handler = vm_mmap.sysMinherit },
     .{ .num = sys.SYS_thr_self, .handler = kern_thr.sysThrSelf },
     .{ .num = sys.SYS_thr_kill, .handler = kern_thr.sysThrKill },
-    .{ .num = sys.SYS_getrandom, .handler = random.sysGetrandom },
+    .{ .num = sys.SYS_getrandom, .handler = sys_getrandom.sysGetrandom },
     .{ .num = sys.SYS_mkdirat, .handler = vfs_syscalls.sysMkdirat },
     .{ .num = sys.SYS_unlinkat, .handler = vfs_syscalls.sysUnlinkat },
     .{ .num = sys.SYS_fchdir, .handler = vfs_syscalls.sysFchdir },

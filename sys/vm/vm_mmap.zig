@@ -15,6 +15,7 @@ const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
 const vm_page: type = @import("vm_page.zig");
 const kern_proc: type = @import("../kern/kern_proc.zig");
+const vm_fault: type = @import("vm_fault.zig");
 const kern_descrip: type = @import("../kern/kern_descrip.zig");
 const prf: type = @import("../kern/subr_prf.zig");
 const file: type = @import("../sys/file.zig");
@@ -80,11 +81,25 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
     const limit: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
     const size: u64 = param.alignUp(len, param.PAGE_SIZE);
 
+    // MAP_ALIGNED(n) asks for an address aligned to 2^n bytes, and
+    // MAP_ALIGNED_SUPER (n == 1) for a superpage (2 MiB) boundary. FreeBSD's
+    // malloc (jemalloc) relies on it: it finds a chunk's metadata by masking
+    // the low bits of an address.
+    const MAP_ALIGNMENT_SHIFT: u6 = 24;
+    const MAP_ALIGNED_SUPER: u64 = 1;
+    const align_req: u64 = (flags >> MAP_ALIGNMENT_SHIFT) & 0xff;
+    const alignment: u64 = if (align_req == MAP_ALIGNED_SUPER)
+        2 * 1024 * 1024
+    else if (align_req >= 12 and align_req < 48)
+        @as(u64, 1) << @intCast(align_req)
+    else
+        param.PAGE_SIZE;
+
     var base: u64 = undefined;
     if (addr != 0) {
         base = addr & ~@as(u64, param.PAGE_SIZE - 1);
     } else {
-        base = param.alignUp(p.mmap_next, param.PAGE_SIZE);
+        base = param.alignUp(p.mmap_next, alignment);
     }
     if (base + size > limit) {
         return sys.signed(-errno.ENOMEM);
@@ -128,12 +143,10 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
                 va += param.PAGE_SIZE;
                 foff += param.PAGE_SIZE;
             }) {
+                // allocPage hands out a zeroed page: the read fills what the
+                // file has and the rest (past EOF) stays zero.
                 const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
                 const dst: [*]u8 = @ptrFromInt(pa + hhdm);
-                var k: usize = 0;
-                while (k < param.PAGE_SIZE) : (k += 1) {
-                    dst[k] = 0;
-                }
                 const n: isize = vp.v_op.read(vp, foff, dst[0..param.PAGE_SIZE]);
                 if (n < 0) {
                     return sys.signed(-errno.EIO);
@@ -142,8 +155,14 @@ pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
             }
         }
     } else {
+        // Anonymous memory is filled on demand (vm/vm_fault.zig). Pages that
+        // are mapped already (MAP_FIXED over a previous mapping, as rtld does
+        // for .bss) are replaced by zeroed pages now, since the new mapping
+        // must read as zeros.
+        const lazy: bool = vm_fault.register(p, base, base + size, prot == .user_rw, prot == .user_rx);
         var va: u64 = base;
         while (va < base + size) : (va += param.PAGE_SIZE) {
+            if (lazy and arch.pmap.extract(p.pmap, va) == null) continue;
             const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
             arch.pmap.enterUser(p.pmap, va, pa, prot);
         }

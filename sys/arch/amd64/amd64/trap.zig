@@ -92,11 +92,11 @@ fn handlePageFault(frame: *trap.TrapFrame) bool {
         return false; // protection fault, not a missing page
     }
     const va: u64 = readCr2();
-    if (vm_fault.regionFor(va) == null) {
-        return false;
-    }
-    const pa: u64 = vm_page.physalloc() orelse return false;
-    pmap.enterUser(pmap.current(), va & ~param.PAGE_MASK, pa, .user_rw);
+    const r = vm_fault.regionFor(kern_proc.current, va) orelse return false;
+    const prot: pmap.Prot = if (r.exec) .user_rx else if (r.write) .user_rw else .user_ro;
+    // allocPage records the page in the address space, so it is freed with it.
+    const pa: u64 = pmap.allocPage(pmap.current()) orelse return false;
+    pmap.enterUser(pmap.current(), va & ~param.PAGE_MASK, pa, prot);
     return true;
 }
 

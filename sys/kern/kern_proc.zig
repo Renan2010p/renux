@@ -49,6 +49,7 @@ pub fn init() void {
         p.brk = 0;
         p.mmap_next = 0;
         p.inherit_zero = @splat(.{});
+        p.anon = @splat(.{});
         p.uid = 0;
         p.euid = 0;
         p.svuid = 0;
@@ -106,6 +107,7 @@ pub fn alloc() ?*proc.Proc {
         p.brk = 0;
         p.mmap_next = 0;
         p.inherit_zero = @splat(.{});
+        p.anon = @splat(.{});
         p.uid = 0;
         p.euid = 0;
         p.svuid = 0;

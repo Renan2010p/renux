@@ -65,7 +65,11 @@ pub fn scheduler() noreturn {
             kern_proc.current = p;
             arch.gdt.setKernelStack(p.kstack_top);
             arch.syscall_entry.setKernelStack(p.kstack_top);
-            arch.pmap.activate(p.pmap);
+            // Reloading CR3 flushes the TLB: skip it when the process runs
+            // in the address space already loaded (it was the last one).
+            if (arch.pmap.current() != p.pmap) {
+                arch.pmap.activate(p.pmap);
+            }
             // Restore the process's user thread pointer (TLS base).
             arch.cpu.setFsBase(p.fsbase);
             in_scheduler = false;
@@ -107,6 +111,21 @@ pub fn sched() void {
 pub fn yield() void {
     kern_proc.current.state = .runnable;
     sched();
+}
+
+/// Wait for I/O: sleep until a device or pipe reports activity (ioWakeup) or
+/// the next clock tick, whichever comes first. A process waiting for input
+/// therefore uses no CPU, and the tick bounds the wait for sources that
+/// raise no interrupt (the polled serial port) to 10 ms. FreeBSD's tsleep()
+/// on a per-object channel, with one shared channel.
+pub fn ioWait() void {
+    sleep(arch.clock.pollChannel());
+}
+
+/// Wake the processes waiting in ioWait() (or in poll(2)), because input
+/// arrived, a pipe gained data or room, or an end closed.
+pub fn ioWakeup() void {
+    wakeup(arch.clock.pollChannel());
 }
 
 /// Block the current process on `chan` until wakeup(chan).

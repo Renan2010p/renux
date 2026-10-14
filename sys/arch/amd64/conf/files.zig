@@ -33,6 +33,8 @@ pub const sysarch: type = @import("../amd64/sysarch.zig");
 pub const proc_md: type = @import("../include/proc.zig");
 pub const trapframe: type = @import("../include/trap.zig");
 pub const vmparam: type = @import("../include/vmparam.zig");
+pub const machine_cpu: type = @import("../include/cpu.zig");
+pub const machine_param: type = @import("../include/param.zig");
 
 // Boot protocol bindings in use on this port (Limine).
 pub const boot: type = @import("renuxboot");
@@ -60,5 +62,8 @@ comptime {
     _ = @import("../include/proc.zig");
     _ = @import("../include/trap.zig");
     _ = @import("../include/vmparam.zig");
+    _ = @import("../amd64/support.zig");
+    // x86-only devices (FreeBSD's conf/files.x86).
+    _ = @import("../../../dev/random/ivy.zig");
     _ = @import("limine");
 }

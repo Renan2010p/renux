@@ -13,7 +13,8 @@ pub const EPERM: c_int = 1;
 pub const ENOENT: c_int = 2;
 pub const EIO: c_int = 5;
 pub const EBADF: c_int = 9;
-pub const EAGAIN: c_int = 11;
+pub const EDEADLK: c_int = 11;
+pub const EAGAIN: c_int = 35; // FreeBSD (11 is Linux)
 pub const ENOMEM: c_int = 12;
 pub const EACCES: c_int = 13;
 pub const EFAULT: c_int = 14;
@@ -43,6 +44,7 @@ pub export fn strerror(code: c_int) [*:0]const u8 {
         ENOENT => "no such file or directory",
         EIO => "input/output error",
         EBADF => "bad file descriptor",
+        EDEADLK => "resource deadlock avoided",
         EAGAIN => "resource temporarily unavailable",
         ENOMEM => "cannot allocate memory",
         EACCES => "permission denied",

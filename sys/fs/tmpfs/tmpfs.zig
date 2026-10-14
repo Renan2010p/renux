@@ -73,6 +73,11 @@ pub const Node: type = struct {
     data_tail: ?*Chunk,
     /// Number of chunks on the list.
     nchunks: usize,
+    /// The chunk last looked up and its index: a cursor that makes
+    /// sequential reads and writes O(1) per chunk instead of a walk from the
+    /// head of the list every time.
+    cur_chunk: ?*Chunk = null,
+    cur_index: usize = 0,
 };
 
 /// Per-mount state.

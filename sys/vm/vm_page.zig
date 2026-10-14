@@ -72,6 +72,13 @@ pub fn physalloc() ?u64 {
     return pa;
 }
 
+/// Allocate a page without zeroing it, for a caller that overwrites all of
+/// it at once (fork's page copies). Never hand such a page to user space
+/// before filling it.
+pub fn physallocUninit() ?u64 {
+    return bm.alloc();
+}
+
 /// Allocate `n` zeroed, physically contiguous pages (kernel stacks); returns
 /// the address of the first, or null.
 pub fn physallocContig(n: u64) ?u64 {

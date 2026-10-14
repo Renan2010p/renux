@@ -663,6 +663,13 @@ pub fn sysFpathconf(args: [sys.MAXARGS]u64) u64 {
 
 // -- copy_file_range -------------------------------------------------------------
 
+fn isRegular(f: *file.File) bool {
+    if (f.f_type != file.DTYPE_VNODE) return false;
+    const raw: *anyopaque = f.f_data orelse return false;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
+    return vp.v_type == .vreg;
+}
+
 /// copy_file_range(2): `copy_file_range(infd, inoffp, outfd, outoffp, len,
 /// flags)`, copying through a kernel buffer. With an offset pointer the
 /// descriptor's own offset is left alone and *offp advances instead.
@@ -672,7 +679,9 @@ pub fn sysCopyFileRange(args: [sys.MAXARGS]u64) u64 {
     const in: *file.File = kern_descrip.fdGetfile(p, @intCast(args[0])) orelse return sys.signed(-errno.EBADF);
     const out: *file.File = kern_descrip.fdGetfile(p, @intCast(args[2])) orelse return sys.signed(-errno.EBADF);
     if ((in.f_flag & file.FREAD) == 0 or (out.f_flag & file.FWRITE) == 0) return sys.signed(-errno.EBADF);
-    if (in.f_type != file.DTYPE_VNODE or out.f_type != file.DTYPE_VNODE) return sys.signed(-errno.EINVAL);
+    // Regular files only, as on FreeBSD: a terminal, pipe or device makes
+    // the caller fall back to read(2)/write(2).
+    if (!isRegular(in) or !isRegular(out)) return sys.signed(-errno.EINVAL);
 
     const in_off: ?*align(1) i64 = if (args[1] != 0) @ptrFromInt(args[1]) else null;
     const out_off: ?*align(1) i64 = if (args[3] != 0) @ptrFromInt(args[3]) else null;

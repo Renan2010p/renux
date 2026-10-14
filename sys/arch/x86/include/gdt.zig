@@ -15,8 +15,10 @@
 pub const GDT_NULL: u16 = 0;
 pub const GDT_KCODE: u16 = 1;
 pub const GDT_KDATA: u16 = 2;
-pub const GDT_UCODE: u16 = 3;
-pub const GDT_UDATA: u16 = 4;
+// User data comes right before user code: sysretq takes SS and CS from
+// STAR[63:48] + 8 and + 16 (FreeBSD and Linux order them the same way).
+pub const GDT_UDATA: u16 = 3;
+pub const GDT_UCODE: u16 = 4;
 /// First of the two slots occupied by the 64-bit TSS descriptor.
 pub const GDT_TSS: u16 = 5;
 

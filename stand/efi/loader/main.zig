@@ -24,6 +24,7 @@
 const std: type = @import("std");
 const uefi: type = std.os.uefi;
 const bootinfo: type = @import("bootinfo");
+const md: type = @import("loader_md");
 const platform: type = @import("platform");
 const common: type = @import("common");
 const env: type = common.env;
@@ -73,13 +74,13 @@ fn allocPages(n: usize) ?[]align(4096) uefi.Page {
     return bs().allocatePages(.any, .loader_data, n) catch null;
 }
 
+fn alignUp(v: u64, a: u64) u64 {
+    return (v + a - 1) & ~(a - 1);
+}
+
 fn zeroPage(pa: u64) void {
     const p: [*]u8 = @ptrFromInt(@as(usize, @intCast(pa)));
     @memset(p[0..4096], 0);
-}
-
-fn align2M(v: u64) u64 {
-    return (v + 0x1fffff) & ~@as(u64, 0x1fffff);
 }
 
 // -- banner ------------------------------------------------------------------
@@ -242,7 +243,7 @@ fn bootKernel() !void {
         platform.print("loader: not enough memory for the kernel\n");
         return error.OutOfResources;
     };
-    const phys_base: u64 = align2M(@intFromPtr(region.ptr));
+    const phys_base: u64 = alignUp(@intFromPtr(region.ptr), md.elf64.KERNEL_ALIGN);
 
     // Copy the segments, reporting each one as FreeBSD's load_elf.c does.
     platform.print(path);
@@ -300,7 +301,7 @@ fn handoff(entry: u64, phys_base: u64, lo: u64, vm_base: u64, span: u64) !void {
         var it = m.iterator();
         while (it.next()) |d| mem_max = @max(mem_max, d.physical_start + d.number_of_pages * 4096);
     }
-    mem_max = align2M(mem_max);
+    mem_max = alignUp(mem_max, md.elf64.KERNEL_ALIGN);
 
     // The framebuffer, reported the way FreeBSD's loader does.
     var fb_count: u64 = 0;
@@ -308,7 +309,7 @@ fn handoff(entry: u64, phys_base: u64, lo: u64, vm_base: u64, span: u64) !void {
         h.fb = f.fb;
         fb_count = 1;
         const end: u64 = f.phys + f.fb.pitch * f.fb.height;
-        if (end > mem_max) mem_max = align2M(end);
+        if (end > mem_max) mem_max = alignUp(end, md.elf64.KERNEL_ALIGN);
         platform.print("EFI framebuffer information:\n");
         platform.printf("addr, size     0x{x}, 0x{x}\n", .{ f.phys, f.fb.pitch * f.fb.height });
         platform.printf("dimensions     {d} x {d}\n", .{ f.fb.width, f.fb.height });
@@ -320,20 +321,8 @@ fn handoff(entry: u64, phys_base: u64, lo: u64, vm_base: u64, span: u64) !void {
     @memcpy(h.cmdline[0..cl.len], cl);
     h.cmdline[cl.len] = 0;
 
-    // Page tables: identity (for us and the early kernel), the HHDM the kernel
-    // uses for physical access, and the kernel image at its link address.
-    const pml4 = allocPages(1) orelse return error.OutOfResources;
-    zeroPage(@intFromPtr(pml4.ptr));
-    const pml4_pa: u64 = @intFromPtr(pml4.ptr);
-    var pa: u64 = 0;
-    while (pa < mem_max) : (pa += 0x200000) {
-        try map2M(pml4_pa, pa, pa);
-        try map2M(pml4_pa, H + pa, pa);
-    }
-    var k: u64 = 0;
-    while (k < span) : (k += 0x200000) {
-        try map2M(pml4_pa, vm_base + k, phys_base + k);
-    }
+    // The kernel's page tables (machine dependent: arch/<machine>).
+    const pml4_pa: u64 = try md.elf64.buildPageTables(mem_max, H, vm_base, phys_base, span);
 
     // The kernel's boot stack lives in the HHDM: process page maps copy the
     // kernel half but not the identity map. The SysV ABI expects RSP % 16 == 8
@@ -400,7 +389,7 @@ fn handoff(entry: u64, phys_base: u64, lo: u64, vm_base: u64, span: u64) !void {
         }
         h.bi.memmap_count = c;
         bs().exitBootServices(uefi.handle, m.info.key) catch continue;
-        jump(entry, pml4_pa, stack_top);
+        md.tramp.tramp(entry, pml4_pa, stack_top);
     }
     platform.print("loader: ExitBootServices failed\n");
     return error.Unexpected;
@@ -415,24 +404,6 @@ fn memType(t: uefi.tables.MemoryType) u64 {
         .loader_code, .loader_data => bootinfo.MemmapEntry.BOOTLOADER_RECLAIMABLE,
         else => bootinfo.MemmapEntry.RESERVED,
     };
-}
-
-/// Map the 2 MiB page at virtual `virt` to physical `phys`, creating the
-/// intermediate tables on demand.
-fn map2M(pml4_pa: u64, virt: u64, phys: u64) !void {
-    const pml4: [*]u64 = @ptrFromInt(@as(usize, @intCast(pml4_pa)));
-    const pdpt: [*]u64 = try nextTable(pml4, @intCast((virt >> 39) & 0x1ff));
-    const pd: [*]u64 = try nextTable(pdpt, @intCast((virt >> 30) & 0x1ff));
-    pd[@intCast((virt >> 21) & 0x1ff)] = (phys & ~@as(u64, 0x1fffff)) | 0x83; // P | RW | PS
-}
-
-fn nextTable(table: [*]u64, index: usize) ![*]u64 {
-    if ((table[index] & 1) == 0) {
-        const p = allocPages(1) orelse return error.OutOfResources;
-        zeroPage(@intFromPtr(p.ptr));
-        table[index] = @intFromPtr(p.ptr) | 0x3;
-    }
-    return @ptrFromInt(@as(usize, @intCast(table[index] & ~@as(u64, 0xfff))));
 }
 
 const FbInfo: type = struct {
@@ -489,19 +460,4 @@ fn getMap() !uefi.tables.MemoryMapSlice {
     const buf: []align(@alignOf(uefi.tables.MemoryDescriptor)) u8 =
         @alignCast(@as([*]u8, @ptrCast(mem.ptr))[0 .. pages * 4096]);
     return try bs().getMemoryMap(buf);
-}
-
-/// Leave the firmware behind and enter the kernel at `entry`, with CR3 set to
-/// the page tables we built and a fresh stack.
-fn jump(entry: u64, cr3: u64, stack: u64) noreturn {
-    asm volatile (
-        \\ mov %[sp], %%rsp
-        \\ mov %[cr3], %%cr3
-        \\ jmp *%[entry]
-        :
-        : [sp] "r" (stack),
-          [cr3] "r" (cr3),
-          [entry] "r" (entry),
-        : .{ .memory = true });
-    unreachable;
 }

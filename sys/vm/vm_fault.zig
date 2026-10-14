@@ -1,41 +1,44 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
-// Anonymous memory fault registry.
+// Demand-zero anonymous memory.
 //
-// This is a heavily simplified stand-in for NetBSD's sys/uvm/vm_fault.c. It
-// records anonymous virtual address ranges that should be filled on demand:
-// when the machine-dependent trap code takes a not-present page fault for an
-// address inside a registered range, it allocates a zero page and maps it, then
-// lets the faulting instruction retry. There is no object/amap indirection yet.
+// A simplified stand-in for FreeBSD's sys/vm/vm_fault.c. mmap(2) of
+// anonymous memory records the range in the process (Proc.anon) instead of
+// allocating every page up front; the first touch of a page faults, and the
+// fault handler maps a fresh zeroed page there and lets the instruction
+// retry. Programs reserve far more than they use (libc's malloc maps 2 MiB
+// arenas), so this saves both the time to zero the pages and the memory.
+// There is no object/amap indirection yet.
 
-/// A registered anonymous range [start, end).
-pub const Region: type = struct {
-    start: u64,
-    end: u64,
-};
+const proc: type = @import("../sys/proc.zig");
 
-const MAX_REGIONS: usize = 8;
+/// Registration counter (see AnonRange.seq).
+var next_seq: u64 = 1;
 
-var regions: [MAX_REGIONS]Region = undefined;
-var count: usize = 0;
-
-/// Register [start, end) as demand-zero anonymous memory.
-pub fn register(start: u64, end: u64) void {
-    if (count >= MAX_REGIONS) {
-        return;
-    }
-    regions[count] = .{ .start = start, .end = end };
-    count += 1;
-}
-
-/// Return the region containing `va`, if any.
-pub fn regionFor(va: u64) ?Region {
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        if (va >= regions[i].start and va < regions[i].end) {
-            return regions[i];
+/// Record [start, end) of `p` as demand-zero memory. Returns false when the
+/// table is full; the caller then maps the pages at once.
+pub fn register(p: *proc.Proc, start: u64, end: u64, write: bool, exec: bool) bool {
+    for (&p.anon) |*r| {
+        if (r.end == 0) {
+            r.* = .{ .start = start, .end = end, .write = write, .exec = exec, .seq = next_seq };
+            next_seq += 1;
+            return true;
         }
     }
-    return null;
+    return false;
+}
+
+/// The demand-zero range of `p` containing `va`, if any. Where ranges
+/// overlap the most recent one wins, as a later mmap(MAP_FIXED) replaces an
+/// earlier mapping (rtld reserves a library's span PROT_NONE, then maps its
+/// writable .bss over part of it).
+pub fn regionFor(p: *proc.Proc, va: u64) ?proc.AnonRange {
+    var best: ?proc.AnonRange = null;
+    for (p.anon) |r| {
+        if (r.end != 0 and va >= r.start and va < r.end) {
+            if (best == null or r.seq > best.?.seq) best = r;
+        }
+    }
+    return best;
 }

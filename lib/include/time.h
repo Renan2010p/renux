@@ -18,4 +18,11 @@ time_t time(time_t *t);
 int gettimeofday(struct timeval *tv, void *tz);
 char *ctime(const time_t *t);
 
+struct timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
+int nanosleep(const struct timespec *rqtp, struct timespec *rmtp);
+
 #endif /* _ZENBSD_TIME_H_ */
