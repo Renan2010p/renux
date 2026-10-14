@@ -54,9 +54,11 @@ const Painted: type = struct {
     ch: u16,
     fg: u32,
     bg: u32,
-    underline: bool,
+    /// Foreground pixel rows at the bottom of the cell: 0, 1 (underline) or
+    /// CURSOR_ROWS (the cursor).
+    underline: u8,
 
-    const invalid: Painted = .{ .ch = 0xffff, .fg = 0, .bg = 0, .underline = false };
+    const invalid: Painted = .{ .ch = 0xffff, .fg = 0, .bg = 0, .underline = 0 };
 
     fn eql(a: Painted, b: Painted) bool {
         return a.ch == b.ch and a.fg == b.fg and a.bg == b.bg and a.underline == b.underline;
@@ -266,25 +268,28 @@ fn markShownBlank() void {
     while (r < rows) : (r += 1) {
         var c: u32 = 0;
         while (c < cols) : (c += 1) {
-            shown[r][c] = .{ .ch = ' ', .fg = default_bg, .bg = default_bg, .underline = false };
+            shown[r][c] = .{ .ch = ' ', .fg = default_bg, .bg = default_bg, .underline = 0 };
         }
     }
 }
+
+/// Height in pixels of the cursor: an underline bar, not a block.
+const CURSOR_ROWS: u8 = 2;
 
 /// How cell (r, c) should look now.
 fn appearance(r: u32, c: u32) Painted {
     const cell: Cell = grid[r][c];
     const at_cursor: bool = cursor_visible and r == cy and c == cx;
-    const reverse: bool = ((cell.attr & ATTR_REVERSE) != 0) != at_cursor;
+    const reverse: bool = (cell.attr & ATTR_REVERSE) != 0;
     var p: Painted = .{
         .ch = cell.ch,
         .fg = if (reverse) cell.bg else cell.fg,
         .bg = if (reverse) cell.fg else cell.bg,
-        .underline = (cell.attr & ATTR_UNDERLINE) != 0,
+        .underline = if (at_cursor) CURSOR_ROWS else if ((cell.attr & ATTR_UNDERLINE) != 0) 1 else 0,
     };
     // A blank shows only its background; normalise the foreground so blanks
     // in different text colours compare equal and are not repainted.
-    if (p.ch == ' ' and !p.underline) {
+    if (p.ch == ' ' and p.underline == 0) {
         p.fg = p.bg;
     }
     return p;

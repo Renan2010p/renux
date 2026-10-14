@@ -10,7 +10,7 @@
 // in the same Spleen 8x16 font the kernel console uses, so the hand-over from
 // loader to kernel does not change the look of the screen.
 //
-// It keeps a character grid, so the cursor (a reversed cell) can be drawn and
+// It keeps a character grid, so the cursor (an underline bar) can be drawn and
 // removed and the screen scrolled by repainting.
 
 const font_mod: type = @import("font");
@@ -109,17 +109,15 @@ fn glyphFor(ch: u21) ?[]const u8 {
     return font.data[index * n ..][0..n];
 }
 
-/// Paint cell (col, row) from the grid; `reverse` swaps the colours (the
-/// cursor).
-fn paint(col: usize, row: usize, reverse: bool) void {
+/// Height in pixels of the cursor bar, as on the kernel console.
+const CURSOR_ROWS: usize = 2;
+
+/// Paint cell (col, row) from the grid; `cursor` adds the cursor bar along
+/// the bottom of the cell.
+fn paint(col: usize, row: usize, cursor: bool) void {
     const cell: Cell = grid[row][col];
-    var fgp: u32 = pixel(cell.fg);
-    var bgp: u32 = pixel(0);
-    if (reverse) {
-        const t: u32 = fgp;
-        fgp = bgp;
-        bgp = t;
-    }
+    const fgp: u32 = pixel(cell.fg);
+    const bgp: u32 = pixel(0);
     const arms: ?u4 = boxArms(cell.ch);
     const glyph: ?[]const u8 = if (arms == null) glyphFor(cell.ch) else null;
     var y: usize = 0;
@@ -129,7 +127,9 @@ fn paint(col: usize, row: usize, reverse: bool) void {
         var x: usize = 0;
         while (x < font.width) : (x += 1) {
             var on: bool = false;
-            if (arms) |a| {
+            if (cursor and y + CURSOR_ROWS >= font.height) {
+                on = true;
+            } else if (arms) |a| {
                 on = boxPixel(a, x, y);
             } else if (glyph) |g| {
                 on = (g[y * font.stride + x / 8] & (@as(u8, 0x80) >> @intCast(x % 8))) != 0;

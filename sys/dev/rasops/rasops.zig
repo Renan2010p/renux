@@ -201,7 +201,7 @@ fn putcharT(
     bg: u32,
     code: u16,
     font: *const wsfont.Font,
-    underline: bool,
+    underline: u8,
 ) void {
     // Font glyph, or '?' when the font does not cover the code.
     var bitmap: ?[]const u8 = null;
@@ -213,7 +213,7 @@ fn putcharT(
     var row: u32 = 0;
     while (row < h) : (row += 1) {
         var p: [*]u8 = at(raster, bpp, x0, y0 + row);
-        const ul: bool = underline and row == h - 1;
+        const ul: bool = row + underline >= h;
         var col: u32 = 0;
         while (col < w) : (col += 1) {
             var on: bool = ul;
@@ -232,7 +232,9 @@ fn putcharT(
 }
 
 /// Draw character `code` in cell (cell_x, cell_y): every pixel of the cell is
-/// written once, foreground or background, so no stale pixels remain.
+/// written once, foreground or background, so no stale pixels remain. The
+/// bottom `underline` pixel rows are painted in the foreground (1 for an
+/// underline, more for the cursor bar).
 pub fn putchar(
     raster: *const Raster,
     cell_x: u32,
@@ -241,7 +243,7 @@ pub fn putchar(
     bg: u32,
     code: u16,
     font: *const wsfont.Font,
-    underline: bool,
+    underline: u8,
 ) void {
     const x0: u32 = cell_x * font.width;
     const y0: u32 = cell_y * font.height;

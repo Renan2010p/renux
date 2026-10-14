@@ -88,8 +88,8 @@ pub fn blank(bg: u32) void {
 }
 
 /// Draw one cell: character `code` (see rasops.SPECIAL) in `fg` over `bg`,
-/// both 0xRRGGBB, optionally underlined.
-pub fn paintCell(row: u32, col: u32, code: u16, fg: u32, bg: u32, underline: bool) void {
+/// both 0xRRGGBB, with `underline` foreground rows at the bottom.
+pub fn paintCell(row: u32, col: u32, code: u16, fg: u32, bg: u32, underline: u8) void {
     if (!active() or row >= rcons.rows or col >= rcons.cols) {
         return;
     }
