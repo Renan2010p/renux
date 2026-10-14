@@ -22,6 +22,9 @@ comptime {
     _ = @import("dev/tty.zig");
     _ = @import("dev/mem.zig");
     _ = @import("dev/fb/fb.zig");
+    _ = @import("dev/pci/pci.zig");
+    _ = @import("dev/virtio/pci/virtio_pci_legacy.zig");
+    _ = @import("geom/geom_disk.zig");
     _ = @import("fs/tmpfs/tmpfs_vfsops.zig");
     _ = @import("fs/ext2fs/ext2fs_vfsops.zig");
 }

@@ -34,6 +34,9 @@ const VM_ACTIVE_COUNT: u64 = 103;
 const VM_INACTIVE_COUNT: u64 = 104;
 const VM_WIRE_COUNT: u64 = 105;
 const VM_CACHE_COUNT: u64 = 106;
+/// Pages read back from swap: Renux has no swap, so always 0 (reboot(8)
+/// watches it to know when paging has settled).
+const VM_SWAPPGSIN: u64 = 120;
 const VM_DMMAX: u64 = 107;
 const VM_LOADAVG: u64 = 108;
 
@@ -151,6 +154,7 @@ const name_mib = [_]NameMib{
     .{ .name = "vm.stats.vm.v_inactive_count", .mib = &.{ CTL_VM, VM_INACTIVE_COUNT } },
     .{ .name = "vm.stats.vm.v_wire_count", .mib = &.{ CTL_VM, VM_WIRE_COUNT } },
     .{ .name = "vm.stats.vm.v_cache_count", .mib = &.{ CTL_VM, VM_CACHE_COUNT } },
+    .{ .name = "vm.stats.vm.v_swappgsin", .mib = &.{ CTL_VM, VM_SWAPPGSIN } },
     .{ .name = "kern.pid_max", .mib = &.{ CTL_KERN, KERN_PID_MAX } },
     .{ .name = "kern.console", .mib = &.{ CTL_KERN, KERN_CONSOLE } },
     .{ .name = "kern.boottrace.runtrace", .mib = &.{ CTL_KERN, KERN_BOOTTRACE_RUNTRACE } },
@@ -383,7 +387,7 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             VM_PAGE_COUNT => return reportInt(oldp, oldlenp, @intCast(vm_page.totalPages())),
             VM_FREE_COUNT => return reportInt(oldp, oldlenp, @intCast(vm_page.freeCount())),
             VM_ACTIVE_COUNT => return reportInt(oldp, oldlenp, @intCast(vm_page.totalPages() - vm_page.freeCount())),
-            VM_INACTIVE_COUNT, VM_WIRE_COUNT, VM_CACHE_COUNT, VM_DMMAX => return reportInt(oldp, oldlenp, 0),
+            VM_INACTIVE_COUNT, VM_WIRE_COUNT, VM_CACHE_COUNT, VM_SWAPPGSIN, VM_DMMAX => return reportInt(oldp, oldlenp, 0),
             VM_LOADAVG => return loadavg(oldp, oldlenp),
             else => return sys.signed(-errno.ENOENT),
         },

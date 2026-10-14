@@ -54,6 +54,7 @@ fn memClose(ctx: ?*anyopaque) i32 {
 
 const mem_cdevsw: conf.Cdevsw = .{
     .name = "mem",
+    .d_type = conf.D_MEM,
     .open = memOpen,
     .read = memRead,
     .write = memWrite,

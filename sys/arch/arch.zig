@@ -77,6 +77,12 @@ pub const machine_cpu: type = machdep_impl.machine_cpu;
 /// Machine parameters (FreeBSD's <machine/param.h>): MACHINE, MACHINE_ARCH.
 pub const machine_param: type = machdep_impl.machine_param;
 
+/// Reset, halt and power off.
+pub const cpu_machdep: type = machdep_impl.cpu_machdep;
+
+/// PCI configuration space access.
+pub const pci_cfgreg: type = machdep_impl.pci_cfgreg;
+
 /// User FPU state: save and restore on context switch.
 pub const fpu: type = machdep_impl.fpu;
 

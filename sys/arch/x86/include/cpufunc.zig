@@ -162,3 +162,14 @@ pub fn setFsBase(base: u64) void {
 pub fn fsBase() u64 {
     return rdmsr(MSR_FS_BASE);
 }
+
+/// Full memory barrier (FreeBSD's mb() in machine/atomic.h): every load and
+/// store before it is visible before any after it, also to devices.
+pub fn mb() void {
+    asm volatile ("mfence" ::: .{ .memory = true });
+}
+
+/// Hint that the CPU is spinning on a memory location (cpu_spinwait()).
+pub fn cpu_spinwait() void {
+    asm volatile ("pause" ::: .{ .memory = true });
+}

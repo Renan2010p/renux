@@ -92,6 +92,13 @@ zig-out/renux.iso
 Each subproject keeps its own working `zig-out/` (`sys/zig-out`,
 `sbin/zig-out`).
 
+`zig build run` and `run-efi` attach a persistent disk, `sys/disk.img` (a
+sparse 1 GiB ext2 image made by `tools/mkdisk.sh` on the first run and never
+touched again). Renux sees it as `/dev/vtbd0` and mounts it on `/home` from
+`/etc/fstab`; files there survive a reboot. Shut down with `poweroff`,
+`reboot` or `shutdown` so the file system is marked clean; on the host,
+`e2fsck -f sys/disk.img` checks it and `debugfs sys/disk.img` looks inside.
+
 Notes:
 
 - The kernel is always built **ReleaseFast** (`sys/build.zig`); boot with
@@ -198,14 +205,21 @@ Working today:
   boot. Explicit linker script, GDT + TSS, IDT with trap handling; FreeBSD-style
   SYSINIT / mi_startup, boot log and `Loading kernel...` spinner.
 - **Console:** serial plus a graphical raster console (wsfont / rasops / rcons)
-  with a block cursor.
+  with an underline cursor.
 - **Memory:** physical page allocator, x86 pmap with per-process address spaces,
   demand-zero page faults, `brk` and file-backed `mmap`.
 - **Interrupts:** legacy 8259 PIC and the 8254 PIT at 100 Hz, preemptive
   scheduling over a process table.
 - **Processes:** fork/exec/wait/exit, signals, sysarch, and the FreeBSD/amd64
   system-call ABI (`syscall`/`iretq`).
-- **VFS:** tmpfs root, file and directory system calls, tty/termios.
+- **VFS:** tmpfs root, file and directory system calls (with the `*at`
+  family relative to a directory descriptor), hard and symbolic links,
+  `nmount`/`unmount`/`statfs`/`getfsstat`, tty/termios.
+- **Storage:** a PCI bus scan, the VirtIO block driver (`vtblk`, legacy
+  interface), disks as `/dev/vtbdN`, a buffer cache with delayed writes and
+  a syncer, and a read-write ext2 file system (FreeBSD's `ext2fs`), checked
+  clean by `e2fsck`. FreeBSD's `mount`, `umount`, `df`, `sync` and
+  `reboot`/`halt`/`poweroff`/`shutdown` run unchanged.
 - **Userland:** a Zig libc, shell and BSD-style utilities, a standalone C
   toolchain, dynamic linking (`ld-elf.so.1` + `libc.so.1`), and a real FreeBSD
   static binary (`/rescue/echo`).

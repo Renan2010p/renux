@@ -61,7 +61,8 @@ rm -rf "$WORK"
 mkdir -p "$WORK/boot" \
     "$WORK/sbin" "$WORK/bin" "$WORK/usr/bin" "$WORK/usr/sbin" "$WORK/usr/libexec" \
     "$WORK/etc" "$WORK/etc/rc.d" "$WORK/lib" "$WORK/libexec" \
-    "$WORK/dev" "$WORK/tmp" "$WORK/var" "$WORK/var/log" "$WORK/var/run"
+    "$WORK/dev" "$WORK/tmp" "$WORK/var" "$WORK/var/log" "$WORK/var/run" \
+    "$WORK/mnt" "$WORK/home"
 
 cp -a "$INIT" "$WORK/sbin/init"
 cp -a "$GETTY" "$WORK/usr/libexec/getty"
@@ -89,6 +90,7 @@ cp -a "$LOGGER" "$WORK/usr/bin/logger"
 cp -a "$SYSLOGD" "$WORK/usr/sbin/syslogd"
 cp -a "$RC" "$WORK/etc/rc"
 cp -a "$ROOT/etc/rc.d/syslogd" "$WORK/etc/rc.d/syslogd"
+cp -a "$ROOT/etc/fstab" "$WORK/etc/fstab"
 cp -a "$RTLD_SO" "$WORK/libexec/ld-elf.so.1"
 cp -a "$LIBC_SO" "$WORK/lib/libc.so.1"
 cp -a "$DYNH" "$WORK/bin/dynhello"
@@ -120,6 +122,8 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         usr/bin/tty usr/bin/uptime usr/bin/w usr/bin/who usr/bin/hexdump
         usr/bin/fortune usr/bin/resizewin usr/bin/ee
         usr/sbin/pwd_mkdb sbin/ldconfig
+        sbin/mount sbin/umount bin/df bin/sync bin/dd usr/bin/truncate sbin/md5
+        sbin/reboot sbin/halt sbin/poweroff sbin/shutdown usr/bin/wall
     "
     # Programs from FreeBSD packages, when they have been fetched.
     FBSD_PKG_PROGS="usr/local/bin/bash usr/local/bin/nano"

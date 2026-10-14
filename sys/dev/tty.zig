@@ -58,6 +58,7 @@ fn ttyClose(ctx: ?*anyopaque) i32 {
 /// The terminal's character device switch.
 const tty_cdevsw: conf.Cdevsw = .{
     .name = "tty",
+    .d_type = conf.D_TTY,
     .open = ttyOpen,
     .read = ttyRead,
     .write = ttyWrite,

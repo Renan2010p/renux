@@ -21,6 +21,8 @@ pub const intrdefs: type = @import("../../x86/include/intrdefs.zig");
 pub const gdt_defs: type = @import("../../x86/include/gdt.zig");
 pub const intr: type = @import("../../x86/x86/intr.zig");
 pub const clock: type = @import("../../x86/isa/clock.zig");
+pub const pci_cfgreg: type = @import("../../x86/pci/pci_cfgreg.zig");
+pub const cpu_machdep: type = @import("../../x86/x86/cpu_machdep.zig");
 
 // amd64-specific modules.
 pub const locore: type = @import("../amd64/locore.zig");

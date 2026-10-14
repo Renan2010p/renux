@@ -98,6 +98,10 @@ pub fn build(b: *Builder) !void {
 
     iso_step.dependOn(&mkiso.step);
 
+    // The persistent disk (sys/disk.img, mounted on /home): created on the
+    // first run, then kept, since it holds the user's files.
+    const ensure_disk: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "../tools/mkdisk.sh", "disk.img" });
+
     // `zig build run` -> boot the ISO in QEMU (BIOS, serial on stdio).
     const run_step: *Builder.Step = b.step("run", "Boot Renux in QEMU (BIOS)");
 
@@ -116,9 +120,12 @@ pub fn build(b: *Builder) !void {
         "-display",
         "none",
         "-no-reboot",
+        "-drive",
+        "file=disk.img,if=virtio,format=raw",
     });
 
     qemu.step.dependOn(iso_step);
+    qemu.step.dependOn(&ensure_disk.step);
 
     run_step.dependOn(&qemu.step);
 
@@ -138,12 +145,15 @@ pub fn build(b: *Builder) !void {
         b.fmt("if=pflash,format=raw,readonly=on,file={s}", .{ovmf}),
         "-cdrom",
         "zig-out/renux.iso",
+        "-drive",
+        "file=disk.img,if=virtio,format=raw",
         "-serial",
         "stdio",
         "-display",
         "gtk",
     });
     qemu_efi.step.dependOn(iso_step);
+    qemu_efi.step.dependOn(&ensure_disk.step);
     run_efi_step.dependOn(&qemu_efi.step);
 }
 

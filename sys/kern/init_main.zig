@@ -25,6 +25,8 @@ const kern_syscall: type = @import("kern_syscall.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const vfs_mount: type = @import("vfs_mount.zig");
+const geom_disk: type = @import("../geom/geom_disk.zig");
+const randomdev: type = @import("../dev/random/randomdev.zig");
 const vfs_vnops: type = @import("vfs_vnops.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
@@ -489,6 +491,17 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     mknod("/dev/null", 0o666, conf.makedev(2, 2));
     mknod("/dev/zero", 0o666, conf.makedev(2, 12));
     mknod("/dev/fb0", 0o600, conf.makedev(fbd.FB_MAJOR, 0));
+    mknod("/dev/random", 0o644, conf.makedev(randomdev.RANDOM_MAJOR, 0));
+    mknod("/dev/urandom", 0o644, conf.makedev(randomdev.RANDOM_MAJOR, 0));
+    // Disks, as FreeBSD's devfs names them (/dev/vtbd0, ...), owned by
+    // root and group operator, 0640.
+    for (geom_disk.list(), 0..) |dp, i| {
+        var path: [32]u8 = undefined;
+        const prefix: []const u8 = "/dev/";
+        @memcpy(path[0..prefix.len], prefix);
+        const name: []const u8 = geom_disk.devName(dp, path[prefix.len..]);
+        mknod(path[0 .. prefix.len + name.len], 0o640, geom_disk.devOf(i));
+    }
 
     ensureDir("/tmp");
     ensureDir("/var");

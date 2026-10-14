@@ -51,6 +51,17 @@ pub const SYS_getcwd: u64 = 326;
 /// buffer. Not part of the FreeBSD ABI, so it lives outside its range.
 pub const SYS_klog: u64 = 600;
 pub const SYS_sigreturn: u64 = 417;
+pub const SYS_sync: u64 = 36;
+pub const SYS_reboot: u64 = 55;
+pub const SYS_link: u64 = 9;
+pub const SYS_symlink: u64 = 57;
+pub const SYS_linkat: u64 = 495;
+pub const SYS_symlinkat: u64 = 502;
+pub const SYS_unmount: u64 = 22;
+pub const SYS_nmount: u64 = 378;
+pub const SYS_statfs: u64 = 555;
+pub const SYS_fstatfs: u64 = 556;
+pub const SYS_getfsstat: u64 = 557;
 pub const SYS_getcontext: u64 = 421;
 pub const SYS_setcontext: u64 = 422;
 pub const SYS_swapcontext: u64 = 423;

@@ -81,6 +81,9 @@ pub const VnodeOps: type = struct {
     /// Move entry `fcnp` of directory `fdvp` to `tcnp` in `tdvp` (both on
     /// this filesystem), replacing an existing target; returns 0 or errno.
     rename: ?*const fn (fdvp: *Vnode, fcnp: *const namei.Componentname, tdvp: *Vnode, tcnp: *const namei.Componentname) i32 = null,
+    /// Add the name `cnp` in directory `dvp` for the existing file `vp` (a
+    /// hard link, on the same filesystem); returns 0 or errno.
+    link: ?*const fn (dvp: *Vnode, vp: *Vnode, cnp: *const namei.Componentname) i32 = null,
 };
 
 /// Attribute changes for VnodeOps.setattr (FreeBSD's VOP_SETATTR with a

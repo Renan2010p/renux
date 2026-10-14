@@ -22,6 +22,13 @@ if [ ! -f /etc/spwd.db ] && [ -x /usr/sbin/pwd_mkdb ]; then
     /usr/sbin/pwd_mkdb -p /etc/master.passwd
 fi
 
+# Local file systems from /etc/fstab (FreeBSD's rc.d/mountcritlocal).
+if [ -f /etc/fstab ] && [ -x /sbin/mount ]; then
+    echo -n 'Mounting local filesystems:'
+    /sbin/mount -a
+    echo '.'
+fi
+
 # Each rc.d script announces itself the way FreeBSD's rc.subr does
 # ("Starting syslogd."), so the console shows one line per service.
 /etc/rc.d/syslogd

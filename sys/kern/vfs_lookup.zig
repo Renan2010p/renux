@@ -68,6 +68,12 @@ fn nameiDepth(start: ?*vnode.Vnode, path: []const u8, depth: u32, follow_last: b
             continue;
         }
 
+        // ".." at the root of a mounted filesystem continues in the
+        // directory it is mounted on.
+        if (namelen == 2 and buf[comp_start] == '.' and buf[comp_start + 1] == '.') {
+            vp = vfs_mount.uncover(vp);
+        }
+
         var cnp: namei.Componentname = .{
             .nameptr = @as([*]const u8, @ptrCast(&buf[comp_start])),
             .namelen = namelen,

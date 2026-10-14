@@ -12,6 +12,8 @@ const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const tty: type = @import("tty.zig");
+const vfs_bio: type = @import("vfs_bio.zig");
+const vfs_mount: type = @import("vfs_mount.zig");
 const prf: type = @import("subr_prf.zig");
 const param: type = @import("../sys/param.zig");
 
@@ -83,7 +85,9 @@ pub fn scheduler() noreturn {
         }
 
         if (!found) {
-            // Nothing runnable: idle until an interrupt arrives.
+            // Nothing runnable: let the syncer write aged buffers, then idle
+            // until an interrupt arrives.
+            vfs_bio.syncer(vfs_mount.diskBusy);
             arch.gdt.setKernelStack(schedStackTop());
             arch.syscall_entry.setKernelStack(schedStackTop());
             arch.cpu.enable_interrupts();

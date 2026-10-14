@@ -11,6 +11,12 @@
 /// Number of major device numbers.
 pub const NCDEV: usize = 16;
 
+/// Device classes (sys/conf.h D_TYPEMASK values).
+pub const D_TAPE: u32 = 0x0001;
+pub const D_DISK: u32 = 0x0002;
+pub const D_TTY: u32 = 0x0004;
+pub const D_MEM: u32 = 0x0008;
+
 /// Character device operations (NetBSD's struct cdevsw, reduced).
 pub const Cdevsw: type = struct {
     /// Name, for diagnostics.
@@ -30,6 +36,14 @@ pub const Cdevsw: type = struct {
     /// Readiness for poll(2)/select(2), as FreeBSD's d_poll: the POLL* bits
     /// that hold now. Devices without it are always ready.
     poll: ?*const fn (ctx: ?*anyopaque) u16 = null,
+    /// The device class FIODTYPE reports (D_DISK, D_TTY, D_MEM; 0 for
+    /// others), from FreeBSD's d_flags.
+    d_type: u32 = 0,
+    /// Positioned transfers, for devices with an address space (disks):
+    /// when present they are used instead of read/write, at the open file's
+    /// offset, which then advances.
+    read_at: ?*const fn (ctx: ?*anyopaque, offset: u64, buf: []u8) isize = null,
+    write_at: ?*const fn (ctx: ?*anyopaque, offset: u64, buf: []const u8) isize = null,
 };
 
 /// The registered character devices, by major number.

@@ -16,6 +16,8 @@ const vnode: type = @import("../../sys/vnode.zig");
 const errno: type = @import("../../sys/errno.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
 const kmem: type = @import("../../kern/subr_kmem.zig");
+const param: type = @import("../../sys/param.zig");
+const vm_page: type = @import("../../vm/vm_page.zig");
 const vfs_mount: type = @import("../../kern/vfs_mount.zig");
 const prf: type = @import("../../kern/subr_prf.zig");
 
@@ -44,14 +46,23 @@ fn tmpfsRoot(mp: *mount.Mount, vpp: *?*vnode.Vnode) i32 {
     return 0;
 }
 
-fn tmpfsUnmount(mp: *mount.Mount, flags: i32) i32 {
+fn tmpfsUnmount(mp: *mount.Mount, flags: u64) i32 {
     _ = mp;
     _ = flags;
     return 0;
 }
 
-fn tmpfsStatvfs(mp: *mount.Mount) i32 {
+/// tmpfs lives in memory: report the page pool as its space, as FreeBSD's
+/// tmpfs_statfs does.
+fn tmpfsStatfs(mp: *mount.Mount, sbp: *mount.Statfs) i32 {
     _ = mp;
+    sbp.f_bsize = param.PAGE_SIZE;
+    sbp.f_iosize = param.PAGE_SIZE;
+    sbp.f_blocks = vm_page.totalPages();
+    sbp.f_bfree = vm_page.freeCount();
+    sbp.f_bavail = @intCast(vm_page.freeCount());
+    sbp.f_files = vm_page.totalPages();
+    sbp.f_ffree = @intCast(vm_page.freeCount());
     return 0;
 }
 
@@ -60,12 +71,13 @@ const tmpfs_vfsops: mount.Vfsops = .{
     .mount = tmpfsMount,
     .root = tmpfsRoot,
     .unmount = tmpfsUnmount,
-    .statvfs = tmpfsStatvfs,
+    .statfs = tmpfsStatfs,
 };
 
 /// The filesystem record registered with the VFS.
 var tmpfs_vfs: mount.Vfs = .{
     .name = "tmpfs",
+    .typenum = 0x87,
     .ops = &tmpfs_vfsops,
     .next = null,
 };

@@ -21,6 +21,7 @@ pub const SYS_open: u64 = 5;
 pub const SYS_close: u64 = 6;
 pub const SYS_wait4: u64 = 7;
 pub const SYS_setsid: u64 = 147;
+pub const SYS_reboot: u64 = 55;
 pub const SYS_unlink: u64 = 10;
 pub const SYS_chdir: u64 = 12;
 pub const SYS_brk: u64 = 17;
@@ -61,6 +62,7 @@ pub const SIGCHLD: u64 = 20;
 pub const SIGWINCH: u64 = 28;
 pub const SIGUSR1: u64 = 30;
 pub const SIGUSR2: u64 = 31;
+pub const SIGTSTP: u64 = 18;
 
 /// Special handler values.
 pub const SIG_DFL: u64 = 0;
@@ -343,6 +345,17 @@ pub fn sigaction(sig: u64, act: ?*const Sigaction, oact: ?*Sigaction) i64 {
     return @bitCast(r);
 }
 
+/// reboot(2) flags.
+pub const RB_AUTOBOOT: u64 = 0;
+pub const RB_HALT: u64 = 0x0008;
+pub const RB_POWEROFF: u64 = 0x4000;
+
+/// Reboot, halt or power off (`howto`); returns only on failure.
+pub fn reboot(howto: u64) i64 {
+    const r: u64 = syscall(SYS_reboot, .{ howto, 0, 0, 0, 0, 0 });
+    return @bitCast(r);
+}
+
 /// Send signal `sig` to process `pid`.
 pub fn kill(pid: i64, sig: u64) i64 {
     const r: u64 = syscall(SYS_kill, .{ @bitCast(pid), sig, 0, 0, 0, 0 });
@@ -374,6 +387,15 @@ pub fn setsid() i32 {
 pub fn execve(path: [*:0]const u8, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) i64 {
     const r: u64 = syscall(SYS_execve, .{ @intFromPtr(path), @intFromPtr(argv), @intFromPtr(envp), 0, 0, 0 });
     return @bitCast(r);
+}
+
+/// Reap a child that has exited, without blocking: its pid, 0 when none
+/// has exited yet, or a negative value when there are no children.
+pub fn waitNohang() i32 {
+    const any: u64 = @bitCast(@as(i64, -1));
+    const WNOHANG: u64 = 1;
+    const r: u64 = syscall(SYS_wait4, .{ any, 0, WNOHANG, 0, 0, 0 });
+    return @bitCast(@as(u32, @truncate(r)));
 }
 
 /// Wait for a child to exit; returns its pid or a negative value.

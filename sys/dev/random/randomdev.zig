@@ -133,3 +133,60 @@ pub fn read_random(buf: []u8) void {
     block(&nk);
     for (&key, 0..) |*k, j| k.* = word(nk[0..32], j);
 }
+
+// -- /dev/random -------------------------------------------------------------------
+
+const conf: type = @import("../../sys/conf.zig");
+const errno: type = @import("../../sys/errno.zig");
+const sysinit: type = @import("../../sys/sysinit.zig");
+
+/// Major number of /dev/random (and /dev/urandom, which is the same device
+/// on FreeBSD).
+pub const RANDOM_MAJOR: usize = 6;
+
+fn randomOpen(dev: u64, flags: i32) ?*anyopaque {
+    _ = dev;
+    _ = flags;
+    return null;
+}
+
+fn randomRead(ctx: ?*anyopaque, buf: []u8) isize {
+    _ = ctx;
+    read_random(buf);
+    return @intCast(buf.len);
+}
+
+/// Writes are accepted and discarded (FreeBSD mixes them into the pool).
+fn randomWrite(ctx: ?*anyopaque, buf: []const u8) isize {
+    _ = ctx;
+    return @intCast(buf.len);
+}
+
+fn randomIoctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
+    _ = ctx;
+    _ = cmd;
+    _ = arg;
+    return -errno.ENOTTY;
+}
+
+fn randomClose(ctx: ?*anyopaque) i32 {
+    _ = ctx;
+    return 0;
+}
+
+const random_cdevsw: conf.Cdevsw = .{
+    .name = "random",
+    .open = randomOpen,
+    .read = randomRead,
+    .write = randomWrite,
+    .ioctl = randomIoctl,
+    .close = randomClose,
+};
+
+fn randomAttach(_: ?*const anyopaque) callconv(.c) void {
+    conf.registerCdev(RANDOM_MAJOR, &random_cdevsw);
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_randomdev", sysinit.SI_SUB_DRIVERS, sysinit.SI_ORDER_THIRD, randomAttach, null);
+}

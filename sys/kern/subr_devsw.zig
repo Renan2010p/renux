@@ -46,16 +46,34 @@ fn cast(f: *file.File) *DevFile {
 
 fn devRead(f: *file.File, buf: []u8) isize {
     const df: *DevFile = cast(f);
+    if (df.cdev.read_at) |rd| {
+        const n: isize = rd(df.ctx, f.f_offset, buf);
+        if (n > 0) f.f_offset += @intCast(n);
+        return n;
+    }
     return df.cdev.read(df.ctx, buf);
 }
 
 fn devWrite(f: *file.File, buf: []const u8) isize {
     const df: *DevFile = cast(f);
+    if (df.cdev.write_at) |wr| {
+        const n: isize = wr(df.ctx, f.f_offset, buf);
+        if (n > 0) f.f_offset += @intCast(n);
+        return n;
+    }
     return df.cdev.write(df.ctx, buf);
 }
 
+/// FIODTYPE: _IOR('f', 122, int), the device class (answered here for
+/// every device, as FreeBSD's devfs does from d_flags).
+const FIODTYPE: u64 = 0x4004667a;
+
 fn devIoctl(f: *file.File, cmd: u64, arg: u64) i32 {
     const df: *DevFile = cast(f);
+    if (cmd == FIODTYPE) {
+        @as(*align(1) i32, @ptrFromInt(arg)).* = @intCast(df.cdev.d_type);
+        return 0;
+    }
     return df.cdev.ioctl(df.ctx, cmd, arg);
 }
 

@@ -21,6 +21,8 @@ const kern_descrip: type = @import("kern_descrip.zig");
 const errno: type = @import("../sys/errno.zig");
 const kern_signal: type = @import("kern_signal.zig");
 const kern_context: type = @import("kern_context.zig");
+const vfs_mount: type = @import("vfs_mount.zig");
+const kern_shutdown: type = @import("kern_shutdown.zig");
 const kern_time: type = @import("kern_time.zig");
 const kern_prot: type = @import("kern_prot.zig");
 const kern_sysctl: type = @import("kern_sysctl.zig");
@@ -195,6 +197,17 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_sigaction, .handler = kern_signal.sysSigaction },
     .{ .num = sys.SYS_sigreturn, .handler = arch.exec_machdep.sysSigreturn },
     .{ .num = sys.SYS_sigsuspend, .handler = kern_signal.sysSigsuspend },
+    .{ .num = sys.SYS_sync, .handler = vfs_mount.sysSync },
+    .{ .num = sys.SYS_reboot, .handler = kern_shutdown.sysReboot },
+    .{ .num = sys.SYS_link, .handler = vfs_syscalls.sysLink },
+    .{ .num = sys.SYS_linkat, .handler = vfs_syscalls.sysLinkat },
+    .{ .num = sys.SYS_symlink, .handler = vfs_syscalls.sysSymlink },
+    .{ .num = sys.SYS_symlinkat, .handler = vfs_syscalls.sysSymlinkat },
+    .{ .num = sys.SYS_unmount, .handler = vfs_mount.sysUnmount },
+    .{ .num = sys.SYS_nmount, .handler = vfs_mount.sysNmount },
+    .{ .num = sys.SYS_statfs, .handler = vfs_mount.sysStatfs },
+    .{ .num = sys.SYS_fstatfs, .handler = vfs_mount.sysFstatfs },
+    .{ .num = sys.SYS_getfsstat, .handler = vfs_mount.sysGetfsstat },
     .{ .num = sys.SYS_sigpending, .handler = kern_signal.sysSigpending },
     .{ .num = sys.SYS_getcontext, .handler = kern_context.sysGetcontext },
     .{ .num = sys.SYS_setcontext, .handler = kern_context.sysSetcontext },

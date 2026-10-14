@@ -272,6 +272,7 @@ fn cnpoll(ctx: ?*anyopaque) u16 {
 
 const cons_cdevsw: conf.Cdevsw = .{
     .name = "console",
+    .d_type = conf.D_TTY,
     .open = cnopen,
     .read = cnread,
     .write = cnwriteDev,

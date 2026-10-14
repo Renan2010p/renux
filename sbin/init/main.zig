@@ -6,11 +6,53 @@
 // Following the BSD startup sequence: in a single-user boot (the kernel passes
 // -s) init first offers a shell on the console; then it runs the system
 // startup script /etc/rc and keeps a getty running on the console.
+//
+// It also answers the signals FreeBSD's init does, which shutdown(8) sends:
+// SIGINT reboots, SIGUSR1 halts and SIGUSR2 powers off, after asking every
+// process to terminate; SIGTSTP stops it from starting new sessions (what
+// reboot(8) sends before it does the shutting down itself).
 
 const libc: type = @import("libc");
 
 /// _IO('t', 97): make the terminal the session's controlling terminal.
 const TIOCSCTTY: u64 = 0x20007461;
+
+/// A shutdown asked for by a signal: the reboot(2) flags, or null.
+var shutdown_howto: ?u64 = null;
+/// SIGTSTP: start no new sessions.
+var no_respawn: bool = false;
+
+fn onSignal(sig: c_int) callconv(.c) void {
+    switch (@as(u64, @intCast(sig))) {
+        libc.syscall.SIGINT => @as(*volatile ?u64, &shutdown_howto).* = libc.syscall.RB_AUTOBOOT,
+        libc.syscall.SIGUSR1 => @as(*volatile ?u64, &shutdown_howto).* = libc.syscall.RB_HALT,
+        libc.syscall.SIGUSR2 => @as(*volatile ?u64, &shutdown_howto).* = libc.syscall.RB_POWEROFF,
+        libc.syscall.SIGTSTP => @as(*volatile bool, &no_respawn).* = true,
+        else => {},
+    }
+}
+
+/// Bring the system down (FreeBSD's death()): ask every process to
+/// terminate, give them a moment, kill what is left, then reboot(2).
+fn shutdown(howto: u64) noreturn {
+    libc.syslog.msg("init", "shutting down");
+    _ = libc.syscall.kill(-1, libc.syscall.SIGTERM);
+    const pause: libc.syscall.Timespec2 = .{ .tv_sec = 0, .tv_nsec = 200_000_000 };
+    var tries: u32 = 0;
+    while (tries < 15) : (tries += 1) {
+        // Reap what has exited; stop waiting once nothing is left.
+        while (true) {
+            const r: i32 = libc.syscall.waitNohang();
+            if (r <= 0) break;
+        }
+        if (libc.syscall.kill(-1, 0) < 0) break;
+        _ = libc.syscall.nanosleep(&pause, null);
+    }
+    _ = libc.syscall.kill(-1, libc.syscall.SIGKILL);
+    _ = libc.syscall.reboot(howto);
+    libc.stdio.puts("init: reboot(2) failed");
+    while (true) _ = libc.syscall.nanosleep(&pause, null);
+}
 
 comptime {
     // The C startup provides _start (the ELF entry point) and calls main().
@@ -68,6 +110,15 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         }
     }
 
+    const handler: u64 = @intFromPtr(&onSignal);
+    _ = libc.syscall.signal(libc.syscall.SIGINT, handler);
+    _ = libc.syscall.signal(libc.syscall.SIGUSR1, handler);
+    _ = libc.syscall.signal(libc.syscall.SIGUSR2, handler);
+    _ = libc.syscall.signal(libc.syscall.SIGTSTP, handler);
+    // SIGTERM would take FreeBSD's init to single user; Renux's stays put.
+    _ = libc.syscall.signal(libc.syscall.SIGTERM, libc.syscall.SIG_IGN);
+    _ = libc.syscall.signal(libc.syscall.SIGHUP, libc.syscall.SIG_IGN);
+
     if (single) {
         singleUser(envp);
     }
@@ -86,6 +137,14 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
     // Respawn getty on the console, like a real init(8): when the shell it
     // started exits, a new getty (and so a new login) is started.
     while (true) {
+        if (shutdown_howto) |howto| shutdown(howto);
+        if (@as(*volatile bool, &no_respawn).*) {
+            // Sessions are off: just reap children until told what to do.
+            const pause: libc.syscall.Timespec2 = .{ .tv_sec = 1, .tv_nsec = 0 };
+            _ = libc.syscall.waitNohang();
+            _ = libc.syscall.nanosleep(&pause, null);
+            continue;
+        }
         const gpid: i32 = libc.syscall.fork();
         if (gpid == 0) {
             // A login session of its own, as FreeBSD's init gives each
@@ -98,7 +157,14 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
             _ = libc.syscall.execve("/usr/libexec/getty", @ptrCast(&av), envp);
             libc.syscall.exit(1);
         }
-        _ = libc.syscall.wait(null);
+        // A signal ends the wait early (EINTR); keep waiting for this
+        // session unless a shutdown was asked for.
+        while (true) {
+            const r: i32 = libc.syscall.wait(null);
+            if (r > 0 or @as(*volatile ?u64, &shutdown_howto).* != null) break;
+            if (r < 0 and r != -4) break; // not EINTR: no children left
+        }
+        if (@as(*volatile ?u64, &shutdown_howto).*) |howto| shutdown(howto);
         libc.syslog.msg("init", "getty exited, respawning");
     }
 }

@@ -25,11 +25,16 @@ const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 
-/// fsync(2)/fdatasync(2): Renux has no disk cache to flush yet, so both are
-/// successful no-ops. (nano calls fsync after a save and errors out otherwise.)
+/// fsync(2)/fdatasync(2): write the file's filesystem out to its disk. A
+/// filesystem in memory (tmpfs) has nothing to write.
 pub fn sysFsync(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
-    return 0;
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(args[0])) orelse return sys.signed(-errno.EBADF);
+    if (f.f_type != file.DTYPE_VNODE or f.f_ops != &vfs_vnops.vnode_ops) return 0;
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(f.f_data orelse return 0));
+    const mp = vp.v_mount orelse return 0;
+    const sync = mp.mnt_op.sync orelse return 0;
+    const e: i32 = sync(mp);
+    return if (e == 0) 0 else sys.signed(-e);
 }
 
 /// ftruncate(2): change the size of the file behind descriptor `fd`.
@@ -65,13 +70,16 @@ pub fn sysTruncate(args: [sys.MAXARGS]u64) u64 {
 /// open(2): resolve `path` relative to the working directory and return a
 /// descriptor.
 pub fn sysOpen(args: [sys.MAXARGS]u64) u64 {
-    const path_ptr: u64 = args[0];
-    const flags: i32 = @bitCast(@as(u32, @truncate(args[1])));
+    return openCommon(atDir(@bitCast(@as(i64, AT_FDCWD))), args[0], args[1], args[2]);
+}
 
+fn openCommon(at: AtDir, path_ptr: u64, flags_arg: u64, mode_arg: u64) u64 {
+    if (at.err != 0) return sys.signed(-at.err);
+    const flags: i32 = @bitCast(@as(u32, @truncate(flags_arg)));
     const p: *proc.Proc = kern_proc.current;
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
-    const mode: u16 = @truncate(args[2] & 0o777 & ~@as(u64, p.cmask));
-    const f: *file.File = vfs_vnops.vn_open(p.cwd, path, flags, mode) orelse return sys.signed(-errno.ENOENT);
+    const mode: u16 = @truncate(mode_arg & 0o777 & ~@as(u64, p.cmask));
+    const f: *file.File = vfs_vnops.vn_open(at.vp, path, flags, mode) orelse return sys.signed(-errno.ENOENT);
 
     // POSIX: the lowest free descriptor (programs that close 0-2 and reopen
     // the terminal rely on getting 0 back).
@@ -80,7 +88,7 @@ pub fn sysOpen(args: [sys.MAXARGS]u64) u64 {
         return sys.signed(-errno.EMFILE);
     };
     kern_descrip.fdAffix(p, fd, f);
-    recordDirPath(p, f, path);
+    recordDirPath(at.base, f, path);
     const O_CLOEXEC: i32 = 0x00100000;
     kern_descrip.fdSetCloexec(p, fd, (flags & O_CLOEXEC) != 0);
     return @intCast(fd);
@@ -153,11 +161,13 @@ pub fn sysFstatat(args: [sys.MAXARGS]u64) u64 {
     if (path.len == 0) {
         return sysFstat(.{ fd, statbuf, 0, 0, 0, 0 });
     }
+    const at: AtDir = atDir(fd);
+    if (at.err != 0) return sys.signed(-at.err);
     // AT_SYMLINK_NOFOLLOW: stat a symbolic link itself (lstat(2)).
     const vp: *vnode.Vnode = (if ((args[3] & AT_SYMLINK_NOFOLLOW) != 0)
-        vfs_lookup.nameiAtNoFollow(kern_proc.current.cwd, path)
+        vfs_lookup.nameiAtNoFollow(at.vp, path)
     else
-        vfs_lookup.nameiAt(kern_proc.current.cwd, path)) orelse return sys.signed(-errno.ENOENT);
+        vfs_lookup.nameiAt(at.vp, path)) orelse return sys.signed(-errno.ENOENT);
     var st: stat.Stat = undefined;
     const e: i32 = vfs_vnops.fillStat(vp, &st);
     vfs_subr.vrele(vp);
@@ -189,12 +199,14 @@ pub fn sysGetdents(args: [sys.MAXARGS]u64) u64 {
     var eofflag: bool = false;
     const n: isize = vp.v_op.readdir(vp, f.f_offset, kbuf[0..want], &eofflag);
     if (n < 0) {
-        return sys.ERROR;
+        return sys.signed(n);
     }
     const nn: usize = @intCast(n);
     copyOut(buf, &kbuf, nn);
 
-    // Advance the file offset by the number of whole entries produced.
+    // The directory continues where the filesystem says: the d_off of the
+    // last entry produced (an entry index for tmpfs, a byte offset for
+    // ext2fs), as FreeBSD's VOP_READDIR leaves uio_offset.
     var off: u64 = f.f_offset;
     var j: usize = 0;
     while (j + @sizeOf(dirent.Dirent) <= nn) {
@@ -202,7 +214,7 @@ pub fn sysGetdents(args: [sys.MAXARGS]u64) u64 {
         if (rec.reclen == 0) {
             break;
         }
-        off += 1;
+        off = @intCast(rec.off);
         j += rec.reclen;
     }
     f.f_offset = off;
@@ -211,13 +223,13 @@ pub fn sysGetdents(args: [sys.MAXARGS]u64) u64 {
 
 /// chdir(2): change the working directory and remember its path.
 /// Remember the absolute path of a directory opened as `f`, for fchdir(2).
-fn recordDirPath(p: *proc.Proc, f: *file.File, path: []const u8) void {
+fn recordDirPath(base: []const u8, f: *file.File, path: []const u8) void {
     if (f.f_type != file.DTYPE_VNODE) return;
     const raw: *anyopaque = f.f_data orelse return;
     const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
     if (vp.v_type != .vdir) return;
     const buf: [*]u8 = @ptrCast(kmem.alloc(param.MAXPATHLEN) orelse return);
-    const n: usize = normPath(p.cwd_path[0..p.cwd_len], path, buf[0..param.MAXPATHLEN]) orelse {
+    const n: usize = normPath(base, path, buf[0..param.MAXPATHLEN]) orelse {
         kmem.free(@ptrCast(buf));
         return;
     };
@@ -268,18 +280,20 @@ pub fn sysChdir(args: [sys.MAXARGS]u64) u64 {
 
 /// mkdir(2): create a directory.
 pub fn sysMkdir(args: [sys.MAXARGS]u64) u64 {
-    return mkdirCommon(args[0], args[1]);
+    return mkdirCommon(kern_proc.current.cwd, args[0], args[1]);
 }
 
 /// mkdirat(2): `mkdirat(fd, path, mode)`.
 pub fn sysMkdirat(args: [sys.MAXARGS]u64) u64 {
-    return mkdirCommon(args[1], args[2]);
+    const at: AtDir = atDir(args[0]);
+    if (at.err != 0) return sys.signed(-at.err);
+    return mkdirCommon(at.vp, args[1], args[2]);
 }
 
-fn mkdirCommon(path_ptr: u64, mode_arg: u64) u64 {
+fn mkdirCommon(start: ?*vnode.Vnode, path_ptr: u64, mode_arg: u64) u64 {
     const mode: u16 = @truncate(mode_arg & 0o777 & ~@as(u64, kern_proc.current.cmask));
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
-    const cwd = kern_proc.current.cwd;
+    const cwd = start;
     // Tell an existing name (EEXIST) from a missing parent (ENOENT).
     if (vfs_lookup.nameiAtNoFollow(cwd, path)) |old| {
         vfs_subr.vrele(old);
@@ -292,18 +306,23 @@ fn mkdirCommon(path_ptr: u64, mode_arg: u64) u64 {
 
 /// rename(2): `rename(from, to)`.
 pub fn sysRename(args: [sys.MAXARGS]u64) u64 {
-    return renameCommon(args[0], args[1]);
+    const cwd = kern_proc.current.cwd;
+    return renameCommon(cwd, args[0], cwd, args[1]);
 }
 
 /// renameat(2): `renameat(fromfd, from, tofd, to)`.
 pub fn sysRenameat(args: [sys.MAXARGS]u64) u64 {
-    return renameCommon(args[1], args[3]);
+    const f: AtDir = atDir(args[0]);
+    if (f.err != 0) return sys.signed(-f.err);
+    const t: AtDir = atDir(args[2]);
+    if (t.err != 0) return sys.signed(-t.err);
+    return renameCommon(f.vp, args[1], t.vp, args[3]);
 }
 
-fn renameCommon(from_ptr: u64, to_ptr: u64) u64 {
+fn renameCommon(fstart: ?*vnode.Vnode, from_ptr: u64, tstart: ?*vnode.Vnode, to_ptr: u64) u64 {
     const from: []const u8 = subr_syscall.userStr(from_ptr) orelse return sys.signed(-errno.EFAULT);
     const to: []const u8 = subr_syscall.userStr(to_ptr) orelse return sys.signed(-errno.EFAULT);
-    const err: i32 = vfs_vnops.vn_rename(kern_proc.current.cwd, from, to);
+    const err: i32 = vfs_vnops.vn_rename(fstart, from, tstart, to);
     return if (err == 0) 0 else sys.signed(-err);
 }
 
@@ -311,7 +330,9 @@ fn renameCommon(from_ptr: u64, to_ptr: u64) u64 {
 pub fn sysUnlinkat(args: [sys.MAXARGS]u64) u64 {
     const AT_REMOVEDIR: u64 = 0x800;
     const path: []const u8 = subr_syscall.userStr(args[1]) orelse return sys.signed(-errno.EFAULT);
-    const err: i32 = vfs_vnops.vn_remove(kern_proc.current.cwd, path, (args[2] & AT_REMOVEDIR) != 0);
+    const at: AtDir = atDir(args[0]);
+    if (at.err != 0) return sys.signed(-at.err);
+    const err: i32 = vfs_vnops.vn_remove(at.vp, path, (args[2] & AT_REMOVEDIR) != 0);
     return if (err == 0) 0 else sys.signed(-err);
 }
 
@@ -345,13 +366,13 @@ pub fn sysUnlink(args: [sys.MAXARGS]u64) u64 {
 /// with an execute bit (or search a directory); others get the owner, group
 /// or other bits that apply to them. `effective` selects the effective ids
 /// (eaccess(2), AT_EACCESS) instead of the real ones (access(2)).
-fn accessCommon(path_ptr: u64, mode: u64, effective: bool) u64 {
+fn accessCommon(start: ?*vnode.Vnode, path_ptr: u64, mode: u64, effective: bool) u64 {
     const R_OK: u64 = 0x04;
     const W_OK: u64 = 0x02;
     const X_OK: u64 = 0x01;
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
     const p = kern_proc.current;
-    const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return sys.signed(-errno.ENOENT);
+    const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return sys.signed(-errno.ENOENT);
     defer vfs_subr.vrele(vp);
     if ((mode & (R_OK | W_OK | X_OK)) == 0) return 0; // F_OK
     var va: vnode.Vattr = undefined;
@@ -384,37 +405,40 @@ fn inGroups(p: *proc.Proc, gid: u32) bool {
 
 /// access(2): with the real user and group ids.
 pub fn sysAccess(args: [sys.MAXARGS]u64) u64 {
-    return accessCommon(args[0], args[1], false);
+    return accessCommon(kern_proc.current.cwd, args[0], args[1], false);
 }
 
 /// eaccess(2): with the effective ids (what test -r/-w/-x uses).
 pub fn sysEaccess(args: [sys.MAXARGS]u64) u64 {
-    return accessCommon(args[0], args[1], true);
+    return accessCommon(kern_proc.current.cwd, args[0], args[1], true);
 }
 
-/// faccessat(2): like access(2); the descriptor is only used when the path is
-/// empty.
+/// faccessat(2): `faccessat(fd, path, mode, flag)`; AT_EACCESS checks
+/// with the effective ids.
 pub fn sysFaccessat(args: [sys.MAXARGS]u64) u64 {
     const AT_EACCESS: u64 = 0x100;
     if (args[1] == 0) return sys.signed(-errno.EFAULT);
-    return accessCommon(args[1], args[2], (args[3] & AT_EACCESS) != 0);
+    const at: AtDir = atDir(args[0]);
+    if (at.err != 0) return sys.signed(-at.err);
+    return accessCommon(at.vp, args[1], args[2], (args[3] & AT_EACCESS) != 0);
 }
 
 /// readlink(2): `readlink(path, buf, bufsize)`, the target of a symbolic link,
 /// not NUL-terminated.
 pub fn sysReadlink(args: [sys.MAXARGS]u64) u64 {
-    return readlinkCommon(args[0], args[1], args[2]);
+    return readlinkCommon(kern_proc.current.cwd, args[0], args[1], args[2]);
 }
 
-/// readlinkat(2): `readlinkat(fd, path, buf, bufsize)`; relative paths are
-/// resolved from the current directory, as elsewhere.
+/// readlinkat(2): `readlinkat(fd, path, buf, bufsize)`.
 pub fn sysReadlinkat(args: [sys.MAXARGS]u64) u64 {
-    return readlinkCommon(args[1], args[2], args[3]);
+    const at: AtDir = atDir(args[0]);
+    if (at.err != 0) return sys.signed(-at.err);
+    return readlinkCommon(at.vp, args[1], args[2], args[3]);
 }
 
-fn readlinkCommon(path_ptr: u64, buf: u64, bufsize: u64) u64 {
+fn readlinkCommon(start: ?*vnode.Vnode, path_ptr: u64, buf: u64, bufsize: u64) u64 {
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
-    const vp: *vnode.Vnode = vfs_lookup.nameiAtNoFollow(kern_proc.current.cwd, path) orelse return sys.signed(-errno.ENOENT);
+    const vp: *vnode.Vnode = vfs_lookup.nameiAtNoFollow(start, path) orelse return sys.signed(-errno.ENOENT);
     defer vfs_subr.vrele(vp);
     if (vp.v_type != .vlnk) {
         return sys.signed(-errno.EINVAL);
@@ -429,11 +453,10 @@ fn readlinkCommon(path_ptr: u64, buf: u64, bufsize: u64) u64 {
     return len;
 }
 
-/// openat(2): open a path relative to a directory descriptor. Only the current
-/// directory (AT_FDCWD) and absolute paths are resolved, as elsewhere.
+/// openat(2): `openat(fd, path, flags, mode)`, a relative path resolved
+/// from the directory open as `fd` (or the working directory, AT_FDCWD).
 pub fn sysOpenat(args: [sys.MAXARGS]u64) u64 {
-    const shifted: [sys.MAXARGS]u64 = .{ args[1], args[2], args[3], 0, 0, 0 };
-    return sysOpen(shifted);
+    return openCommon(atDir(args[0]), args[1], args[2], args[3]);
 }
 
 /// Copy `len` bytes of kernel memory to the caller's address `dst`.
@@ -510,6 +533,77 @@ fn normPath(base: []const u8, path: []const u8, out: []u8) ?usize {
 
 const AT_SYMLINK_NOFOLLOW: u64 = 0x200;
 
+/// link(2): `link(path1, path2)`.
+pub fn sysLink(args: [sys.MAXARGS]u64) u64 {
+    const cwd = kern_proc.current.cwd;
+    return linkCommon(cwd, args[0], cwd, args[1], true);
+}
+
+/// linkat(2): `linkat(fd1, path1, fd2, path2, flag)`; AT_SYMLINK_FOLLOW
+/// links what a symbolic link points at rather than the link.
+pub fn sysLinkat(args: [sys.MAXARGS]u64) u64 {
+    const AT_SYMLINK_FOLLOW: u64 = 0x400;
+    const f: AtDir = atDir(args[0]);
+    if (f.err != 0) return sys.signed(-f.err);
+    const t: AtDir = atDir(args[2]);
+    if (t.err != 0) return sys.signed(-t.err);
+    return linkCommon(f.vp, args[1], t.vp, args[3], (args[4] & AT_SYMLINK_FOLLOW) != 0);
+}
+
+fn linkCommon(fstart: ?*vnode.Vnode, from_ptr: u64, tstart: ?*vnode.Vnode, to_ptr: u64, follow: bool) u64 {
+    const vp: *vnode.Vnode = pathVnodeAt(fstart, from_ptr, follow) orelse return sys.signed(-errno.ENOENT);
+    defer vfs_subr.vrele(vp);
+    const to: []const u8 = subr_syscall.userStr(to_ptr) orelse return sys.signed(-errno.EFAULT);
+    const e: i32 = vfs_vnops.vn_link(vp, tstart, to);
+    return if (e == 0) 0 else sys.signed(-e);
+}
+
+/// symlink(2): `symlink(target, path)`.
+pub fn sysSymlink(args: [sys.MAXARGS]u64) u64 {
+    return symlinkCommon(args[0], kern_proc.current.cwd, args[1]);
+}
+
+/// symlinkat(2): `symlinkat(target, fd, path)`.
+pub fn sysSymlinkat(args: [sys.MAXARGS]u64) u64 {
+    const at: AtDir = atDir(args[1]);
+    if (at.err != 0) return sys.signed(-at.err);
+    return symlinkCommon(args[0], at.vp, args[2]);
+}
+
+fn symlinkCommon(target_ptr: u64, start: ?*vnode.Vnode, path_ptr: u64) u64 {
+    const target: []const u8 = subr_syscall.userStr(target_ptr) orelse return sys.signed(-errno.EFAULT);
+    const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return sys.signed(-errno.EFAULT);
+    const mode: u16 = @truncate(0o777 & ~@as(u32, kern_proc.current.cmask));
+    const e: i32 = vfs_vnops.vn_symlink(start, path, target, mode);
+    return if (e == 0) 0 else sys.signed(-e);
+}
+
+/// AT_FDCWD: a *at() call's "relative to the working directory".
+const AT_FDCWD: i32 = -100;
+
+/// Where a *at() call resolves a relative path (FreeBSD's namei with
+/// ni_dirfd): the working directory for AT_FDCWD, else the directory open
+/// as `dirfd`. `base` is that directory's path, for the paths fchdir(2)
+/// remembers; `err` is set when `dirfd` is no open directory.
+const AtDir = struct {
+    vp: ?*vnode.Vnode,
+    base: []const u8,
+    err: i32 = 0,
+};
+
+fn atDir(dirfd: u64) AtDir {
+    const p = kern_proc.current;
+    const fd: i32 = @bitCast(@as(u32, @truncate(dirfd)));
+    if (fd == AT_FDCWD) return .{ .vp = p.cwd, .base = p.cwd_path[0..p.cwd_len] };
+    if (fd < 0) return .{ .vp = null, .base = "", .err = errno.EBADF };
+    const f: *file.File = kern_descrip.fdGetfile(p, @intCast(fd)) orelse return .{ .vp = null, .base = "", .err = errno.EBADF };
+    if (f.f_type != file.DTYPE_VNODE or f.f_ops != &vfs_vnops.vnode_ops) return .{ .vp = null, .base = "", .err = errno.ENOTDIR };
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(f.f_data orelse return .{ .vp = null, .base = "", .err = errno.EBADF }));
+    if (vp.v_type != .vdir) return .{ .vp = null, .base = "", .err = errno.ENOTDIR };
+    const base: []const u8 = if (f.f_path) |b| b[0..f.f_pathlen] else "";
+    return .{ .vp = vp, .base = base };
+}
+
 /// The vnode behind descriptor `fd`, referenced, or null.
 fn fdVnode(fd: u64) ?*vnode.Vnode {
     const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(fd)) orelse return null;
@@ -522,9 +616,20 @@ fn fdVnode(fd: u64) ?*vnode.Vnode {
 
 /// The vnode for a user path, referenced, or null.
 fn pathVnode(path_ptr: u64, follow: bool) ?*vnode.Vnode {
+    return pathVnodeAt(kern_proc.current.cwd, path_ptr, follow);
+}
+
+/// The vnode for a user path relative to `start`, referenced, or null.
+fn pathVnodeAt(start: ?*vnode.Vnode, path_ptr: u64, follow: bool) ?*vnode.Vnode {
     const path: []const u8 = subr_syscall.userStr(path_ptr) orelse return null;
-    const cwd = kern_proc.current.cwd;
-    return if (follow) vfs_lookup.nameiAt(cwd, path) else vfs_lookup.nameiAtNoFollow(cwd, path);
+    return if (follow) vfs_lookup.nameiAt(start, path) else vfs_lookup.nameiAtNoFollow(start, path);
+}
+
+/// pathVnodeAt for a *at() call's descriptor (null when it is bad).
+fn atVnode(dirfd: u64, path_ptr: u64, follow: bool) ?*vnode.Vnode {
+    const at: AtDir = atDir(dirfd);
+    if (at.err != 0) return null;
+    return pathVnodeAt(at.vp, path_ptr, follow);
 }
 
 /// Apply `sa` to `vp` (releasing it), after the permission check: only the
@@ -571,7 +676,7 @@ pub fn sysLchmod(args: [sys.MAXARGS]u64) u64 {
 }
 
 pub fn sysFchmodat(args: [sys.MAXARGS]u64) u64 {
-    return setattrVp(pathVnode(args[1], (args[3] & AT_SYMLINK_NOFOLLOW) == 0), modeArg(args[2]));
+    return setattrVp(atVnode(args[0], args[1], (args[3] & AT_SYMLINK_NOFOLLOW) == 0), modeArg(args[2]));
 }
 
 pub fn sysChown(args: [sys.MAXARGS]u64) u64 {
@@ -587,7 +692,7 @@ pub fn sysLchown(args: [sys.MAXARGS]u64) u64 {
 }
 
 pub fn sysFchownat(args: [sys.MAXARGS]u64) u64 {
-    return setattrVp(pathVnode(args[1], (args[4] & AT_SYMLINK_NOFOLLOW) == 0), ownerArg(args[2], args[3]));
+    return setattrVp(atVnode(args[0], args[1], (args[4] & AT_SYMLINK_NOFOLLOW) == 0), ownerArg(args[2], args[3]));
 }
 
 /// chflags(2) family: Renux files have no flags (UF_*/SF_*). Clearing them
@@ -612,7 +717,7 @@ pub fn sysFchflags(args: [sys.MAXARGS]u64) u64 {
 }
 
 pub fn sysChflagsat(args: [sys.MAXARGS]u64) u64 {
-    return flagsCommon(pathVnode(args[1], (args[3] & AT_SYMLINK_NOFOLLOW) == 0), args[2]);
+    return flagsCommon(atVnode(args[0], args[1], (args[3] & AT_SYMLINK_NOFOLLOW) == 0), args[2]);
 }
 
 /// Times from a struct timespec[2] (access, modification): NULL means now;
@@ -631,7 +736,7 @@ fn timesArg(ts_ptr: u64) vnode.Setattr {
 
 /// utimensat(2): `utimensat(fd, path, times, flag)`.
 pub fn sysUtimensat(args: [sys.MAXARGS]u64) u64 {
-    return setattrVp(pathVnode(args[1], (args[3] & AT_SYMLINK_NOFOLLOW) == 0), timesArg(args[2]));
+    return setattrVp(atVnode(args[0], args[1], (args[3] & AT_SYMLINK_NOFOLLOW) == 0), timesArg(args[2]));
 }
 
 /// futimens(2): `futimens(fd, times)`.

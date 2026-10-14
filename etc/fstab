@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 The Renux Project
+#
+# /etc/fstab -- static file system information (see fstab(5)).
+#
+# The root is the tmpfs unpacked from the boot image. /home lives on the
+# persistent virtio disk (sys/disk.img, made by tools/mkdisk.sh); "failok"
+# lets the system come up without it.
+#
+# Device	Mountpoint	FStype	Options		Dump	Pass#
+/dev/vtbd0	/home		ext2fs	rw,failok	0	0

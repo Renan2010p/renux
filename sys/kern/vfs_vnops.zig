@@ -251,9 +251,9 @@ fn splitLast(start: ?*vnode.Vnode, path: []const u8) ?struct { dvp: *vnode.Vnode
 }
 
 /// Rename `from` to `to` (rename(2)). Returns 0 or errno.
-pub fn vn_rename(start: ?*vnode.Vnode, from: []const u8, to: []const u8) i32 {
-    const f = splitLast(start, from) orelse return errno.ENOENT;
-    const t = splitLast(start, to) orelse return errno.ENOENT;
+pub fn vn_rename(fstart: ?*vnode.Vnode, from: []const u8, tstart: ?*vnode.Vnode, to: []const u8) i32 {
+    const f = splitLast(fstart, from) orelse return errno.ENOENT;
+    const t = splitLast(tstart, to) orelse return errno.ENOENT;
     if (f.name.len == 0 or t.name.len == 0) return errno.EINVAL;
     if (isDots(f.name) or isDots(t.name)) return errno.EINVAL;
     if (f.dvp.v_type != .vdir or t.dvp.v_type != .vdir) return errno.ENOTDIR;
@@ -262,6 +262,34 @@ pub fn vn_rename(start: ?*vnode.Vnode, from: []const u8, to: []const u8) i32 {
     const fcnp: namei.Componentname = .{ .nameptr = f.name.ptr, .namelen = f.name.len, .nameiop = namei.DELETE, .flags = namei.ISLASTCN };
     const tcnp: namei.Componentname = .{ .nameptr = t.name.ptr, .namelen = t.name.len, .nameiop = namei.CREATE, .flags = namei.ISLASTCN };
     return op(f.dvp, &fcnp, t.dvp, &tcnp);
+}
+
+/// Give the file `vp` the new name `path` (resolved from `start`): a hard
+/// link (link(2)). Returns 0 or errno.
+pub fn vn_link(vp: *vnode.Vnode, start: ?*vnode.Vnode, path: []const u8) i32 {
+    if (vp.v_type == .vdir) return errno.EPERM;
+    const t = splitLast(start, path) orelse return errno.ENOENT;
+    if (t.name.len == 0 or isDots(t.name)) return errno.EEXIST;
+    if (t.dvp.v_type != .vdir) return errno.ENOTDIR;
+    if (t.dvp.v_mount != vp.v_mount) return errno.EXDEV;
+    const op = t.dvp.v_op.link orelse return errno.EOPNOTSUPP;
+    const cnp: namei.Componentname = .{ .nameptr = t.name.ptr, .namelen = t.name.len, .nameiop = namei.CREATE, .flags = namei.ISLASTCN };
+    return op(t.dvp, vp, &cnp);
+}
+
+/// Create the symbolic link `path` (resolved from `start`) pointing at
+/// `target` (symlink(2)). Returns 0 or errno.
+pub fn vn_symlink(start: ?*vnode.Vnode, path: []const u8, target: []const u8, mode: u16) i32 {
+    if (target.len == 0) return errno.ENOENT;
+    if (vfs_lookup.nameiAtNoFollow(start, path)) |old| {
+        vfs_subr.vrele(old);
+        return errno.EEXIST;
+    }
+    const vp: *vnode.Vnode = createNode(start, path, .vlnk, mode, 0) orelse return errno.ENOENT;
+    defer vfs_subr.vrele(vp);
+    const n: isize = vp.v_op.write(vp, 0, target);
+    if (n < 0) return @intCast(-n);
+    return 0;
 }
 
 fn isDots(name: []const u8) bool {

@@ -77,3 +77,41 @@ pub inline fn bus_space_write_1(
 ) void {
     impl.write1(tag, handle, offset, value);
 }
+
+/// Read a 16-bit word from mapped bus space at `offset`.
+pub inline fn bus_space_read_2(
+    tag: bus_space_tag_t,
+    handle: bus_space_handle_t,
+    offset: bus_size_t,
+) u16 {
+    return impl.read2(tag, handle, offset);
+}
+
+/// Write a 16-bit word to mapped bus space at `offset`.
+pub inline fn bus_space_write_2(
+    tag: bus_space_tag_t,
+    handle: bus_space_handle_t,
+    offset: bus_size_t,
+    value: u16,
+) void {
+    impl.write2(tag, handle, offset, value);
+}
+
+/// Read a 32-bit word from mapped bus space at `offset`.
+pub inline fn bus_space_read_4(
+    tag: bus_space_tag_t,
+    handle: bus_space_handle_t,
+    offset: bus_size_t,
+) u32 {
+    return impl.read4(tag, handle, offset);
+}
+
+/// Write a 32-bit word to mapped bus space at `offset`.
+pub inline fn bus_space_write_4(
+    tag: bus_space_tag_t,
+    handle: bus_space_handle_t,
+    offset: bus_size_t,
+    value: u32,
+) void {
+    impl.write4(tag, handle, offset, value);
+}

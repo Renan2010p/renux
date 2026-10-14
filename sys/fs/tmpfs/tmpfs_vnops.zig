@@ -32,6 +32,7 @@ const tmpfs_vnodeops: vnode.VnodeOps = .{
     .getattr = tmpfsGetattr,
     .setattr = tmpfsSetattr,
     .rename = tmpfsRename,
+    .link = tmpfsLink,
     .readdir = tmpfsReaddir,
     .inactive = tmpfsInactive,
 };
@@ -145,9 +146,26 @@ fn tmpfsRemove(dvp: *vnode.Vnode, cnp: *const namei.Componentname) i32 {
     tmpfs_subr.freeDirent(de);
     if (node.type == .vdir) {
         dir.nlink -= 1;
+        node.nlink = 0;
+    } else {
+        // Other names (hard links) may remain.
+        node.nlink -|= 1;
     }
-    node.nlink = 0;
     // The node itself is left allocated: a cached vnode may still refer to it.
+    return 0;
+}
+
+/// A hard link: one more directory entry for the same node.
+fn tmpfsLink(dvp: *vnode.Vnode, vp: *vnode.Vnode, cnp: *const namei.Componentname) i32 {
+    const dir: *tmpfs.Node = nodeOf(dvp);
+    const node: *tmpfs.Node = nodeOf(vp);
+    if (dir.type != .vdir) return errno.ENOTDIR;
+    if (node.type == .vdir) return errno.EPERM;
+    if (tmpfs_subr.dirLookup(dir, cnp) != null) return errno.EEXIST;
+    const de: *tmpfs.Dirent = tmpfs_subr.allocDirent(cnp.nameptr[0..cnp.namelen]) orelse return errno.ENOMEM;
+    de.node = node;
+    tmpfs_subr.dirAttach(dir, de);
+    node.nlink += 1;
     return 0;
 }
 
