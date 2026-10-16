@@ -13,12 +13,22 @@
 // It keeps a character grid, so the cursor (an underline bar) can be drawn and
 // removed and the screen scrolled by repainting.
 
-const font_mod: type = @import("font");
+const font_module: type = @import("font");
 
-const font = &font_mod.font;
+/// The console font (kernel/dev/wsfont/spleen8x16.zig, shared with the
+/// kernel console).
+const font: *const @TypeOf(font_module.font) = &font_module.font;
 
+/// The largest text grid kept (enough for 2560 x 2048 with an 8x16 font).
 const MAX_COLS: usize = 320;
 const MAX_ROWS: usize = 128;
+
+/// The colour of text before any `setColor`: the VGA light grey.
+const DEFAULT_FOREGROUND: u32 = 0xaaaaaa;
+const BACKGROUND: u32 = 0x000000;
+
+/// Bytes per pixel: the framebuffer is always 32-bit here.
+const BYTES_PER_PIXEL: usize = 4;
 
 /// A 32-bit linear framebuffer with 8-bit colour channels.
 pub const Fb: type = struct {
@@ -32,18 +42,23 @@ pub const Fb: type = struct {
     blue_shift: u5,
 };
 
+/// One character cell of the grid: the character and its colour (0xRRGGBB).
 const Cell: type = struct {
     ch: u21 = ' ',
-    fg: u32 = 0xaaaaaa,
+    fg: u32 = DEFAULT_FOREGROUND,
 };
 
 var fb: Fb = undefined;
+/// What is on the screen, so cells can be repainted (for the cursor and for
+/// scrolling) without reading the framebuffer back.
 var grid: [MAX_ROWS][MAX_COLS]Cell = undefined;
 var ncols: usize = 0;
 var nrows: usize = 0;
+/// The cursor position, in cells.
 var cx: usize = 0;
 var cy: usize = 0;
-var fg_rgb: u32 = 0xaaaaaa;
+/// The colour of text written from now on.
+var fg_rgb: u32 = DEFAULT_FOREGROUND;
 var cursor_on: bool = true;
 
 /// Take over `f`: clear it and home the cursor.
@@ -54,15 +69,7 @@ pub fn init(f: Fb) void {
     clear();
 }
 
-/// The text grid size.
-pub fn cols() usize {
-    return ncols;
-}
-
-pub fn rows() usize {
-    return nrows;
-}
-
+/// The framebuffer pixel value for colour `rgb` (0xRRGGBB).
 fn pixel(rgb: u32) u32 {
     const r: u32 = (rgb >> 16) & 0xff;
     const g: u32 = (rgb >> 8) & 0xff;
@@ -72,34 +79,44 @@ fn pixel(rgb: u32) u32 {
 
 // -- drawing -------------------------------------------------------------------
 
-/// Whether a box-drawing character sets pixel (x, y) of the cell: its arms
-/// meet at the centre (left, right, up, down).
+// Box-drawing characters are drawn by geometry rather than from the font
+// (which has none): each is a set of "arms" running from the centre of the
+// cell to the middle of its edges.
+const ARM_LEFT: u4 = 1;
+const ARM_RIGHT: u4 = 2;
+const ARM_UP: u4 = 4;
+const ARM_DOWN: u4 = 8;
+
+/// Whether a box-drawing character with `arms` sets pixel (x, y) of its cell.
 fn boxPixel(arms: u4, x: usize, y: usize) bool {
-    const mx: usize = font.width / 2;
-    const my: usize = font.height / 2;
-    if (y == my and ((arms & 1 != 0 and x <= mx) or (arms & 2 != 0 and x >= mx))) return true;
-    if (x == mx and ((arms & 4 != 0 and y <= my) or (arms & 8 != 0 and y >= my))) return true;
+    const mid_x: usize = font.width / 2;
+    const mid_y: usize = font.height / 2;
+    if (y == mid_y and ((arms & ARM_LEFT != 0 and x <= mid_x) or (arms & ARM_RIGHT != 0 and x >= mid_x))) return true;
+    if (x == mid_x and ((arms & ARM_UP != 0 and y <= mid_y) or (arms & ARM_DOWN != 0 and y >= mid_y))) return true;
     return false;
 }
 
-/// Arms of the box-drawing characters the menu frame uses.
+/// The arms of box-drawing character `ch` (single and double lines are drawn
+/// alike), or null when it is not one.
 fn boxArms(ch: u21) ?u4 {
     return switch (ch) {
-        0x2500, 0x2550 => 1 | 2, // ─ ═
-        0x2502, 0x2551 => 4 | 8, // │ ║
-        0x250c, 0x2554 => 2 | 8, // ┌ ╔
-        0x2510, 0x2557 => 1 | 8, // ┐ ╗
-        0x2514, 0x255a => 2 | 4, // └ ╚
-        0x2518, 0x255d => 1 | 4, // ┘ ╝
-        0x251c, 0x2560 => 4 | 8 | 2, // ├ ╠
-        0x2524, 0x2563 => 4 | 8 | 1, // ┤ ╣
-        0x252c, 0x2566 => 1 | 2 | 8, // ┬ ╦
-        0x2534, 0x2569 => 1 | 2 | 4, // ┴ ╩
-        0x253c, 0x256c => 1 | 2 | 4 | 8, // ┼ ╬
+        '─', '═' => ARM_LEFT | ARM_RIGHT,
+        '│', '║' => ARM_UP | ARM_DOWN,
+        '┌', '╔' => ARM_RIGHT | ARM_DOWN,
+        '┐', '╗' => ARM_LEFT | ARM_DOWN,
+        '└', '╚' => ARM_RIGHT | ARM_UP,
+        '┘', '╝' => ARM_LEFT | ARM_UP,
+        '├', '╠' => ARM_UP | ARM_DOWN | ARM_RIGHT,
+        '┤', '╣' => ARM_UP | ARM_DOWN | ARM_LEFT,
+        '┬', '╦' => ARM_LEFT | ARM_RIGHT | ARM_DOWN,
+        '┴', '╩' => ARM_LEFT | ARM_RIGHT | ARM_UP,
+        '┼', '╬' => ARM_LEFT | ARM_RIGHT | ARM_UP | ARM_DOWN,
         else => null,
     };
 }
 
+/// The font bitmap of `ch` (characters beyond Latin-1 show as '?'), or
+/// null when the font has no glyph for it.
 fn glyphFor(ch: u21) ?[]const u8 {
     const c: u21 = if (ch < 0x100) ch else '?';
     if (c < font.firstchar) return null;
@@ -117,13 +134,13 @@ const CURSOR_ROWS: usize = 2;
 fn paint(col: usize, row: usize, cursor: bool) void {
     const cell: Cell = grid[row][col];
     const fgp: u32 = pixel(cell.fg);
-    const bgp: u32 = pixel(0);
+    const bgp: u32 = pixel(BACKGROUND);
     const arms: ?u4 = boxArms(cell.ch);
     const glyph: ?[]const u8 = if (arms == null) glyphFor(cell.ch) else null;
     var y: usize = 0;
     while (y < font.height) : (y += 1) {
         const line: [*]volatile u32 = @ptrCast(@alignCast(fb.base +
-            (row * font.height + y) * fb.stride + col * font.width * 4));
+            (row * font.height + y) * fb.stride + col * font.width * BYTES_PER_PIXEL));
         var x: usize = 0;
         while (x < font.width) : (x += 1) {
             var on: bool = false;
@@ -139,10 +156,12 @@ fn paint(col: usize, row: usize, cursor: bool) void {
     }
 }
 
+/// Draw the cursor bar at the cursor position (if the cursor is shown).
 fn drawCursor() void {
     if (cursor_on and cx < ncols and cy < nrows) paint(cx, cy, true);
 }
 
+/// Erase the cursor bar by repainting its cell.
 fn hideCursor() void {
     if (cursor_on and cx < ncols and cy < nrows) paint(cx, cy, false);
 }
@@ -157,7 +176,7 @@ pub fn clear() void {
         while (c < ncols) : (c += 1) grid[r][c] = .{ .ch = ' ', .fg = fg_rgb };
     }
     var y: usize = 0;
-    const black: u32 = pixel(0);
+    const black: u32 = pixel(BACKGROUND);
     while (y < fb.height) : (y += 1) {
         const line: [*]volatile u32 = @ptrCast(@alignCast(fb.base + y * fb.stride));
         var x: usize = 0;
@@ -189,6 +208,7 @@ pub fn showCursor(on: bool) void {
     if (on) drawCursor();
 }
 
+/// Move every line up by one, blank the last one and repaint the screen.
 fn scroll() void {
     var r: usize = 1;
     while (r < nrows) : (r += 1) grid[r - 1] = grid[r];
@@ -201,6 +221,7 @@ fn scroll() void {
     }
 }
 
+/// Move the cursor to the start of the next line, scrolling at the bottom.
 fn newline() void {
     cx = 0;
     if (cy + 1 < nrows) {

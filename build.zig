@@ -4,8 +4,8 @@
 // The Renux build.
 //
 // One build for the whole system: the kernel (kernel/), the boot loader
-// (stand/), the C library and the programs (userland/), the root image, the
-// ISO and the QEMU runs. The products land in zig-out/, laid out like the
+// (bootloader/), the C library and the programs (userland/), the root image,
+// the ISO and the QEMU runs. The products land in zig-out/, laid out like the
 // installed system:
 //
 //   zig-out/boot/kernel/kernel   the kernel, with the root image embedded
@@ -136,7 +136,7 @@ pub fn build(b: *Builder) void {
     const mkiso_run: *Builder.Step.Run = b.addRunArtifact(mkiso);
     mkiso_run.addFileArg(kernel.getEmittedBin());
     mkiso_run.addFileArg(loader.getEmittedBin());
-    mkiso_run.addFileArg(b.path("stand/defaults/loader.conf"));
+    mkiso_run.addFileArg(b.path("bootloader/defaults/loader.conf"));
     const iso: Builder.LazyPath = mkiso_run.addOutputFileArg("renux.iso");
     const install_iso: *Builder.Step.InstallFile = b.addInstallFileWithDir(iso, .prefix, "renux.iso");
     iso_step.dependOn(&install_iso.step);
@@ -150,14 +150,14 @@ pub fn build(b: *Builder) void {
     esp_run.addArg("--fat");
     esp_run.addFileArg(loader.getEmittedBin());
     esp_run.addFileArg(kernel.getEmittedBin());
-    esp_run.addFileArg(b.path("stand/defaults/loader-installed.conf"));
+    esp_run.addFileArg(b.path("bootloader/defaults/loader-installed.conf"));
     const esp_img: Builder.LazyPath = esp_run.addOutputFileArg("esp.img");
 
     const installer_kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, esp_img);
     const installer_run: *Builder.Step.Run = b.addRunArtifact(mkiso);
     installer_run.addFileArg(installer_kernel.getEmittedBin());
     installer_run.addFileArg(loader.getEmittedBin());
-    installer_run.addFileArg(b.path("stand/defaults/loader.conf"));
+    installer_run.addFileArg(b.path("bootloader/defaults/loader.conf"));
     const installer_iso: Builder.LazyPath = installer_run.addOutputFileArg("renux-installer.iso");
     const install_installer: *Builder.Step.InstallFile = b.addInstallFileWithDir(installer_iso, .prefix, "renux-installer.iso");
     installer_step.dependOn(&install_installer.step);
@@ -346,19 +346,20 @@ fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath, esp_img:
         .strip = false,
     });
 
-    // Boot protocol bindings live in stand/ and are shared with the loader.
+    // The boot protocols live with the loader, in bootloader/arch/amd64/.
     const limine: *Builder.Module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("stand/amd64/limine/limine.zig"),
+        .root_source_file = b.path("bootloader/arch/amd64/limine/limine.zig"),
     });
     kern.addImport("limine", limine);
-    // The Renux boot protocol (stand/arch/amd64/boot.zig) is what the kernel's
+    // The Renux boot protocol's kernel side
+    // (bootloader/arch/amd64/protocol/kernel.zig) is what the kernel's
     // arch.boot resolves to; its fallback uses the Limine module.
     const boot: *Builder.Module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("stand/arch/amd64/boot.zig"),
+        .root_source_file = b.path("bootloader/arch/amd64/protocol/kernel.zig"),
     });
     boot.addImport("limine", limine);
     kern.addImport("renuxboot", boot);
@@ -481,40 +482,67 @@ fn newvers(b: *Builder, devbuild: bool) *Builder.Step.Options {
 
 // -- loader -----------------------------------------------------------------------------
 
-/// The Renux UEFI loader (stand/efi/loader): the MI loader (stand/common),
-/// the UEFI console and the console font it shares with the kernel.
+/// The Renux UEFI loader, BOOTX64.EFI. Its modules, and who imports them:
+///
+///   main      bootloader/efi/main.zig                       the root (with
+///                                                           load_elf.zig and
+///                                                           handoff.zig)
+///   common    bootloader/common/common.zig                  main
+///   platform  bootloader/efi/efi_cons.zig                   main, common
+///   libefi    bootloader/efi/libefi.zig                     main, platform, loader_md
+///   loader_md bootloader/arch/<arch>/efi/md.zig             main
+///   bootinfo  bootloader/arch/<arch>/protocol/bootinfo.zig  main
+///   gfx_fb    bootloader/common/gfx_fb.zig                  platform
+///   font      kernel/dev/wsfont/spleen8x16.zig              gfx_fb (the kernel
+///                                                           console's font)
 fn buildLoader(b: *Builder) *Builder.Step.Compile {
-    const target: Builder.ResolvedTarget = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .uefi });
-    const optimize: builtin.OptimizeMode = .ReleaseSmall;
-    const opts = .{ .target = target, .optimize = optimize };
+    const cpu_arch: std.Target.Cpu.Arch = .x86_64;
+    const target: Builder.ResolvedTarget = b.resolveTargetQuery(.{ .cpu_arch = cpu_arch, .os_tag = .uefi });
+    const arch_dir: []const u8 = switch (cpu_arch) {
+        .x86_64 => "bootloader/arch/amd64",
+        else => @panic("bootloader: no machine-dependent part for this architecture yet"),
+    };
 
-    const font: *Builder.Module = b.createModule(.{ .root_source_file = b.path("kernel/dev/wsfont/spleen8x16.zig"), .target = opts.target, .optimize = opts.optimize });
-    const gfx: *Builder.Module = b.createModule(.{ .root_source_file = b.path("stand/common/gfx_fb.zig"), .target = opts.target, .optimize = opts.optimize });
-    gfx.addImport("font", font);
-    const platform: *Builder.Module = b.createModule(.{ .root_source_file = b.path("stand/efi/loader/efi_cons.zig"), .target = opts.target, .optimize = opts.optimize });
-    platform.addImport("gfx_fb", gfx);
-    const common: *Builder.Module = b.createModule(.{ .root_source_file = b.path("stand/common/common.zig"), .target = opts.target, .optimize = opts.optimize });
+    const loader: Loader = .{ .b = b, .target = target, .optimize = .ReleaseSmall };
+    const font: *Builder.Module = loader.module("kernel/dev/wsfont/spleen8x16.zig");
+    const gfx_fb: *Builder.Module = loader.module("bootloader/common/gfx_fb.zig");
+    const libefi: *Builder.Module = loader.module("bootloader/efi/libefi.zig");
+    const platform: *Builder.Module = loader.module("bootloader/efi/efi_cons.zig");
+    const common: *Builder.Module = loader.module("bootloader/common/common.zig");
+    const bootinfo: *Builder.Module = loader.module(b.fmt("{s}/protocol/bootinfo.zig", .{arch_dir}));
+    const md: *Builder.Module = loader.module(b.fmt("{s}/efi/md.zig", .{arch_dir}));
+    const main: *Builder.Module = loader.module("bootloader/efi/main.zig");
+
+    gfx_fb.addImport("font", font);
+    platform.addImport("gfx_fb", gfx_fb);
+    platform.addImport("libefi", libefi);
     common.addImport("platform", platform);
-    const bootinfo: *Builder.Module = b.createModule(.{ .root_source_file = b.path("stand/arch/amd64/bootinfo.zig"), .target = opts.target, .optimize = opts.optimize });
-    const md: *Builder.Module = b.createModule(.{
-        .root_source_file = b.path(switch (target.result.cpu.arch) {
-            .x86_64 => "stand/efi/loader/arch/amd64/md.zig",
-            else => @panic("stand/efi/loader: no machine-dependent part for this architecture yet"),
-        }),
-        .target = opts.target,
-        .optimize = opts.optimize,
-    });
-
-    const mod: *Builder.Module = b.createModule(.{ .root_source_file = b.path("stand/efi/loader/main.zig"), .target = opts.target, .optimize = opts.optimize });
-    mod.addImport("platform", platform);
-    mod.addImport("common", common);
-    mod.addImport("loader_md", md);
-    mod.addImport("bootinfo", bootinfo);
+    md.addImport("libefi", libefi);
+    main.addImport("platform", platform);
+    main.addImport("common", common);
+    main.addImport("libefi", libefi);
+    main.addImport("loader_md", md);
+    main.addImport("bootinfo", bootinfo);
 
     return b.addExecutable(.{
         .name = "BOOTX64",
-        .root_module = mod,
+        .root_module = main,
         .use_lld = true,
         .use_llvm = true,
     });
 }
+
+/// Creates the loader's modules, all for the same target.
+const Loader: type = struct {
+    b: *Builder,
+    target: Builder.ResolvedTarget,
+    optimize: builtin.OptimizeMode,
+
+    fn module(l: Loader, path: []const u8) *Builder.Module {
+        return l.b.createModule(.{
+            .root_source_file = l.b.path(path),
+            .target = l.target,
+            .optimize = l.optimize,
+        });
+    }
+};

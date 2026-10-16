@@ -82,7 +82,7 @@ Build from the repository root, with one `build.zig` for the whole system:
 ```sh
 zig build                 # kernel, loader and native userland (the default)
 zig build kernel          # kernel/  -> zig-out/boot/kernel/kernel
-zig build loader          # stand/   -> zig-out/boot/loader.efi
+zig build loader          # bootloader/ -> zig-out/boot/loader.efi
 zig build userland        # userland/ -> zig-out/userland/, zig-out/lib/libc.a
 zig build fetch           # the FreeBSD userland (base + packages) -> tools/freebsd/
 zig build iso             # zig-out/renux.iso (UEFI, written by tools/mkiso.zig)
@@ -130,7 +130,8 @@ Renux boots the way FreeBSD does, with its own loader in place of
 `/boot/loader`:
 
 - **UEFI** (the only path): `\EFI\BOOT\BOOTX64.EFI` is the Renux loader
-  (`stand/efi/loader` for the firmware side, `stand/common` for the menu,
+  (`bootloader/efi` for the firmware side, `bootloader/arch/amd64/efi` for
+  the page tables and the kernel entry, `bootloader/common` for the menu,
   `loader.conf` and the `OK` prompt). It reads `/boot/defaults/loader.conf`
   and `/boot/loader.conf`, shows the boot menu ("Welcome to Renux": multi/single
   user, the loader prompt, reboot, console, kernel selection, boot options)
@@ -205,7 +206,7 @@ takes the screen back itself. `/bin/fbdraw` is a small example.
 
 Renux keeps its own layout: the kernel in `kernel/` (its machine-independent
 heart in `kernel/core/`), everything that runs in user mode in `userland/`,
-laid out as it is installed, and the boot loader in `stand/`. Only Renux's
+laid out as it is installed, and the boot loader in `bootloader/`. Only Renux's
 own code lives here; the FreeBSD userland is fetched (see `tools/`).
 
 ```
@@ -230,13 +231,17 @@ userland/              user mode, as installed
   usr/bin/             /usr/bin: login, stat
   libexec/             /usr/libexec: getty
   etc/                 /etc: rc, rc.d, fstab, motd
-stand/                 boot loader and boot support
-  common/              MI loader: menu, loader.conf, OK prompt, brand/logo
-  efi/loader/          UEFI loader (BOOTX64.EFI)
-  defaults/loader.conf /boot/defaults/loader.conf
-  arch/amd64/          Renux boot protocol (shared with the kernel)
-  amd64/               Limine bindings and config (legacy BIOS path, unused
-                       by `zig build iso`)
+bootloader/            boot loader and boot support
+  common/              firmware- and machine-independent loader: menu,
+                       loader.conf, OK prompt, brand/logo
+  efi/                 UEFI loader, machine-independent (BOOTX64.EFI):
+                       console and files, ELF loading, kernel hand-off
+  defaults/            /boot/defaults/loader.conf, installed loader.conf
+  arch/amd64/
+    efi/               UEFI loader, amd64 part: page tables, kernel entry
+    protocol/          Renux boot protocol (shared with the kernel)
+    limine/            Limine bindings and config (fallback protocol,
+                       unused by `zig build iso`)
 tools/                 build programs: mkiso.zig (the UEFI ISO writer),
                        mkfs.zig (the ext2 writer), fetch.zig (the FreeBSD
                        userland downloader), mkrootfs.sh, mkdisk.sh, the zcc

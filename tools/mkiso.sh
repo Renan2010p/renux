@@ -14,7 +14,7 @@
 # the loader loads only the kernel; the root filesystem is embedded in the
 # kernel itself (MD_ROOT), so no modules travel on the medium.
 #
-#   UEFI  the Renux loader (stand/efi/loader), from an El Torito FAT image
+#   UEFI  the Renux loader (bootloader/efi), from an El Torito FAT image
 #         holding \EFI\BOOT\BOOTX64.EFI, /boot/kernel/kernel and
 #         /boot/defaults/loader.conf (UEFI firmware reads FAT, not ISO 9660)
 #   BIOS  Limine, from the ISO 9660 tree
@@ -37,8 +37,8 @@ OUT="$3"
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
-DEFAULTS="${DEFAULTS:-$ROOT/stand/defaults/loader.conf}"
-CONF="${CONF:-$ROOT/stand/amd64/conf/limine/limine.conf}"
+DEFAULTS="${DEFAULTS:-$ROOT/bootloader/defaults/loader.conf}"
+CONF="${CONF:-$ROOT/bootloader/arch/amd64/limine/limine.conf}"
 LIMINE="${LIMINE_DIR:-$ROOT/tools/limine}"
 WORK="${WORK:-$(dirname -- "$OUT")/iso}"
 
