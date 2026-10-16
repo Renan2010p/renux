@@ -178,6 +178,10 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         login.conf.db login.access nsswitch.conf shells profile ttys; do
         [ -e "$FBSDLIB/etc/$f" ] && cp -L "$FBSDLIB/etc/$f" "$WORK/etc/$f"
     done
+    # The serial consoles default to TERM=vt100, which has no alternate screen;
+    # a terminal you attach to a serial port today is xterm-compatible, so give
+    # them xterm (with the smcup/rmcup the termcap now provides).
+    [ -e "$WORK/etc/ttys" ] && sed -i '/^ttyu/ s/vt100/xterm/' "$WORK/etc/ttys"
     for f in login system other passwd su; do
         cp "$FBSDLIB/etc/pam.d/$f" "$WORK/etc/pam.d/$f"
     done
@@ -190,14 +194,14 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     # is a link to it, as on FreeBSD.
     cp "$FBSDLIB/usr/share/misc/termcap" "$FBSDLIB/usr/share/misc/termcap.db" "$WORK/usr/share/misc/"
     ln -sf /usr/share/misc/termcap "$WORK/etc/termcap"
-    # FreeBSD's base "xterm" entry (tc=xterm-new) has no smcup/rmcup, so
-    # full-screen programs (nano, htop, vi) cannot switch to the alternate
-    # screen: on exit they leave their drawing on the normal screen. It also
-    # lacks E3, the "erase the scrollback" capability clear(1) uses. Give
-    # xterm both, as a terminal on Linux has, by shadowing the entry with one
-    # that adds them and inherits the rest.
+    # FreeBSD's base xterm entries (xterm, xterm-256color, ...) inherit from
+    # "xterm-new", which has no smcup/rmcup: full-screen programs (nano, htop,
+    # vi) cannot switch to the alternate screen and leave their drawing behind
+    # on exit. They also lack E3, the "erase the scrollback" capability
+    # clear(1) uses. Shadow xterm-new with the same entry plus both, so every
+    # xterm-derived TERM gets them, as a terminal on Linux has.
     {
-        printf 'xterm|X11 terminal emulator:\\\n\t:E3=\\E[3J:te=\\E[?1049l:ti=\\E[?1049h:tc=xterm-new:\n'
+        printf 'xterm-new|modern xterm:\\\n\t:E3=\\E[3J:te=\\E[?1049l:ti=\\E[?1049h:tc=xterm-basic:\n'
         cat "$WORK/usr/share/misc/termcap"
     } > "$WORK/usr/share/misc/termcap.new"
     mv -f "$WORK/usr/share/misc/termcap.new" "$WORK/usr/share/misc/termcap"
