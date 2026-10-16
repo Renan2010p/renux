@@ -12,6 +12,7 @@ const proc: type = @import("../sys/proc.zig");
 const signal: type = @import("../sys/signal.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
+const kern_descrip: type = @import("kern_descrip.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const prf: type = @import("subr_prf.zig");
 const param: type = @import("../sys/param.zig");
@@ -53,13 +54,9 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     child.frame.rflags &= ~@as(u64, 1);
 
     // Inherit the open file table and the working directory.
-    var fd: usize = 0;
-    while (fd < proc.NFILE) : (fd += 1) {
-        child.fds[fd] = parent.fds[fd];
-        child.fd_cloexec[fd] = parent.fd_cloexec[fd];
-        if (child.fds[fd]) |openfile| {
-            openfile.f_count += 1;
-        }
+    if (!kern_descrip.fdcopy(parent, child)) {
+        kern_proc.free(child);
+        return -1;
     }
     child.cwd = parent.cwd;
     if (child.cwd) |cwd| {
@@ -86,6 +83,8 @@ pub fn fork(frame: *arch.trapframe.TrapFrame) i32 {
     // The child runs the same program until it execs (FreeBSD's p_comm).
     child.name = parent.name;
     child.name_len = parent.name_len;
+    child.exe_path = parent.exe_path;
+    child.exe_path_len = parent.exe_path_len;
 
     // Copy the working-directory path.
     var k: usize = 0;

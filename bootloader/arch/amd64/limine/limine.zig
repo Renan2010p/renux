@@ -11,7 +11,6 @@
 // fallback that lets the very same kernel also start under Limine: the
 // kernel side of the Renux protocol (bootloader/arch/amd64/protocol/kernel.zig)
 // answers from here whenever the Renux loader did not answer its request.
-// limine.conf, next to this file, is the matching Limine configuration.
 //
 // Usage contract: the kernel leaves each request's `response` field NULL and
 // the bootloader allocates the response and writes its address there. All
@@ -240,7 +239,7 @@ pub fn firmwareType() ?u64 {
     return response.firmware_type;
 }
 
-/// The kernel command line from limine.conf.
+/// The kernel command line (the `cmdline:` of the Limine configuration).
 pub fn cmdline() ?[]const u8 {
     const response: *const ExecutableCmdlineResponse = cmdline_request.response orelse return null;
     const c: [*:0]const u8 = response.cmdline orelse return null;

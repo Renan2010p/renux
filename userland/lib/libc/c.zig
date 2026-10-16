@@ -3,9 +3,11 @@
 //
 // C library interface.
 //
-// C ABI wrappers around the Zig libc, so a C program compiled against the
-// headers in lib/include links against the same implementation the Zig
-// programs use. Each export is a thin adapter over the corresponding Zig
+// The C-ABI entry points of the Zig libc (write, malloc, getenv, ...): the
+// names and calling convention C code expects, used by the C startup
+// (csu/crt0.zig) and by the native programs alike. C programs for Renux are
+// not built against this library: they are built as FreeBSD programs
+// (`zig cc --target=x86_64-freebsd`) and use FreeBSD's libc. Each export is a thin adapter over the corresponding Zig
 // function (the C `ssize_t`/`int` result type, a NUL-terminated string in place
 // of a slice).
 

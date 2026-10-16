@@ -11,14 +11,13 @@
 //   zig-out/boot/kernel/kernel   the kernel, with the root image embedded
 //   zig-out/boot/loader.efi      the UEFI loader (\EFI\BOOT\BOOTX64.EFI)
 //   zig-out/userland/            the native programs, at their system paths
-//   zig-out/lib/libc.a           the C library (for tools/zcc)
 //   zig-out/renux.iso            the bootable ISO
 //
 // Steps:
 //   zig build                    kernel, loader and userland (the default)
 //   zig build kernel             the kernel
 //   zig build loader             the UEFI loader
-//   zig build userland           the C library and the native programs
+//   zig build userland           the native programs
 //   zig build fetch              download the FreeBSD userland (base + packages)
 //   zig build iso                the bootable UEFI ISO (Zig writer, no xorriso)
 //   zig build run                boot the ISO in QEMU (UEFI, serial console)
@@ -30,8 +29,11 @@
 //   -Dmdroot=false               a kernel without the embedded root image
 //
 // The FreeBSD userland that runs on Renux is not part of the tree:
-// tools/get-freebsd.sh and tools/get-freebsd-pkg.sh fetch it, and the root
-// image includes it when present.
+// `zig build fetch` (tools/fetch.zig) downloads it, and the root image
+// includes it when present.
+//
+// Everything is Zig: the build runs no shell script and compiles no C. The
+// host tools (tools/*.zig) are built for the host and run by the steps below.
 
 const std: type = @import("std");
 const builtin: type = std.builtin;
@@ -46,7 +48,7 @@ pub fn build(b: *Builder) void {
     // The programs are staged in a tree laid out like the installed system,
     // which the root image is made from and which is installed as
     // zig-out/userland.
-    const userland_step: *Builder.Step = b.step("userland", "Build the C library and the native programs");
+    const userland_step: *Builder.Step = b.step("userland", "Build the native programs");
     const libc: Libc = buildLibc(b);
     const stage: *Builder.Step.WriteFile = b.addWriteFiles();
 
@@ -61,29 +63,23 @@ pub fn build(b: *Builder) void {
         .install_subdir = "userland",
     });
     userland_step.dependOn(&install_userland.step);
-    userland_step.dependOn(&b.addInstallArtifact(libc.archive, .{}).step);
 
     // -- root image -----------------------------------------------------------------
     // The userland staged above, plus the FreeBSD userland when fetched, packed
-    // into the ext2 image the kernel embeds (FreeBSD's MD_ROOT). The script
+    // into the ext2 image the kernel embeds (FreeBSD's MD_ROOT) by
+    // tools/mkrootfs.zig, with the ext2 writer tools/mkfs.zig. The step
     // always runs (the FreeBSD tree is outside the build's knowledge); the
     // image is reproducible, so an unchanged system does not rebuild the
     // kernel.
-    // The ext2 writer (tools/mkfs.zig): mkrootfs packs the root image with it
-    // and mkdisk formats the persistent disk. No mke2fs.
-    const mkfs_tool: *Builder.Step.Compile = b.addExecutable(.{
-        .name = "mkfs",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/mkfs.zig"),
-            .target = b.graph.host,
-        }),
+    const mkfs: *Builder.Module = b.createModule(.{
+        .root_source_file = b.path("tools/mkfs.zig"),
+        .target = b.graph.host,
     });
-
-    const mkrootfs: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "tools/mkrootfs.sh" });
+    const mkrootfs_tool: *Builder.Step.Compile = hostTool(b, "mkrootfs", mkfs);
+    const mkrootfs: *Builder.Step.Run = b.addRunArtifact(mkrootfs_tool);
     mkrootfs.setCwd(b.path("."));
     mkrootfs.addDirectoryArg(stage.getDirectory());
     const root_img: Builder.LazyPath = mkrootfs.addOutputFileArg("root.img");
-    mkrootfs.addArtifactArg(mkfs_tool);
     mkrootfs.has_side_effects = true;
 
     // -- kernel ---------------------------------------------------------------------
@@ -169,9 +165,9 @@ pub fn build(b: *Builder) void {
         "/usr/share/qemu/edk2-x86_64-code.fd";
     // The persistent disk (disk.img, mounted on /home): made on the first run
     // and then kept, since it holds the user's files.
-    const mkdisk: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "tools/mkdisk.sh", "disk.img" });
+    const mkdisk: *Builder.Step.Run = b.addRunArtifact(hostTool(b, "mkdisk", mkfs));
     mkdisk.setCwd(b.path("."));
-    mkdisk.addArtifactArg(mkfs_tool);
+    mkdisk.addArg("disk.img");
     mkdisk.has_side_effects = true;
     const disk: Builder.Step.Run.PathArgOptions = .{ .prefix = "file=", .suffix = ",if=virtio,format=raw" };
 
@@ -227,13 +223,12 @@ pub fn build(b: *Builder) void {
 
 // -- userland ---------------------------------------------------------------------------
 
-/// A native program: its name, its source (userland/<src>/main.zig, plus
-/// main.c for the ones written in C) and where it is installed.
+/// A native program: its name, its source (userland/<src>/main.zig) and the
+/// directory it is installed in.
 const Program: type = struct {
     name: []const u8,
     src: []const u8,
     dest: []const u8,
-    c: bool = false,
 };
 
 const programs = [_]Program{
@@ -250,14 +245,14 @@ const programs = [_]Program{
     .{ .name = "rm", .src = "bin/rm", .dest = "bin" },
     .{ .name = "rmdir", .src = "bin/rmdir", .dest = "bin" },
     .{ .name = "fbdraw", .src = "bin/fbdraw", .dest = "bin" },
-    .{ .name = "ls", .src = "bin/ls", .dest = "bin", .c = true },
-    .{ .name = "wc", .src = "bin/wc", .dest = "bin", .c = true },
-    .{ .name = "hello", .src = "bin/hello", .dest = "bin", .c = true },
-    .{ .name = "tui", .src = "bin/tui", .dest = "bin", .c = true },
-    .{ .name = "nano", .src = "bin/nano", .dest = "bin", .c = true },
-    .{ .name = "dmesg", .src = "bin/dmesg", .dest = "bin", .c = true },
-    .{ .name = "logger", .src = "bin/logger", .dest = "usr/bin", .c = true },
-    .{ .name = "syslogd", .src = "bin/syslogd", .dest = "usr/sbin", .c = true },
+    .{ .name = "ls", .src = "bin/ls", .dest = "bin" },
+    .{ .name = "wc", .src = "bin/wc", .dest = "bin" },
+    .{ .name = "hello", .src = "bin/hello", .dest = "bin" },
+    .{ .name = "tui", .src = "bin/tui", .dest = "bin" },
+    .{ .name = "nano", .src = "bin/nano", .dest = "bin" },
+    .{ .name = "dmesg", .src = "bin/dmesg", .dest = "bin" },
+    .{ .name = "logger", .src = "bin/logger", .dest = "usr/bin" },
+    .{ .name = "syslogd", .src = "bin/syslogd", .dest = "usr/sbin" },
 };
 
 /// The user-mode target: freestanding (Renux's own C library and startup).
@@ -270,30 +265,21 @@ fn userTarget(b: *Builder) Builder.ResolvedTarget {
     });
 }
 
+/// The C library and the C startup, the modules every native program imports
+/// (as "libc" and "csu").
 const Libc: type = struct {
     libc: *Builder.Module,
     csu: *Builder.Module,
-    archive: *Builder.Step.Compile,
 };
 
-/// The C library: the `libc` and `csu` modules native programs import, and
-/// libc.a for C programs built with tools/zcc.
 fn buildLibc(b: *Builder) Libc {
     const libc: *Builder.Module = b.createModule(.{ .root_source_file = b.path("userland/lib/libc/libc.zig") });
     const csu: *Builder.Module = b.createModule(.{ .root_source_file = b.path("userland/lib/csu/csu.zig") });
     csu.addImport("libc", libc);
-
-    const renux: *Builder.Module = b.createModule(.{
-        .target = userTarget(b),
-        .optimize = .ReleaseSmall,
-        .root_source_file = b.path("userland/lib/renux.zig"),
-    });
-    renux.addImport("libc", libc);
-    renux.addImport("csu", csu);
-    const archive: *Builder.Step.Compile = b.addLibrary(.{ .name = "c", .root_module = renux, .linkage = .static });
-    return .{ .libc = libc, .csu = csu, .archive = archive };
+    return .{ .libc = libc, .csu = csu };
 }
 
+/// A native program, linked with the userland linker script.
 fn buildProgram(b: *Builder, libc: Libc, optimize: builtin.OptimizeMode, p: Program) *Builder.Step.Compile {
     const mod: *Builder.Module = b.createModule(.{
         .target = userTarget(b),
@@ -303,10 +289,6 @@ fn buildProgram(b: *Builder, libc: Libc, optimize: builtin.OptimizeMode, p: Prog
     });
     mod.addImport("libc", libc.libc);
     mod.addImport("csu", libc.csu);
-    if (p.c) {
-        mod.addIncludePath(b.path("userland/lib/include"));
-        mod.addCSourceFile(.{ .file = b.path(b.fmt("userland/{s}/main.c", .{p.src})), .flags = &.{} });
-    }
     const exe: *Builder.Step.Compile = b.addExecutable(.{
         .name = p.name,
         .root_module = mod,
@@ -315,6 +297,19 @@ fn buildProgram(b: *Builder, libc: Libc, optimize: builtin.OptimizeMode, p: Prog
     });
     exe.setLinkerScript(b.path("userland/lib/libc/libc.ldscript"));
     return exe;
+}
+
+// -- host tools -------------------------------------------------------------------------
+
+/// A program from tools/<name>.zig, built for the host, that imports the ext2
+/// writer as "mkfs".
+fn hostTool(b: *Builder, name: []const u8, mkfs: *Builder.Module) *Builder.Step.Compile {
+    const mod: *Builder.Module = b.createModule(.{
+        .root_source_file = b.path(b.fmt("tools/{s}.zig", .{name})),
+        .target = b.graph.host,
+    });
+    mod.addImport("mkfs", mkfs);
+    return b.addExecutable(.{ .name = name, .root_module = mod });
 }
 
 // -- kernel -----------------------------------------------------------------------------

@@ -551,7 +551,6 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     ensureDir("/var");
     ensureDir("/var/log");
     ensureDir("/var/run");
-    ensureDir("/etc/rc.d");
 
     kern_proc.init();
 
@@ -585,7 +584,14 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     else
         &.{"/sbin/init"};
     const env: []const []const u8 = &.{"TERM=xterm"};
-    const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, args, env, &.{}) orelse {
+    var image_args: kern_exec.ImageArgs = kern_exec.ImageArgs.init() catch {
+        prf.log(prf.LOG_ERR, "cannot build init stack", .{});
+        return;
+    };
+    defer image_args.deinit();
+    for (args) |a| image_args.addArg(a) catch unreachable; // a few bytes
+    for (env) |e| image_args.addEnv(e) catch unreachable;
+    const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, &image_args, &.{}) orelse {
         prf.log(prf.LOG_ERR, "cannot build init stack", .{});
         return;
     };

@@ -18,6 +18,7 @@ const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_mount: type = @import("vfs_mount.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const subr_devsw: type = @import("subr_devsw.zig");
+const kern_descrip: type = @import("kern_descrip.zig");
 const kmem: type = @import("subr_kmem.zig");
 
 /// The FileOps used by every vnode-backed descriptor.
@@ -168,17 +169,11 @@ pub fn vn_open(start: ?*vnode.Vnode, path: []const u8, flags: i32, create_mode: 
         _ = vp.v_op.truncate(vp, 0);
     }
 
-    const f: *file.File = kmem.zallocAs(file.File) orelse {
+    if ((flags & fcntl.O_NONBLOCK) != 0) mode |= file.FNONBLOCK;
+    return kern_descrip.newFile(file.DTYPE_VNODE, mode, vp, &vnode_ops) orelse {
         vfs_subr.vrele(vp);
         return null;
     };
-    f.f_type = file.DTYPE_VNODE;
-    f.f_flag = mode;
-    f.f_offset = 0;
-    f.f_count = 1;
-    f.f_data = vp;
-    f.f_ops = &vnode_ops;
-    return f;
 }
 
 /// Create `path` with type `v_type` and permission bits `mode`, returning its

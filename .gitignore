@@ -3,8 +3,6 @@
 zig-cache/
 zig-out/
 
-# Downloaded bootloader toolchain (see tools/get-limine.sh)
-tools/limine/
 
 # Compiled objects / images
 *.o
@@ -19,7 +17,7 @@ tools/limine/
 *~
 .DS_Store
 
-# Downloaded FreeBSD base system (see tools/get-freebsd.sh)
+# The FreeBSD userland downloaded by `zig build fetch` (tools/fetch.zig)
 tools/freebsd/
 
 # Built package helper (see tools/pkgtool)

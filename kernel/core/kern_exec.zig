@@ -22,13 +22,103 @@ const signal: type = @import("../sys/signal.zig");
 const vfs_lookup: type = @import("vfs_lookup.zig");
 const vfs_subr: type = @import("vfs_subr.zig");
 const arch: type = @import("../arch/arch.zig");
+const std: type = @import("std");
 const kern_proc: type = @import("kern_proc.zig");
 const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
 
-/// Maximum number of arguments or environment strings execve() accepts.
-pub const MAXARG: usize = 32;
+/// The most bytes execve() accepts for the arguments and the environment
+/// together, their terminating NULs included (FreeBSD's ARG_MAX, also
+/// reported by sysctl kern.argmax). There is no limit on their number.
+pub const ARG_MAX: usize = 256 * 1024;
+
+/// The arguments and environment of a program being started (FreeBSD's
+/// struct image_args): the strings, each NUL-terminated, the arguments first
+/// and then the environment, in one kernel buffer of ARG_MAX bytes. execve()
+/// copies them here while the caller's address space is still current, and
+/// buildStack() copies them onto the new program's stack.
+pub const ImageArgs: type = struct {
+    buf: []u8,
+    /// Bytes of `buf` in use.
+    len: usize = 0,
+    argc: usize = 0,
+    envc: usize = 0,
+
+    pub const Error: type = error{
+        /// The strings do not fit in ARG_MAX bytes.
+        TooBig,
+        /// No memory for the buffer.
+        NoMemory,
+    };
+
+    const PAGES: u64 = ARG_MAX / param.PAGE_SIZE;
+
+    /// An empty set of arguments, with its buffer.
+    pub fn init() Error!ImageArgs {
+        const pa: vm_page.PAddr = vm_page.physallocContig(PAGES) orelse return error.NoMemory;
+        const hhdm: u64 = arch.boot.hhdmOffset() orelse return error.NoMemory;
+        const first: [*]u8 = @ptrFromInt(pa.int() + hhdm);
+        return .{ .buf = first[0..ARG_MAX] };
+    }
+
+    /// Give back the buffer.
+    pub fn deinit(a: *ImageArgs) void {
+        const hhdm: u64 = arch.boot.hhdmOffset() orelse return;
+        vm_page.physfreeContig(vm_page.PAddr.fromInt(@intFromPtr(a.buf.ptr) - hhdm), PAGES);
+    }
+
+    /// Append `str` (without its NUL).
+    fn append(a: *ImageArgs, str: []const u8) Error!void {
+        if (a.len + str.len + 1 > a.buf.len) return error.TooBig;
+        @memcpy(a.buf[a.len..][0..str.len], str);
+        a.buf[a.len + str.len] = 0;
+        a.len += str.len + 1;
+    }
+
+    /// Append an argument. All the arguments come before the environment.
+    pub fn addArg(a: *ImageArgs, str: []const u8) Error!void {
+        std.debug.assert(a.envc == 0);
+        try a.append(str);
+        a.argc += 1;
+    }
+
+    /// Append an environment string.
+    pub fn addEnv(a: *ImageArgs, str: []const u8) Error!void {
+        try a.append(str);
+        a.envc += 1;
+    }
+
+    /// Append the NUL-terminated strings of the caller's vector at user
+    /// address `vec` (an argv or envp array, ended by a null pointer) as
+    /// arguments (`env` false) or environment strings, starting with the
+    /// `skip`-th.
+    pub fn copyinVector(a: *ImageArgs, vec: u64, skip: usize, env: bool) Error!void {
+        if (vec == 0) return;
+        const pointers: [*]align(1) const u64 = @ptrFromInt(vec);
+        var i: usize = 0;
+        while (true) : (i += 1) {
+            const str_addr: u64 = pointers[i];
+            if (str_addr == 0) return;
+            if (i < skip) continue;
+            const str: []const u8 = cstrUser(str_addr, a.buf.len - a.len) orelse return error.TooBig;
+            if (env) try a.addEnv(str) else try a.addArg(str);
+        }
+    }
+
+    /// The strings, as stored: arguments then environment, each followed by
+    /// its NUL.
+    pub fn strings(a: *const ImageArgs) []const u8 {
+        return a.buf[0..a.len];
+    }
+
+    /// Argument `index` (from 0), without its NUL.
+    pub fn arg(a: *const ImageArgs, index: usize) []const u8 {
+        var rest: []const u8 = a.strings();
+        for (0..index) |_| rest = rest[std.mem.indexOfScalar(u8, rest, 0).? + 1 ..];
+        return std.mem.sliceTo(rest, 0);
+    }
+};
 
 /// Base address at which a PT_INTERP interpreter (a dynamic linker) is mapped.
 const INTERP_BASE: u64 = 0x0000_0000_2000_0000;
@@ -149,13 +239,19 @@ fn putU8(pmap: arch.pmap.Pmap, va: u64, value: u8) bool {
     return true;
 }
 
-/// Write a byte string to `va` in `pmap`.
+/// Write a byte string to `va` in `pmap`, a page at a time through the
+/// pages' physical addresses.
 fn putBytes(pmap: arch.pmap.Pmap, va: u64, src: []const u8) bool {
-    var i: usize = 0;
-    while (i < src.len) : (i += 1) {
-        if (!putU8(pmap, va + i, src[i])) {
-            return false;
-        }
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
+    var done: usize = 0;
+    while (done < src.len) {
+        const addr: u64 = va + done;
+        const in_page: usize = @intCast(param.PAGE_SIZE - (addr % param.PAGE_SIZE));
+        const n: usize = @min(in_page, src.len - done);
+        const pa: u64 = arch.pmap.extract(pmap, addr) orelse return false;
+        const dst: [*]u8 = @ptrFromInt(pa + hhdm);
+        @memcpy(dst[0..n], src[done..][0..n]);
+        done += n;
     }
     return true;
 }
@@ -170,62 +266,46 @@ fn putU64(pmap: arch.pmap.Pmap, va: u64, value: u64) bool {
     return putBytes(pmap, va, &bytes);
 }
 
-/// Build the initial stack in `pmap` for `argv`/`envp`: the strings first, from
-/// the top down, then the pointer vectors and argc below them. Returns where
-/// the process should start, or null on failure.
-pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const []const u8, auxv: []const AuxPair) ?StartInfo {
-    if (argv.len > MAXARG or envp.len > MAXARG) {
-        return null;
-    }
-
-    var sp: u64 = arch.vmparam.USER_STACK_TOP;
-
-    // Copy the strings, highest argument first, so they read top-down.
-    var argv_va: [MAXARG]u64 = undefined;
-    var i: usize = argv.len;
-    while (i > 0) {
-        i -= 1;
-        const s: []const u8 = argv[i];
-        sp -= s.len + 1;
-        if (!putBytes(pmap, sp, s)) return null;
-        if (!putU8(pmap, sp + s.len, 0)) return null;
-        argv_va[i] = sp;
-    }
-
-    var envp_va: [MAXARG]u64 = undefined;
-    i = envp.len;
-    while (i > 0) {
-        i -= 1;
-        const s: []const u8 = envp[i];
-        sp -= s.len + 1;
-        if (!putBytes(pmap, sp, s)) return null;
-        if (!putU8(pmap, sp + s.len, 0)) return null;
-        envp_va[i] = sp;
-    }
-
+/// Build the initial stack in `pmap` for `args`: the strings at the top, then
+/// below them argc, the argv and envp pointer vectors and the aux vector.
+/// Returns where the process should start, or null on failure.
+pub fn buildStack(pmap: arch.pmap.Pmap, args: *const ImageArgs, auxv: []const AuxPair) ?StartInfo {
+    // The strings, as one block (arguments, then environment).
+    const strings: []const u8 = args.strings();
+    const strings_va: u64 = arch.vmparam.USER_STACK_TOP - strings.len;
+    if (!putBytes(pmap, strings_va, strings)) return null;
+    const sp: u64 = strings_va;
+    const argc: usize = args.argc;
+    const envc: usize = args.envc;
     // argc, then argv (NUL-terminated), then envp (NUL-terminated), then the
     // aux vector (pairs terminated by AT_NULL), then the page-size array that
     // AT_PAGESIZES points at.  AT_PAGESIZES and AT_PAGESIZESLEN are appended.
-    const entries: u64 = 1 + @as(u64, argv.len + 1) + @as(u64, envp.len + 1) +
+    const entries: u64 = 1 + @as(u64, argc + 1) + @as(u64, envc + 1) +
         @as(u64, (auxv.len + 2) * 2) + 2 + PAGESIZES_SLOTS;
     var base: u64 = sp - entries * 8;
     base &= ~@as(u64, 15); // 16-byte aligned
     base -= 8; // leave rsp so that rsp % 16 == 8 at entry, and argv 8-aligned
 
-    if (!putU64(pmap, base, argv.len)) return null; // argc
+    if (!putU64(pmap, base, argc)) return null;
     var cursor: u64 = base + 8;
 
-    var j: usize = 0;
-    while (j < argv.len) : (j += 1) {
-        if (!putU64(pmap, cursor, argv_va[j])) return null;
+    // argv, its terminator, envp, its terminator: the address of each string
+    // in the block, in order.
+    var string_va: u64 = strings_va;
+    var start: usize = 0;
+    for (0..argc + envc) |index| {
+        if (index == argc) {
+            if (!putU64(pmap, cursor, 0)) return null; // argv terminator
+            cursor += 8;
+        }
+        if (!putU64(pmap, cursor, string_va)) return null;
         cursor += 8;
+        const end: usize = std.mem.indexOfScalarPos(u8, strings, start, 0).?;
+        string_va += end + 1 - start;
+        start = end + 1;
     }
-    if (!putU64(pmap, cursor, 0)) return null; // argv terminator
-    cursor += 8;
-
-    j = 0;
-    while (j < envp.len) : (j += 1) {
-        if (!putU64(pmap, cursor, envp_va[j])) return null;
+    if (envc == 0) {
+        if (!putU64(pmap, cursor, 0)) return null; // argv terminator
         cursor += 8;
     }
     if (!putU64(pmap, cursor, 0)) return null; // envp terminator
@@ -264,9 +344,9 @@ pub fn buildStack(pmap: arch.pmap.Pmap, argv: []const []const u8, envp: []const 
 
     return .{
         .rsp = base,
-        .argc = argv.len,
+        .argc = argc,
         .argv = base + 8,
-        .envp = base + 8 + (argv.len + 1) * 8,
+        .envp = base + 8 + (argc + 1) * 8,
     };
 }
 
@@ -319,36 +399,31 @@ pub fn setupInitialTls(p: *proc.Proc, pmap: arch.pmap.Pmap, main: exec_elf.Resul
     return true;
 }
 
-/// Read a NUL-terminated string from the current (old) address space.
-fn cstrUser(addr: u64) ?[]const u8 {
-    if (addr == 0) {
-        return null;
-    }
+/// Read a NUL-terminated string of at most `max` bytes (its NUL excluded)
+/// from the current (old) address space; null when it is longer.
+fn cstrUser(addr: u64, max: usize) ?[]const u8 {
+    if (addr == 0) return null;
     const p: [*]const u8 = @ptrFromInt(addr);
     var len: usize = 0;
-    while (len < param.MAXPATHLEN * 16) : (len += 1) {
-        if (p[len] == 0) {
-            return p[0..len];
-        }
+    while (len < max) : (len += 1) {
+        if (p[len] == 0) return p[0..len];
     }
     return null;
 }
 
-/// Read a user argv/envp vector (an array of string pointers) into `out`.
-fn readVec(vec: u64, out: *[MAXARG][]const u8) ?usize {
-    if (vec == 0) {
-        return 0;
-    }
-    const p: [*]const u64 = @ptrFromInt(vec);
-    var n: usize = 0;
-    while (n < MAXARG) : (n += 1) {
-        const s: u64 = p[n];
-        if (s == 0) {
-            break;
-        }
-        out[n] = cstrUser(s) orelse return null;
-    }
-    return n;
+/// Copy the caller's argument vector `argv_ptr` (from its `skip_args`-th
+/// string) and environment vector `envp_ptr` into `args`.
+fn copyinArgs(args: *ImageArgs, argv_ptr: u64, envp_ptr: u64, skip_args: usize) ImageArgs.Error!void {
+    try args.copyinVector(argv_ptr, skip_args, false);
+    try args.copyinVector(envp_ptr, 0, true);
+}
+
+/// The errno execve(2) reports for an ImageArgs error.
+fn argsErrno(err: ImageArgs.Error) i32 {
+    return switch (err) {
+        error.TooBig => -errno.E2BIG,
+        error.NoMemory => -errno.ENOMEM,
+    };
 }
 
 /// Read the first line of `vp`; when it is a "#! " line, point `interp` and
@@ -381,56 +456,66 @@ fn scriptInterp(vp: *vnode.Vnode, buf: []u8, interp: *[]const u8, arg: *?[]const
     return interp.*.len > 0;
 }
 
+/// Record the absolute path of the program `p` is about to run, for
+/// sysctl kern.proc.pathname: `path` itself when it is absolute, else the
+/// working directory joined with it (a leading "./" dropped). A path that
+/// does not fit is left out (the process then reports none).
+fn recordExePath(p: *proc.Proc, path: []const u8) void {
+    var rel: []const u8 = path;
+    while (rel.len > 2 and rel[0] == '.' and rel[1] == '/') rel = rel[2..];
+    const prefix: []const u8 = if (path.len > 0 and path[0] == '/') "" else p.cwd_path[0..p.cwd_len];
+    const separator: []const u8 = if (prefix.len > 0 and prefix[prefix.len - 1] != '/') "/" else "";
+    const total: usize = prefix.len + separator.len + rel.len;
+    if (total > p.exe_path.len) {
+        p.exe_path_len = 0;
+        return;
+    }
+    @memcpy(p.exe_path[0..prefix.len], prefix);
+    @memcpy(p.exe_path[prefix.len..][0..separator.len], separator);
+    @memcpy(p.exe_path[prefix.len + separator.len ..][0..rel.len], rel);
+    p.exe_path_len = total;
+}
+
 /// Replace the current process's image with the program at `path`, started with
 /// the argument vector `argv_ptr` and environment `envp_ptr` (pointers into the
 /// caller's address space). A "#!" script runs its interpreter. On success the
 /// caller returns to ring 3.
 pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64, envp_ptr: u64) i32 {
-    // Read the caller's arguments while its address space is still current.
-    var argbuf: [MAXARG][]const u8 = undefined;
-    var envbuf: [MAXARG][]const u8 = undefined;
-    const argc: usize = readVec(argv_ptr, &argbuf) orelse return -errno.EFAULT;
-    const envc: usize = readVec(envp_ptr, &envbuf) orelse return -errno.EFAULT;
+    // Copy the caller's arguments and environment while its address space
+    // is still current (FreeBSD's exec_copyin_args).
+    var args: ImageArgs = ImageArgs.init() catch return -errno.ENOMEM;
+    defer args.deinit();
+    copyinArgs(&args, argv_ptr, envp_ptr, 0) catch |err| return argsErrno(err);
 
     const p: *proc.Proc = kern_proc.current;
 
-    // Resolve the target, following a #! interpreter.
+    // Resolve the target. A "#!" script runs its interpreter instead, with
+    // the arguments FreeBSD gives it: the interpreter, its optional
+    // argument, the script's path, then the script's own arguments after
+    // argv[0].
     var exe_path: []const u8 = path;
-    var final: [MAXARG][]const u8 = undefined;
-    var final_argc: usize = argc;
-    var k: usize = 0;
-    while (k < argc) : (k += 1) {
-        final[k] = argbuf[k];
-    }
-
     var script_buf: [param.MAXPATHLEN]u8 = undefined;
     var interp: []const u8 = undefined;
     var sarg: ?[]const u8 = null;
+    var script_args: ?ImageArgs = null;
+    defer if (script_args) |*a| a.deinit();
     {
         const vp: *vnode.Vnode = vfs_lookup.nameiAt(p.cwd, path) orelse return -errno.ENOENT;
         const is_script: bool = scriptInterp(vp, &script_buf, &interp, &sarg);
         vfs_subr.vrele(vp);
         if (is_script) {
             exe_path = interp;
-            var tmp: [MAXARG][]const u8 = undefined;
-            var n: usize = 0;
-            tmp[n] = interp;
-            n += 1;
-            if (sarg) |a| {
-                tmp[n] = a;
-                n += 1;
-            }
-            tmp[n] = path; // argv[0] for the interpreter is the script
-            n += 1;
-            var j: usize = 1;
-            while (j < argc and n < MAXARG) : (j += 1) {
-                tmp[n] = argbuf[j];
-                n += 1;
-            }
-            final = tmp;
-            final_argc = n;
+            script_args = ImageArgs.init() catch return -errno.ENOMEM;
+            const a: *ImageArgs = &script_args.?;
+            a.addArg(interp) catch |err| return argsErrno(err);
+            if (sarg) |extra| a.addArg(extra) catch |err| return argsErrno(err);
+            a.addArg(path) catch |err| return argsErrno(err);
+            copyinArgs(a, argv_ptr, envp_ptr, 1) catch |err| return argsErrno(err);
         }
     }
+    const image_args: *const ImageArgs = if (script_args) |*a| a else &args;
+
+    recordExePath(p, exe_path);
 
     // Record the program name (basename of the executable), for ps/top/htop.
     {
@@ -494,7 +579,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     auxv[an] = .{ .type = AT_EGID, .val = p.uid };
     an += 1;
 
-    const info: StartInfo = buildStack(newmap, final[0..final_argc], envbuf[0..envc], auxv[0..an]) orelse return -errno.ENOMEM;
+    const info: StartInfo = buildStack(newmap, image_args, auxv[0..an]) orelse return -errno.ENOMEM;
 
     p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;

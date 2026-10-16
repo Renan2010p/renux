@@ -11,13 +11,11 @@ const arch: type = @import("../arch/arch.zig");
 const param: type = @import("param.zig");
 const signal: type = @import("signal.zig");
 const file: type = @import("file.zig");
+const filedesc: type = @import("filedesc.zig");
 const vnode: type = @import("vnode.zig");
 
 pub const Context: type = arch.proc_md.Context;
 pub const TrapFrame: type = arch.trapframe.TrapFrame;
-
-/// Size of the per-process open file table.
-pub const NFILE: usize = 16;
 
 /// Process state.
 pub const State: type = enum(u8) {
@@ -107,10 +105,8 @@ pub const Proc: type = struct {
     frame: TrapFrame,
     /// Sleep channel (see kern_sched.sleep/wakeup).
     chan: ?*anyopaque,
-    /// Open file table (descriptors 0..NFILE-1).
-    fds: [NFILE]?*file.File,
-    /// Close-on-exec flag per descriptor (FD_CLOEXEC).
-    fd_cloexec: [NFILE]bool,
+    /// The file descriptor table (FreeBSD's p_fd); see sys/filedesc.zig.
+    fd: filedesc.FileDesc,
     /// Current working directory, or null before the root is mounted.
     cwd: ?*vnode.Vnode,
     /// Path of the current working directory (for getcwd).
@@ -146,6 +142,12 @@ pub const Proc: type = struct {
     cmask: u16,
     /// Resource limits (getrlimit(2)/setrlimit(2)).
     rlimits: [RLIM_NLIMITS]Rlimit,
+    /// Absolute path of the executable, as execve(2) resolved it
+    /// (sysctl kern.proc.pathname, which std.process.executablePath and the
+    /// Zig compiler use to find their installation).
+    exe_path: [param.MAXPATHLEN]u8,
+    /// Length of `exe_path`.
+    exe_path_len: usize,
     /// Program name (basename of the executable), for ps/top/htop.
     name: [20]u8,
     /// Length of `name`.

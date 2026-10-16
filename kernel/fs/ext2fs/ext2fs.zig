@@ -14,6 +14,7 @@
 // (core/vfs_bio.zig), or in memory as a boot image (read-only), which is
 // how the root image is unpacked at boot.
 
+const std: type = @import("std");
 const vnode: type = @import("../../sys/vnode.zig");
 const geom_disk: type = @import("../../geom/geom_disk.zig");
 const vfs_bio: type = @import("../../core/vfs_bio.zig");
@@ -560,25 +561,51 @@ fn groupBlocks(mnt: *const Ext2Mount, g: u64) u64 {
     return @min(mnt.blocks_per_group, mnt.blocks_count - start);
 }
 
-/// Allocate a block, preferring group `goal`. The block is not cleared.
+/// Allocate a block, the first free one at or after block `goal` in its
+/// group, else in the following groups (Linux's ext2_new_blocks searches
+/// from its goal the same way). The block is not cleared.
 fn allocBlock(mnt: *Ext2Mount, goal: u64) Error!u64 {
     if (mnt.readonly) return error.ReadOnly;
     if (freeBlocks(mnt) == 0) return error.NoSpace;
+    const rel: u64 = std.math.clamp(goal, mnt.first_data_block, mnt.blocks_count - 1) - mnt.first_data_block;
+    const goal_group: u64 = rel / mnt.blocks_per_group;
+    const goal_bit: u64 = rel % mnt.blocks_per_group;
     var n: u64 = 0;
-    while (n < mnt.ngroups) : (n += 1) {
-        const g: u64 = (goal + n) % mnt.ngroups;
+    while (n <= mnt.ngroups) : (n += 1) {
+        const g: u64 = (goal_group + n) % mnt.ngroups;
         const loc = gdLocation(mnt, g);
         const b: Blk = bget(mnt, loc.bno) orelse return error.Io;
         const nfree: u16 = rd16(b.data, loc.off + GD_FREE_BLOCKS);
         const bitmap: u32 = rd32(b.data, loc.off + GD_BLOCK_BITMAP);
         brelse(b);
         if (nfree == 0) continue;
-        const bit: u64 = bitmapTake(mnt, bitmap, groupBlocks(mnt, g), 0) orelse continue;
+        // The goal's group is searched from the goal on first; coming back
+        // to it after all the others (n == ngroups), from its start.
+        const first: u64 = if (n == 0) goal_bit else 0;
+        const bit: u64 = bitmapTake(mnt, bitmap, groupBlocks(mnt, g), first) orelse continue;
         gdAdjust16(mnt, g, GD_FREE_BLOCKS, -1);
         sbAdjust32(mnt, 12, -1);
         return mnt.first_data_block + g * mnt.blocks_per_group + bit;
     }
     return error.NoSpace;
+}
+
+/// The first block of the group inode `ino` lives in: where a file with no
+/// blocks yet gets its first one (the fallback of Linux's ext2_find_near).
+fn inodeGroupStart(mnt: *const Ext2Mount, ino: u64) u64 {
+    return mnt.first_data_block + (ino - 1) / mnt.inodes_per_group * mnt.blocks_per_group;
+}
+
+/// The block after the last non-zero pointer of `pointers` before index
+/// `slot`, or null when there is none (Linux's ext2_find_near: put a file's
+/// next block right after its previous one).
+fn goalAfterPrevious(pointers: []const u32, slot: usize) ?u64 {
+    var i: usize = slot;
+    while (i > 0) {
+        i -= 1;
+        if (pointers[i] != 0) return @as(u64, pointers[i]) + 1;
+    }
+    return null;
 }
 
 /// Free block `bno`.
@@ -642,9 +669,10 @@ fn freeInode(mnt: *Ext2Mount, ino: u64, dir: bool) void {
     sbAdjust32(mnt, 16, 1);
 }
 
-/// Allocate a zero-filled block for inode `ino` and count it in `in`.
-fn allocZeroed(mnt: *Ext2Mount, ino: u64, in: *Inode) Error!u32 {
-    const bno: u64 = try allocBlock(mnt, (ino - 1) / mnt.inodes_per_group);
+/// Allocate a zero-filled block for inode `in`, at or after block `goal`,
+/// and count it in `in`.
+fn allocZeroed(mnt: *Ext2Mount, in: *Inode, goal: u64) Error!u32 {
+    const bno: u64 = try allocBlock(mnt, goal);
     const b: BlkMut = bnew(mnt, bno) orelse return error.Io;
     bdirty(b);
     in.blocks += mnt.block_size / 512;
@@ -702,14 +730,18 @@ fn bmapAlloc(mnt: *Ext2Mount, ino: u64, in: *Inode, lbn: u64, fresh: *bool) Erro
     if (path.level == 0) {
         const i: usize = @intCast(lbn);
         if (in.block[i] == 0) {
-            in.block[i] = try allocZeroed(mnt, ino, in);
+            const goal: u64 = goalAfterPrevious(in.block[0..12], i) orelse inodeGroupStart(mnt, ino);
+            in.block[i] = try allocZeroed(mnt, in, goal);
             fresh.* = true;
         }
         return in.block[i];
     }
     const per: u64 = mnt.block_size / 4;
     const root: usize = 11 + path.level;
-    if (in.block[root] == 0) in.block[root] = try allocZeroed(mnt, ino, in);
+    if (in.block[root] == 0) {
+        const goal: u64 = goalAfterPrevious(in.block[0..root], root) orelse inodeGroupStart(mnt, ino);
+        in.block[root] = try allocZeroed(mnt, in, goal);
+    }
     var blk: u64 = in.block[root];
     var span: u64 = path.span;
     var idx: u64 = path.idx;
@@ -721,7 +753,19 @@ fn bmapAlloc(mnt: *Ext2Mount, ino: u64, in: *Inode, lbn: u64, fresh: *bool) Erro
         const b: BlkMut = bgetMut(mnt, blk) orelse return error.Io;
         var e: u32 = rd32(b.data, slot);
         if (e == 0) {
-            e = allocZeroed(mnt, ino, in) catch |err| {
+            // Right after the previous pointer in this indirect block, else
+            // right after the indirect block itself.
+            const pointers: []align(1) const u32 = std.mem.bytesAsSlice(u32, b.data);
+            var goal: u64 = blk + 1;
+            var i: usize = @intCast(slot / 4);
+            while (i > 0) {
+                i -= 1;
+                if (pointers[i] != 0) {
+                    goal = @as(u64, pointers[i]) + 1;
+                    break;
+                }
+            }
+            e = allocZeroed(mnt, in, goal) catch |err| {
                 brelse(b);
                 return err;
             };
@@ -974,22 +1018,37 @@ pub fn dirNext(mnt: *Ext2Mount, dir: *const Inode, pos: *u64, out: *DirEntry) bo
 }
 
 /// Find `name` in directory `dir`; returns its inode number, or null.
+///
+/// As Linux's ext2_find_entry does, each directory block is fetched once and
+/// all its entries are compared there, instead of fetching the block again
+/// for every entry.
 pub fn dirLookup(mnt: *Ext2Mount, dir: *const Inode, name: []const u8) ?u64 {
     if ((dir.mode & S_IFMT) != S_IFDIR) return null;
-    var pos: u64 = 0;
-    var ent: DirEntry = undefined;
-    while (dirNext(mnt, dir, &pos, &ent)) {
-        if (ent.name_len == name.len and std_eql(ent.name[0..ent.name_len], name)) return ent.ino;
+    const bs: u64 = mnt.block_size;
+    const nblocks: u64 = (dir.size + bs - 1) / bs;
+    for (0..nblocks) |lbn| {
+        const bno: u64 = bmap(mnt, dir, lbn) orelse return null; // a hole: damaged
+        const b: Blk = bget(mnt, bno) orelse return null;
+        defer brelse(b);
+        if (blockLookup(mnt, b.data, name)) |ino| return ino;
     }
     return null;
 }
 
-fn std_eql(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |x, y| {
-        if (x != y) return false;
+/// Find `name` among the entries of one directory block.
+fn blockLookup(mnt: *const Ext2Mount, d: []const u8, name: []const u8) ?u64 {
+    const bs: u64 = d.len;
+    var e: u64 = 0;
+    while (e + 8 <= bs) {
+        const rec_len: u16 = rd16(d, e + 4);
+        if (rec_len < 8 or e + rec_len > bs) return null; // damaged block
+        const ino: u32 = rd32(d, e);
+        const nl: usize = entNameLen(mnt, d, e);
+        if (ino != 0 and nl == name.len and e + 8 + nl <= bs and
+            std.mem.eql(u8, d[@intCast(e + 8)..][0..nl], name)) return ino;
+        e += rec_len;
     }
-    return true;
+    return null;
 }
 
 /// Write an entry for `name` -> `ino` at offset `e` of block data `d`,
@@ -1075,7 +1134,7 @@ pub fn dirRemove(mnt: *Ext2Mount, dino: u64, dir: *Inode, name: []const u8, now:
             const rec_len: u64 = rd16(b.data, e + 4);
             if (rec_len < 8 or e + rec_len > bs) break;
             const nl: usize = entNameLen(mnt, b.data, e);
-            if (eino != 0 and nl == name.len and std_eql(b.data[@intCast(e + 8)..@intCast(e + 8 + nl)], name)) {
+            if (eino != 0 and nl == name.len and std.mem.eql(u8, b.data[@intCast(e + 8)..@intCast(e + 8 + nl)], name)) {
                 if (prev) |p| {
                     // Fold the entry into the one before it.
                     wr16(b.data, p + 4, @intCast(rd16(b.data, p + 4) + rec_len));
@@ -1111,7 +1170,7 @@ pub fn dirRewrite(mnt: *Ext2Mount, dir: *const Inode, name: []const u8, ino: u64
             const rec_len: u64 = rd16(b.data, e + 4);
             if (rec_len < 8 or e + rec_len > bs) break;
             const nl: usize = entNameLen(mnt, b.data, e);
-            if (rd32(b.data, e) != 0 and nl == name.len and std_eql(b.data[@intCast(e + 8)..@intCast(e + 8 + nl)], name)) {
+            if (rd32(b.data, e) != 0 and nl == name.len and std.mem.eql(u8, b.data[@intCast(e + 8)..@intCast(e + 8 + nl)], name)) {
                 wr32(b.data, e, @intCast(ino));
                 if (hasFtype(mnt)) b.data[@intCast(e + 7)] = ftypeOf(mode);
                 bdirty(b);
@@ -1129,7 +1188,7 @@ pub fn dirEmpty(mnt: *Ext2Mount, dir: *const Inode) bool {
     var ent: DirEntry = undefined;
     while (dirNext(mnt, dir, &pos, &ent)) {
         const n: []const u8 = ent.name[0..ent.name_len];
-        if (std_eql(n, ".") or std_eql(n, "..")) continue;
+        if (std.mem.eql(u8, n, ".") or std.mem.eql(u8, n, "..")) continue;
         return false;
     }
     return true;

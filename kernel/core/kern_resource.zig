@@ -13,13 +13,14 @@ const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const arch: type = @import("../arch/arch.zig");
+const subr_param: type = @import("subr_param.zig");
 
 /// RLIM_INFINITY as a 64-bit signed value.
 pub const RLIM_INFINITY: i64 = 0x7fff_ffff_ffff_ffff;
 
 // FreeBSD's resources (sys/sys/resource.h).
 const RLIMIT_STACK: usize = 3;
-const RLIMIT_NOFILE: usize = 8;
+pub const RLIMIT_NOFILE: usize = 8;
 const RLIMIT_NPROC: usize = 7;
 
 /// The limits a new process starts with.
@@ -28,8 +29,10 @@ pub fn defaults() [proc.RLIM_NLIMITS]proc.Rlimit {
     // A finite stack limit: libthr places the main thread's guard page
     // relative to it, so RLIM_INFINITY would overflow the address.
     l[RLIMIT_STACK] = .{ .cur = 64 * 1024 * 1024, .max = 64 * 1024 * 1024 };
-    // The descriptor table and the process table are fixed in size.
-    l[RLIMIT_NOFILE] = .{ .cur = proc.NFILE, .max = proc.NFILE };
+    // As FreeBSD's proc0: as many descriptors as the system holds files
+    // (kern.maxfiles); kern.maxfilesperproc caps it per process.
+    l[RLIMIT_NOFILE] = .{ .cur = subr_param.maxfiles, .max = subr_param.maxfiles };
+    // The process table is fixed in size.
     l[RLIMIT_NPROC] = .{ .cur = 64, .max = 64 };
     return l;
 }

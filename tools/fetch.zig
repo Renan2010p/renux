@@ -3,9 +3,8 @@
 //
 // fetch -- download the FreeBSD userland Renux runs on, with Zig alone.
 //
-// The Zig counterpart of tools/get-freebsd.sh and tools/get-freebsd-pkg.sh,
-// and of the curl, tar, xz, sha256sum and openssl they needed: everything is
-// done with the standard library (std.http.Client for HTTPS and TLS,
+// No curl, tar, xz, sha256sum or openssl: everything is done with the
+// standard library (std.http.Client for HTTPS and TLS,
 // std.compress.xz and std.compress.zstd with std.tar for the archives,
 // std.crypto for the checksums and the RSA signature).
 //
@@ -18,7 +17,7 @@
 //                       verify, and each package's checksum must match.
 //   fetch               both (the default)
 //
-// Nothing it writes is committed; tools/mkrootfs.sh reads the two trees.
+// Nothing it writes is committed; tools/mkrootfs.zig reads the two trees.
 // FreeBSD is BSD-licensed; its notices travel with the files.
 
 const std: type = @import("std");
@@ -28,8 +27,9 @@ const Allocator: type = std.mem.Allocator;
 const RELEASE = "14.5-RELEASE";
 const BASE_SHA256 = "d16b68fe0e9e136ce67ab1084042c848bbffecd1eb295f206bd1c6785deb45a4";
 const BASE_URL = "https://download.freebsd.org/releases/amd64/" ++ RELEASE ++ "/base.txz";
-/// Bump when the set of unpacked files changes, so an old tree is redone.
-const LAYOUT = "2";
+/// Bump when the unpacked tree changes, so an old tree is redone (3: hard
+/// links keep their target's permissions).
+const LAYOUT = "3";
 
 const ABI = "FreeBSD:14:amd64";
 const REPO = "https://pkg.freebsd.org/" ++ ABI ++ "/quarterly";
@@ -455,18 +455,11 @@ fn untar(ctx: Ctx, reader: *Io.Reader, dest: []const u8, excludes: []const []con
     }
 }
 
+/// Copy the file at `src` to `dst`, keeping its permissions: a hard link is
+/// the same file, so it must stay executable when its target is.
 fn copyFile(ctx: Ctx, src: []const u8, dst: []const u8) !void {
-    const cwd = Io.Dir.cwd();
-    const in = try cwd.openFile(ctx.io, src, .{});
-    defer in.close(ctx.io);
-    const out = try cwd.createFile(ctx.io, dst, .{});
-    defer out.close(ctx.io);
-    var rbuf: [64 * 1024]u8 = undefined;
-    var r = in.reader(ctx.io, &rbuf);
-    var wbuf: [64 * 1024]u8 = undefined;
-    var w = out.writer(ctx.io, &wbuf);
-    _ = try r.interface.streamRemaining(&w.interface);
-    try w.interface.flush();
+    const cwd: Io.Dir = Io.Dir.cwd();
+    try Io.Dir.copyFile(cwd, src, cwd, dst, ctx.io, .{});
 }
 
 /// Extract an xz-compressed tar into `dest`, skipping `excludes`.

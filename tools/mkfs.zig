@@ -15,8 +15,11 @@
 //
 // With -d the contents of DIR become the root of the new filesystem (like
 // mke2fs -d). Every timestamp is the same fixed value, so the image is
-// byte-for-byte reproducible. It is also the formatter the installer will run
-// on the target partition.
+// byte-for-byte reproducible.
+//
+// The writer is also a module: tools/mkrootfs.zig (the root image) and
+// tools/mkdisk.zig (the persistent disk) import it as "mkfs" and call
+// `makeFs` with an `Options` value instead of running this program.
 
 const std: type = @import("std");
 const Io: type = std.Io;
@@ -33,14 +36,23 @@ const FT_REG: u8 = 1;
 const FT_DIR: u8 = 2;
 const FT_LNK: u8 = 7;
 
-const Options = struct {
+/// What to make. The defaults are mke2fs's.
+pub const Options: type = struct {
+    /// Block size in bytes (1024, 2048 or 4096).
     bs: u32 = 1024,
+    /// Inode size in bytes; 256 holds timestamps past 2038.
     inode_size: u32 = 256,
+    /// Percentage of the blocks reserved for root.
     reserved_pct: u32 = 5,
+    /// One inode per this many bytes of the file system.
     bytes_per_inode: u32 = 16384,
+    /// The volume label.
     label: []const u8 = "",
+    /// A directory whose contents become the root of the file system.
     dir: ?[]const u8 = null,
+    /// The image file to write (created when missing).
     image: []const u8 = "",
+    /// Size in blocks; null means the image file's current size.
     blocks: ?u64 = null,
 };
 
@@ -620,24 +632,76 @@ pub fn main(init: std.process.Init) !void {
     try makeFs(io, std.heap.page_allocator, opts);
 }
 
-fn makeFs(io: Io, a: Allocator, opts: Options) !void {
+/// The shape of a file system: its size, and how it divides into block
+/// groups.
+const Geometry: type = struct {
+    total_blocks: u64,
+    blocks_per_group: u32,
+    first_data_block: u32,
+    groups: u32,
+    inodes_per_group: u32,
+    inode_table_blocks: u32,
+    gd_blocks: u32,
+
+    /// A last group must hold at least this many data blocks besides its
+    /// own metadata, or it is dropped (mke2fs's rule).
+    const MIN_LAST_GROUP_DATA: u64 = 50;
+
+    /// The geometry of a file system of `blocks` blocks. The last block group
+    /// holds its own bitmaps and inode table; when the blocks left for it are
+    /// too few for those (plus MIN_LAST_GROUP_DATA), it is dropped and the
+    /// file system is made that much smaller, as mke2fs does.
+    fn init(blocks: u64, opts: Options) Geometry {
+        var total: u64 = blocks;
+        while (true) {
+            const g: Geometry = compute(total, opts);
+            const last: u32 = g.groups - 1;
+            const last_group_blocks: u64 = total - g.first_data_block - @as(u64, last) * g.blocks_per_group;
+            const overhead: u64 = (if (hasSuper(last)) 1 + @as(u64, g.gd_blocks) else 0) + 2 + g.inode_table_blocks;
+            if (g.groups == 1 or last_group_blocks >= overhead + MIN_LAST_GROUP_DATA) return g;
+            total -= last_group_blocks;
+        }
+    }
+
+    fn compute(total: u64, opts: Options) Geometry {
+        const blocks_per_group: u32 = opts.bs * 8;
+        const first_data_block: u32 = if (opts.bs == 1024) 1 else 0;
+        const groups: u32 = @intCast(roundUp(total - first_data_block, blocks_per_group) / blocks_per_group);
+        const inodes_wanted: u32 = @intCast(@max(@as(u64, 16), roundUp(total * opts.bs / opts.bytes_per_inode, 1)));
+        var inodes_per_group: u32 = @intCast(roundUp(roundUp(inodes_wanted, groups) / groups, 8));
+        if (inodes_per_group == 0) inodes_per_group = 8;
+        return .{
+            .total_blocks = total,
+            .blocks_per_group = blocks_per_group,
+            .first_data_block = first_data_block,
+            .groups = groups,
+            .inodes_per_group = inodes_per_group,
+            .inode_table_blocks = @intCast(roundUp(@as(u64, inodes_per_group) * opts.inode_size, opts.bs) / opts.bs),
+            .gd_blocks = @intCast(roundUp(@as(u64, groups) * 32, opts.bs) / opts.bs),
+        };
+    }
+};
+
+/// Write the file system `opts` describes. Exits the process with a message
+/// when the image cannot be written.
+pub fn makeFs(io: Io, a: Allocator, opts: Options) !void {
     const cwd = Io.Dir.cwd();
-    const total_blocks: u64 = opts.blocks orelse blk: {
+    const requested_blocks: u64 = opts.blocks orelse blk: {
         const st = cwd.statFile(io, opts.image, .{}) catch {
             std.process.fatal("mkfs: cannot stat {s}", .{opts.image});
         };
         break :blk st.size / opts.bs;
     };
 
-    const blocks_per_group: u32 = opts.bs * 8;
-    const first_data_block: u32 = if (opts.bs == 1024) 1 else 0;
-    const groups: u32 = @intCast(roundUp(total_blocks - first_data_block, blocks_per_group) / blocks_per_group);
-    var inodes_count: u32 = @intCast(@max(@as(u64, 16), roundUp(total_blocks * opts.bs / opts.bytes_per_inode, 1)));
-    var inodes_per_group: u32 = @intCast(roundUp(roundUp(inodes_count, groups) / groups, 8));
-    if (inodes_per_group == 0) inodes_per_group = 8;
-    inodes_count = inodes_per_group * groups;
-    const inode_table_blocks: u32 = @intCast(roundUp(@as(u64, inodes_per_group) * opts.inode_size, opts.bs) / opts.bs);
-    const gd_blocks: u32 = @intCast(roundUp(@as(u64, groups) * 32, opts.bs) / opts.bs);
+    const geometry: Geometry = .init(requested_blocks, opts);
+    const total_blocks: u64 = geometry.total_blocks;
+    const blocks_per_group: u32 = geometry.blocks_per_group;
+    const first_data_block: u32 = geometry.first_data_block;
+    const groups: u32 = geometry.groups;
+    const inodes_per_group: u32 = geometry.inodes_per_group;
+    const inodes_count: u32 = inodes_per_group * groups;
+    const inode_table_blocks: u32 = geometry.inode_table_blocks;
+    const gd_blocks: u32 = geometry.gd_blocks;
 
     const used_blocks = try a.alloc(u8, (@as(usize, @intCast(total_blocks)) + 7) / 8);
     const used_inodes = try a.alloc(u8, (@as(usize, inodes_count) + 7) / 8);

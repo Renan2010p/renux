@@ -11,9 +11,17 @@
 
 const stat: type = @import("stat.zig");
 
-/// File descriptor flags (the F* bits, stored in f_flag).
+/// File flags (the F* bits, stored in f_flag), with FreeBSD's values: the
+/// access mode, and the status flags open(2) and fcntl(F_SETFL) set.
 pub const FREAD: i32 = 0x0001;
 pub const FWRITE: i32 = 0x0002;
+/// Do not wait: a transfer that cannot proceed at once fails with EAGAIN
+/// (O_NONBLOCK; FreeBSD's FNONBLOCK has the same value).
+pub const FNONBLOCK: i32 = 0x0004;
+
+/// The flags fcntl(F_SETFL) may change (FreeBSD's FCNTLFLAGS, as far as
+/// Renux implements them).
+pub const FCNTLFLAGS: i32 = FNONBLOCK;
 
 /// File types (the f_type field), matching NetBSD's DTYPE_*.
 pub const DTYPE_VNODE: u8 = 1;

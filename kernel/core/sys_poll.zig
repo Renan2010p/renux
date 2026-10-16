@@ -21,6 +21,8 @@ const file: type = @import("../sys/file.zig");
 const proc: type = @import("../sys/proc.zig");
 const kern_signal: type = @import("kern_signal.zig");
 const kern_time: type = @import("kern_time.zig");
+const param: type = @import("../sys/param.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
 
 /// Largest pollfd array accepted.
 const MAXPOLL: usize = 256;
@@ -133,33 +135,84 @@ fn fdSet(set: u64, fd: usize) void {
     words[fd / fd_set_bits] |= @as(u64, 1) << @intCast(fd % fd_set_bits);
 }
 
+/// select(2)'s working sets fit on the kernel stack up to this many
+/// descriptors (FreeBSD's kern_select keeps a 2048-bit buffer the same way);
+/// larger sets are allocated.
+const SELECT_STACK_FDS: usize = 2048;
+
+/// The four bit sets select works with, `words` 64-bit words each: the
+/// descriptors asked about for reading and writing, and those found ready.
+const SelectBits: type = struct {
+    words: usize,
+    bits: []u64,
+    /// The pages holding `bits` when they did not fit on the stack.
+    pages: ?vm_page.PAddr = null,
+
+    fn set(b: *const SelectBits, which: usize) []u64 {
+        return b.bits[which * b.words ..][0..b.words];
+    }
+
+    const WANT_READ: usize = 0;
+    const WANT_WRITE: usize = 1;
+    const GOT_READ: usize = 2;
+    const GOT_WRITE: usize = 3;
+};
+
+fn bitIsSet(set: []const u64, fd: usize) bool {
+    return (set[fd / 64] >> @intCast(fd % 64)) & 1 != 0;
+}
+
+fn setBit(set: []u64, fd: usize) void {
+    set[fd / 64] |= @as(u64, 1) << @intCast(fd % 64);
+}
+
 /// The common body: `until` is the tick deadline (null: wait forever).
 fn selectCommon(nd_in: u64, rd: u64, wr: u64, ex: u64, until: ?u64) u64 {
     const p = kern_proc.current;
-    const nd: usize = @intCast(@min(nd_in, proc.NFILE));
+    // As in FreeBSD, descriptors beyond the table cannot be open.
+    const nd: usize = @intCast(@min(nd_in, p.fd.size()));
+    const words: usize = (nd + 63) / 64;
+
+    var stack_bits: [4 * SELECT_STACK_FDS / 64]u64 = undefined;
+    var bits: SelectBits = .{ .words = words, .bits = stack_bits[0 .. 4 * words] };
+    if (nd > SELECT_STACK_FDS) {
+        const pages: u64 = (4 * words * @sizeOf(u64) + param.PAGE_SIZE - 1) / param.PAGE_SIZE;
+        const pa: vm_page.PAddr = vm_page.physallocContig(pages) orelse return sys.signed(-errno.ENOMEM);
+        const hhdm: u64 = arch.boot.hhdmOffset() orelse return sys.signed(-errno.ENOMEM);
+        const first: [*]u64 = @ptrFromInt(pa.int() + hhdm);
+        bits.bits = first[0 .. 4 * words];
+        bits.pages = pa;
+    }
+    defer if (bits.pages) |pa| {
+        vm_page.physfreeContig(pa, (4 * words * @sizeOf(u64) + param.PAGE_SIZE - 1) / param.PAGE_SIZE);
+    };
+    @memset(bits.bits, 0);
+
     // Snapshot the requested sets: the user's are overwritten with results.
-    var want_r: [proc.NFILE]bool = @splat(false);
-    var want_w: [proc.NFILE]bool = @splat(false);
-    var fd: usize = 0;
-    while (fd < nd) : (fd += 1) {
-        want_r[fd] = fdIsSet(rd, fd);
-        want_w[fd] = fdIsSet(wr, fd);
-        if ((want_r[fd] or want_w[fd]) and kern_descrip.fdGetfile(p, fd) == null) return sys.signed(-errno.EBADF);
+    const want_r: []u64 = bits.set(SelectBits.WANT_READ);
+    const want_w: []u64 = bits.set(SelectBits.WANT_WRITE);
+    const got_r: []u64 = bits.set(SelectBits.GOT_READ);
+    const got_w: []u64 = bits.set(SelectBits.GOT_WRITE);
+    for (0..nd) |fd| {
+        if (fdIsSet(rd, fd)) setBit(want_r, fd);
+        if (fdIsSet(wr, fd)) setBit(want_w, fd);
+        if ((bitIsSet(want_r, fd) or bitIsSet(want_w, fd)) and kern_descrip.fdGetfile(p, fd) == null) return sys.signed(-errno.EBADF);
     }
     while (true) {
         var ready: u64 = 0;
-        var got_r: [proc.NFILE]bool = @splat(false);
-        var got_w: [proc.NFILE]bool = @splat(false);
-        fd = 0;
-        while (fd < nd) : (fd += 1) {
-            if (!want_r[fd] and !want_w[fd]) continue;
+        @memset(got_r, 0);
+        @memset(got_w, 0);
+        for (0..nd) |fd| {
+            const read: bool = bitIsSet(want_r, fd);
+            const write: bool = bitIsSet(want_w, fd);
+            if (!read and !write) continue;
             const ev: u16 = @bitCast(readiness(@intCast(fd), @bitCast(@as(u16, file.POLLIN | file.POLLOUT))));
-            if (want_r[fd] and (ev & (file.POLLIN | file.POLLHUP)) != 0) {
-                got_r[fd] = true;
+            if (read and (ev & (file.POLLIN | file.POLLHUP)) != 0) {
+                setBit(got_r, fd);
                 ready += 1;
             }
-            if (want_w[fd] and (ev & (file.POLLOUT | file.POLLERR)) != 0) {
-                got_w[fd] = true;
+            if (write and (ev & (file.POLLOUT | file.POLLERR)) != 0) {
+                setBit(got_w, fd);
                 ready += 1;
             }
         }
@@ -168,10 +221,9 @@ fn selectCommon(nd_in: u64, rd: u64, wr: u64, ex: u64, until: ?u64) u64 {
             fdZeroUpTo(rd, nd);
             fdZeroUpTo(wr, nd);
             fdZeroUpTo(ex, nd); // no exceptional conditions are reported
-            fd = 0;
-            while (fd < nd) : (fd += 1) {
-                if (got_r[fd]) fdSet(rd, fd);
-                if (got_w[fd]) fdSet(wr, fd);
+            for (0..nd) |fd| {
+                if (bitIsSet(got_r, fd)) fdSet(rd, fd);
+                if (bitIsSet(got_w, fd)) fdSet(wr, fd);
             }
             return ready;
         }

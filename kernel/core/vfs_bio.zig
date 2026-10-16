@@ -3,12 +3,21 @@
 //
 // Buffer cache.
 //
-// The Zig counterpart of FreeBSD's sys/kern/vfs_bio.c, reduced to a fixed
-// pool of page-sized buffers with the classic interface: bread() returns a
-// held buffer with a disk block's contents, getblk() one for a block about
-// to be overwritten, brelse() gives it back, bwrite() writes it at once and
-// bdwrite() marks it dirty for a later write. Unused buffers are recycled
-// least recently used first, writing them out if dirty.
+// The Zig counterpart of FreeBSD's sys/kern/vfs_bio.c: a pool of page-sized
+// buffers with the classic interface: bread() returns a held buffer with a
+// disk block's contents, getblk() one for a block about to be overwritten,
+// brelse() gives it back, bwrite() writes it at once and bdwrite() marks it
+// dirty for a later write.
+//
+// Like the BSD buffer cache and Linux's page cache, it is sized from memory
+// and every lookup is O(1):
+//
+//   - the pool holds up to a quarter of physical memory (at most
+//     NBUF_MAX buffers), growing a buffer at a time as blocks are read;
+//   - a hash table on (disk, offset) finds a cached block without scanning
+//     the pool (FreeBSD's bufhash);
+//   - a least-recently-used list orders the buffers, so the one to recycle
+//     is at its head, written out first when dirty (FreeBSD's free queues).
 //
 // A caller never sees a *Buf. It holds a `Held(access)` handle instead, which
 // owns the reference for as long as it lives and gives it back with
@@ -27,15 +36,24 @@
 // CPU is idle: a dirty buffer is written once it has waited SYNCDELAY ticks,
 // as FreeBSD's syncer daemon does every few seconds.
 
+const std: type = @import("std");
 const geom_disk: type = @import("../geom/geom_disk.zig");
 const arch: type = @import("../arch/arch.zig");
 const errno: type = @import("../sys/errno.zig");
 const param: type = @import("../sys/param.zig");
 const vm_page: type = @import("../vm/vm_page.zig");
 const prf: type = @import("subr_prf.zig");
+const vm_init: type = @import("../vm/vm_init.zig");
 
-/// Number of buffers (4 MiB of cache with 4 KiB pages).
-const NBUF: usize = 1024;
+/// The most buffers the pool may grow to (512 MiB of cache with 4 KiB
+/// pages); the actual limit is a quarter of memory (`poolLimit`).
+const NBUF_MAX: usize = 131072;
+
+/// Buckets of the hash table (a power of two).
+const HASH_SIZE: usize = 65536;
+
+/// "No buffer", in the index-based links below.
+const NONE: u32 = std.math.maxInt(u32);
 
 /// Largest block a buffer holds.
 pub const MAXBSIZE: u32 = @intCast(param.PAGE_SIZE);
@@ -60,8 +78,11 @@ const Buf: type = struct {
     b_dirtied: u64 = 0,
     /// Holders (bread/getblk without the matching release).
     b_refcnt: u32 = 0,
-    /// Last use, for LRU recycling.
-    b_lru: u64 = 0,
+    /// The next buffer in this one's hash bucket (valid buffers only).
+    hash_next: u32 = NONE,
+    /// Neighbours in the LRU list: `lru_prev` was used less recently.
+    lru_prev: u32 = NONE,
+    lru_next: u32 = NONE,
 };
 
 /// What a handle lets its holder do with the buffer's bytes. `read` gives a
@@ -150,19 +171,95 @@ pub fn Held(comptime access: Access) type {
     };
 }
 
-var bufs: [NBUF]Buf = undefined;
+var bufs: [NBUF_MAX]Buf = undefined;
 var nbuf: usize = 0;
-var lru_clock: u64 = 0;
 var ndirty: usize = 0;
+/// Heads of the hash buckets.
+var hash: [HASH_SIZE]u32 = @splat(NONE);
+/// The LRU list: `lru_head` is the least recently used buffer.
+var lru_head: u32 = NONE;
+var lru_tail: u32 = NONE;
+/// The pool's size limit, computed on first use (0: not yet).
+var pool_limit: usize = 0;
+/// Tick of the syncer's last pass.
+var last_sync: u64 = 0;
+
+/// The most buffers the pool may hold: a quarter of physical memory, at
+/// least 1024 buffers, at most NBUF_MAX.
+fn poolLimit() usize {
+    if (pool_limit == 0) {
+        const pages: u64 = vm_init.physmem() / param.PAGE_SIZE;
+        pool_limit = @intCast(std.math.clamp(pages / 4, 1024, NBUF_MAX));
+    }
+    return pool_limit;
+}
+
+fn indexOf(bp: *const Buf) u32 {
+    return @intCast(bp - &bufs[0]);
+}
+
+// -- the hash table --------------------------------------------------------------
+
+/// The bucket of the block at `offset` on `dp`.
+fn bucket(dp: *const geom_disk.Disk, offset: u64) usize {
+    const key: u64 = (offset / 512) ^ (@as(u64, @intFromPtr(dp)) >> 4);
+    // Fibonacci hashing spreads consecutive blocks over the table.
+    return @intCast((key *% 0x9e37_79b9_7f4a_7c15) >> (64 - @ctz(@as(u64, HASH_SIZE))));
+}
+
+fn hashInsert(bp: *Buf) void {
+    const head: *u32 = &hash[bucket(bp.b_disk.?, bp.b_offset)];
+    bp.hash_next = head.*;
+    head.* = indexOf(bp);
+}
+
+fn hashRemove(bp: *Buf) void {
+    var link: *u32 = &hash[bucket(bp.b_disk.?, bp.b_offset)];
+    const index: u32 = indexOf(bp);
+    while (link.* != NONE) : (link = &bufs[link.*].hash_next) {
+        if (link.* == index) {
+            link.* = bp.hash_next;
+            bp.hash_next = NONE;
+            return;
+        }
+    }
+}
+
+// -- the LRU list ----------------------------------------------------------------
+
+fn lruRemove(bp: *Buf) void {
+    if (bp.lru_prev != NONE) bufs[bp.lru_prev].lru_next = bp.lru_next else lru_head = bp.lru_next;
+    if (bp.lru_next != NONE) bufs[bp.lru_next].lru_prev = bp.lru_prev else lru_tail = bp.lru_prev;
+    bp.lru_prev = NONE;
+    bp.lru_next = NONE;
+}
+
+/// Put `bp` at the tail of the list: the most recently used.
+fn lruAppend(bp: *Buf) void {
+    const index: u32 = indexOf(bp);
+    bp.lru_prev = lru_tail;
+    bp.lru_next = NONE;
+    if (lru_tail != NONE) bufs[lru_tail].lru_next = index else lru_head = index;
+    lru_tail = index;
+}
+
+/// Mark `bp` as just used.
+fn touch(bp: *Buf) void {
+    lruRemove(bp);
+    lruAppend(bp);
+}
 
 /// The clock's tick count, for write ageing.
 fn now() u64 {
     return arch.clock.tickCount();
 }
 
+/// The cached buffer for the block at `offset` on `dp`, or null.
 fn find(dp: *geom_disk.Disk, offset: u64) ?*Buf {
-    for (bufs[0..nbuf]) |*bp| {
-        if (bp.b_disk == dp and bp.b_offset == offset and bp.b_valid) return bp;
+    var index: u32 = hash[bucket(dp, offset)];
+    while (index != NONE) : (index = bufs[index].hash_next) {
+        const bp: *Buf = &bufs[index];
+        if (bp.b_disk == dp and bp.b_offset == offset) return bp;
     }
     return null;
 }
@@ -178,27 +275,33 @@ fn writeOut(bp: *Buf) i32 {
     return e;
 }
 
-/// A buffer to reuse: a fresh one while the pool grows, else the least
-/// recently used one nobody holds (written out first when dirty).
+/// A buffer to reuse: a fresh one while the pool may grow (and memory is
+/// left), else the least recently used one nobody holds, written out first
+/// when dirty. The buffer returned is in no hash bucket and at the tail of
+/// the LRU list.
 fn getNewBuf() ?*Buf {
-    if (nbuf < NBUF) {
-        const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
-        const pa: vm_page.PAddr = vm_page.physalloc() orelse return null;
+    if (nbuf < poolLimit()) grow: {
+        const hhdm: u64 = arch.boot.hhdmOffset() orelse break :grow;
+        const pa: vm_page.PAddr = vm_page.physalloc() orelse break :grow;
         bufs[nbuf] = .{ .b_data = pa.toKern(hhdm) };
         nbuf += 1;
-        return &bufs[nbuf - 1];
+        const bp: *Buf = &bufs[nbuf - 1];
+        lruAppend(bp);
+        return bp;
     }
-    var victim: ?*Buf = null;
-    for (bufs[0..nbuf]) |*bp| {
+    var index: u32 = lru_head;
+    while (index != NONE) : (index = bufs[index].lru_next) {
+        const bp: *Buf = &bufs[index];
         if (bp.b_refcnt != 0) continue;
-        if (victim == null or bp.b_lru < victim.?.b_lru) victim = bp;
+        if (bp.b_dirty) {
+            if (writeOut(bp) != 0) prf.log(prf.LOG_ERR, "vfs_bio: write error while recycling a buffer", .{});
+        }
+        if (bp.b_valid) hashRemove(bp);
+        bp.b_valid = false;
+        touch(bp);
+        return bp;
     }
-    const bp: *Buf = victim orelse return null;
-    if (bp.b_dirty) {
-        if (writeOut(bp) != 0) prf.log(prf.LOG_ERR, "vfs_bio: write error while recycling a buffer", .{});
-    }
-    bp.b_valid = false;
-    return bp;
+    return null;
 }
 
 /// Take a held buffer for `size` bytes at `offset` on `dp`. `read` reads the
@@ -206,10 +309,9 @@ fn getNewBuf() ?*Buf {
 /// contents are zeroed instead.
 fn hold(dp: *geom_disk.Disk, offset: u64, size: u32, read: bool) ?*Buf {
     if (size > MAXBSIZE) return null;
-    lru_clock += 1;
     if (find(dp, offset)) |bp| {
         bp.b_refcnt += 1;
-        bp.b_lru = lru_clock;
+        touch(bp);
         return bp;
     }
     const bp: *Buf = getNewBuf() orelse return null;
@@ -217,7 +319,6 @@ fn hold(dp: *geom_disk.Disk, offset: u64, size: u32, read: bool) ?*Buf {
     bp.b_offset = offset;
     bp.b_bcount = size;
     bp.b_refcnt = 1;
-    bp.b_lru = lru_clock;
     bp.b_dirty = false;
     if (read) {
         if (dp.d_strategy(dp, false, offset, bp.b_data.manyPtr(u8)[0..size]) != 0) {
@@ -229,6 +330,7 @@ fn hold(dp: *geom_disk.Disk, offset: u64, size: u32, read: bool) ?*Buf {
         @memset(bp.b_data.manyPtr(u8)[0..size], 0);
     }
     bp.b_valid = true;
+    hashInsert(bp);
     return bp;
 }
 
@@ -288,6 +390,7 @@ pub fn binval(dp: *geom_disk.Disk) void {
             bp.b_dirty = false;
             ndirty -= 1;
         }
+        if (bp.b_valid) hashRemove(bp);
         bp.b_valid = false;
         bp.b_disk = null;
         bp.b_refcnt = 0;
@@ -297,9 +400,12 @@ pub fn binval(dp: *geom_disk.Disk) void {
 /// The syncer: write the dirty buffers that have waited SYNCDELAY ticks.
 /// `busy` reports whether a buffer's owner (a filesystem in the middle of
 /// an update) must be left alone for now. Called by the scheduler when
-/// nothing is runnable.
+/// nothing is runnable; like FreeBSD's syncer daemon, it makes a pass at
+/// most once a second.
 pub fn syncer(busy: *const fn (dp: *geom_disk.Disk) bool) void {
     if (ndirty == 0) return;
+    if (now() - last_sync < arch.clock.HZ) return;
+    last_sync = now();
     var flushed: [8]?*geom_disk.Disk = @splat(null);
     var nflushed: usize = 0;
     for (bufs[0..nbuf]) |*bp| {

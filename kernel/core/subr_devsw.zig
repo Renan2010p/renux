@@ -13,6 +13,7 @@
 const conf: type = @import("../sys/conf.zig");
 const file: type = @import("../sys/file.zig");
 const stat: type = @import("../sys/stat.zig");
+const kern_descrip: type = @import("kern_descrip.zig");
 const kmem: type = @import("subr_kmem.zig");
 
 /// Per-open state of a device-backed descriptor.
@@ -126,10 +127,6 @@ pub fn cdevOpen(dev: u64, flags: i32) ?*file.File {
     df.ctx = ctx;
     df.dev = dev;
 
-    const f: *file.File = kmem.zallocAs(file.File) orelse {
-        kmem.free(@ptrCast(df));
-        return null;
-    };
     var mode: i32 = 0;
     if ((flags & 3) != 1) {
         mode |= file.FREAD;
@@ -137,11 +134,10 @@ pub fn cdevOpen(dev: u64, flags: i32) ?*file.File {
     if ((flags & 3) != 0) {
         mode |= file.FWRITE;
     }
-    f.f_type = file.DTYPE_VNODE;
-    f.f_flag = mode;
-    f.f_offset = 0;
-    f.f_count = 1;
-    f.f_data = df;
-    f.f_ops = &dev_ops;
-    return f;
+    const O_NONBLOCK: i32 = 0x0004;
+    if ((flags & O_NONBLOCK) != 0) mode |= file.FNONBLOCK;
+    return kern_descrip.newFile(file.DTYPE_VNODE, mode, df, &dev_ops) orelse {
+        kmem.free(@ptrCast(df));
+        return null;
+    };
 }

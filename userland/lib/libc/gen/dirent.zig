@@ -22,7 +22,7 @@ pub const Dirent: type = extern struct {
 };
 
 /// An open directory stream (`DIR *` in C).
-const DIR: type = struct {
+pub const DIR: type = struct {
     fd: c_int,
     len: usize,
     pos: usize,

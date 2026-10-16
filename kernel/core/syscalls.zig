@@ -103,10 +103,13 @@ fn sysClose(args: [sys.MAXARGS]u64) u64 {
 fn sysDup2(args: [sys.MAXARGS]u64) u64 {
     const oldfd: u64 = args[0];
     const newfd: u64 = args[1];
-    if (oldfd >= proc.NFILE or newfd >= proc.NFILE) {
-        return sys.ERROR;
-    }
     const p: *proc.Proc = kern_proc.current;
+    if (newfd >= kern_descrip.getmaxfd(p)) {
+        return sys.signed(-errno.EBADF);
+    }
+    if (!kern_descrip.fdReserve(p, @intCast(newfd))) {
+        return sys.signed(-errno.ENOMEM);
+    }
     const f: *file.File = kern_descrip.fdGetfile(p, @intCast(oldfd)) orelse return sys.ERROR;
     if (oldfd == newfd) {
         return newfd;
@@ -126,8 +129,8 @@ fn sysCloseRange(args: [sys.MAXARGS]u64) u64 {
     const p = kern_proc.current;
     if (args[0] > args[1]) return sys.signed(-errno.EINVAL);
     var fd: u64 = args[0];
-    while (fd <= args[1] and fd < proc.NFILE) : (fd += 1) {
-        if (p.fds[@intCast(fd)] == null) continue;
+    while (fd <= args[1] and fd < p.fd.size()) : (fd += 1) {
+        if (kern_descrip.fdGetfile(p, @intCast(fd)) == null) continue;
         if ((args[2] & CLOSE_RANGE_CLOEXEC) != 0) {
             kern_descrip.fdSetCloexec(p, @intCast(fd), true);
         } else {
@@ -137,10 +140,11 @@ fn sysCloseRange(args: [sys.MAXARGS]u64) u64 {
     return 0;
 }
 
-/// getdtablesize(2): the size of the descriptor table (RLIMIT_NOFILE).
+/// getdtablesize(2): how many descriptors the process may hold (FreeBSD's
+/// getmaxfd: RLIMIT_NOFILE, capped by kern.maxfilesperproc).
 fn sysGetdtablesize(args: [sys.MAXARGS]u64) u64 {
     _ = args;
-    return @intCast(kern_proc.current.rlimits[8].cur);
+    return @intCast(kern_descrip.getmaxfd(kern_proc.current));
 }
 
 /// dup(2): the lowest free descriptor, sharing the open file.
@@ -182,6 +186,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_mmap, .handler = vm_mmap.sysMmap },
     .{ .num = sys.SYS_munmap, .handler = vm_mmap.sysMunmap },
     .{ .num = sys.SYS_mprotect, .handler = vm_mmap.sysMprotect },
+    .{ .num = sys.SYS_madvise, .handler = vm_mmap.sysMadvise },
     .{ .num = sys.SYS_issetugid, .handler = kern_prot.sysIssetugid },
     .{ .num = sys.SYS_sysarch, .handler = arch_sysarch.sysarch.sysSysarch },
     .{ .num = sys.SYS_sigprocmask, .handler = kern_signal.sysSigprocmask },
@@ -243,6 +248,8 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_fcntl, .handler = sys_generic.sysFcntl },
     .{ .num = sys.SYS_openat, .handler = vfs_syscalls.sysOpenat },
     .{ .num = sys.SYS_readv, .handler = sys_generic.sysReadv },
+    .{ .num = sys.SYS_preadv, .handler = sys_generic.sysPreadv },
+    .{ .num = sys.SYS_pwritev, .handler = sys_generic.sysPwritev },
     .{ .num = sys.SYS_pread, .handler = sys_generic.sysPread },
     .{ .num = sys.SYS_pwrite, .handler = sys_generic.sysPwrite },
     .{ .num = sys.SYS_setsid, .handler = kern_prot.sysSetsid },

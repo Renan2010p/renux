@@ -5,8 +5,8 @@
 //
 // FreeBSD's pkg(8) only runs on FreeBSD, but building a Renux image wants a
 // few packages from the FreeBSD repository (bash, nano). This tool does the
-// two host-side steps tools/get-freebsd-pkg.sh needs, with no dependency
-// beyond Zig's standard library:
+// two host-side steps of fetching a package, with no dependency beyond Zig's
+// standard library (tools/fetch.zig now does them itself):
 //
 //   pkgtool resolve <packagesite.yaml> <name>...
 //       print, for the named packages and everything they depend on

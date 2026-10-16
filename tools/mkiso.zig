@@ -3,8 +3,7 @@
 //
 // mkiso -- build the Renux UEFI boot ISO, in Zig.
 //
-// This replaces xorriso and the mtools (mkfs.fat, mmd, mcopy) that
-// tools/mkiso.sh needed. A UEFI-only ISO requires just two things the
+// No xorriso and no mtools (mkfs.fat, mmd, mcopy). A UEFI-only ISO requires just two things the
 // firmware understands, and both are simple on-disk formats:
 //
 //   * a FAT16 image holding \EFI\BOOT\BOOTX64.EFI (the Renux loader),

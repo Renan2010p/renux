@@ -202,6 +202,16 @@ pub fn sysMinherit(args: [sys.MAXARGS]u64) u64 {
     return sys.signed(-errno.ENOMEM);
 }
 
+/// madvise(2): `madvise(addr, len, behavior)`. Advice only tells the kernel
+/// how memory will be used; FreeBSD may ignore it, and so does Renux (even
+/// MADV_DONTNEED and MADV_FREE leave the contents in place, which FreeBSD
+/// also allows). The range is not checked further.
+pub fn sysMadvise(args: [sys.MAXARGS]u64) u64 {
+    const MADV_CORE: u64 = 9; // the highest advice value FreeBSD defines
+    if (args[2] > MADV_CORE) return sys.signed(-errno.EINVAL);
+    return 0;
+}
+
 /// mprotect(2): protection changes are not tracked yet; report success.
 pub fn sysMprotect(args: [sys.MAXARGS]u64) u64 {
     _ = args;

@@ -4,8 +4,20 @@
 // /sbin/init: the first user process.
 //
 // Following the BSD startup sequence: in a single-user boot (the kernel passes
-// -s) init first offers a shell on the console; then it runs the system
-// startup script /etc/rc and keeps a getty running on the console.
+// -s) init first offers a shell on the console; then it brings the system up
+// to multi-user operation and keeps a getty running on the console.
+//
+// The multi-user startup is done here, in Zig, rather than by an /etc/rc
+// script. It does what Renux supports, in FreeBSD's order and with the
+// messages FreeBSD's rc prints, using FreeBSD's own tools when the root
+// image carries them:
+//
+//   1. the shared library search path      ldconfig -elf    (rc.d/ldconfig)
+//   2. the password databases, if missing  pwd_mkdb -p      (chpass(1))
+//   3. the local file systems in /etc/fstab  mount -a       (rc.d/mountcritlocal)
+//   4. the system log daemon               syslogd          (rc.d/syslogd)
+//
+// A step whose program is not in the image is skipped.
 //
 // It also answers the signals FreeBSD's init does, which shutdown(8) sends:
 // SIGINT reboots, SIGUSR1 halts and SIGUSR2 powers off, after asking every
@@ -57,6 +69,70 @@ fn shutdown(howto: u64) noreturn {
 comptime {
     // The C startup provides _start (the ELF entry point) and calls main().
     _ = @import("csu").crt0;
+}
+
+/// st_mode bits: any of the execute permissions.
+const S_IXANY: u16 = 0o111;
+
+/// True when `path` exists and is executable by someone.
+fn isExecutable(path: [*:0]const u8) bool {
+    var st: libc.syscall.Stat = undefined;
+    return libc.syscall.stat(path, &st) == 0 and (st.mode & S_IXANY) != 0;
+}
+
+/// True when `path` exists.
+fn exists(path: [*:0]const u8) bool {
+    var st: libc.syscall.Stat = undefined;
+    return libc.syscall.stat(path, &st) == 0;
+}
+
+/// Start `argv[0]` with arguments `argv` in a child. Returns the child's
+/// process id, or a negative value when fork(2) failed.
+fn spawn(argv: []const ?[*:0]const u8, envp: [*]?[*:0]const u8) i32 {
+    const pid: i32 = libc.syscall.fork();
+    if (pid == 0) {
+        _ = libc.syscall.execve(argv[0].?, @constCast(argv.ptr), envp);
+        libc.syscall.exit(127);
+    }
+    return pid;
+}
+
+/// Run `argv` in a child and wait for it to finish.
+fn run(argv: []const ?[*:0]const u8, envp: [*]?[*:0]const u8) void {
+    if (spawn(argv, envp) > 0) _ = libc.syscall.wait(null);
+}
+
+/// Bring the system up to multi-user operation (what FreeBSD's /etc/rc
+/// does; see the steps at the top of this file).
+fn multiUserStartup(envp: [*]?[*:0]const u8) void {
+    libc.syslog.msg("init", "multi-user startup");
+
+    // FreeBSD packages install their libraries in /usr/local/lib.
+    if (isExecutable("/sbin/ldconfig")) {
+        libc.stdio.puts("ELF ldconfig path: /lib /usr/lib /usr/local/lib");
+        run(&.{ "/sbin/ldconfig", "-elf", "/lib", "/usr/lib", "/usr/local/lib", null }, envp);
+    }
+
+    // The root image carries the account files; their databases are built
+    // here when the image did not include them.
+    if (!exists("/etc/spwd.db") and isExecutable("/usr/sbin/pwd_mkdb")) {
+        libc.stdio.puts("Building the password databases.");
+        run(&.{ "/usr/sbin/pwd_mkdb", "-p", "/etc/master.passwd", null }, envp);
+    }
+
+    if (exists("/etc/fstab") and isExecutable("/sbin/mount")) {
+        libc.stdio.printf("Mounting local filesystems:", .{});
+        run(&.{ "/sbin/mount", "-a", null }, envp);
+        libc.stdio.puts(".");
+    }
+
+    // syslogd runs for as long as the system does; init does not wait for it.
+    if (isExecutable("/usr/sbin/syslogd")) {
+        libc.stdio.puts("Starting syslogd.");
+        _ = spawn(&.{ "/usr/sbin/syslogd", null }, envp);
+    }
+
+    libc.syslog.msg("init", "multi-user startup complete");
 }
 
 /// Run `path` (a shell) in a child and wait for it.
@@ -123,16 +199,7 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
         singleUser(envp);
     }
 
-    // Run /etc/rc in a child so init survives it, then wait for it to finish.
-    libc.syslog.msg("init", "startup: running /etc/rc");
-    const pid: i32 = libc.syscall.fork();
-    if (pid == 0) {
-        var rc_argv: [3]?[*:0]const u8 = .{ "/bin/sh", "/etc/rc", null };
-        _ = libc.syscall.execve("/bin/sh", @ptrCast(&rc_argv), envp);
-        libc.syscall.exit(1);
-    }
-    _ = libc.syscall.wait(null);
-    libc.syslog.msg("init", "multi-user startup complete");
+    multiUserStartup(envp);
 
     // Respawn getty on the console, like a real init(8): when the shell it
     // started exits, a new getty (and so a new login) is started.
@@ -157,11 +224,13 @@ export fn main(argc: i32, argv: [*]?[*:0]const u8, envp: [*]?[*:0]const u8) call
             _ = libc.syscall.execve("/usr/libexec/getty", @ptrCast(&av), envp);
             libc.syscall.exit(1);
         }
-        // A signal ends the wait early (EINTR); keep waiting for this
-        // session unless a shutdown was asked for.
+        // Wait for this session's getty (and the login and shell it became)
+        // to exit. Other children end here too: every orphaned process is
+        // re-parented to init, and init only reaps them. A signal ends the
+        // wait early (EINTR); keep waiting unless a shutdown was asked for.
         while (true) {
             const r: i32 = libc.syscall.wait(null);
-            if (r > 0 or @as(*volatile ?u64, &shutdown_howto).* != null) break;
+            if (r == gpid or @as(*volatile ?u64, &shutdown_howto).* != null) break;
             if (r < 0 and r != -4) break; // not EINTR: no children left
         }
         if (@as(*volatile ?u64, &shutdown_howto).*) |howto| shutdown(howto);

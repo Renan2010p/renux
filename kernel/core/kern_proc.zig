@@ -43,11 +43,7 @@ pub fn init() void {
         p.kstack_top = 0;
         p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
-        var fd: usize = 0;
-        while (fd < proc.NFILE) : (fd += 1) {
-            p.fds[fd] = null;
-            p.fd_cloexec[fd] = false;
-        }
+        descrip.fdinit(p);
         p.cwd = null;
         p.cwd_len = 0;
         p.brk = 0;
@@ -67,6 +63,7 @@ pub fn init() void {
         p.cmask = 0o022;
         p.rlimits = kern_resource.defaults();
         p.name_len = 0;
+        p.exe_path_len = 0;
         p.sig_pending = 0;
         p.thr_woken = false;
         p.itimer_due = 0;
@@ -112,11 +109,7 @@ pub fn alloc() ?*proc.Proc {
         kpage.toKern(hhdm).ptr(u64).* = param.KSTACK_CANARY;
         p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
-        var fd: usize = 0;
-        while (fd < proc.NFILE) : (fd += 1) {
-            p.fds[fd] = null;
-            p.fd_cloexec[fd] = false;
-        }
+        descrip.fdinit(p);
         p.cwd = null;
         p.cwd_len = 0;
         p.brk = 0;
@@ -136,6 +129,7 @@ pub fn alloc() ?*proc.Proc {
         p.cmask = 0o022;
         p.rlimits = kern_resource.defaults();
         p.name_len = 0;
+        p.exe_path_len = 0;
         p.sig_pending = 0;
         p.thr_woken = false;
         p.itimer_due = 0;

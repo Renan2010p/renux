@@ -15,6 +15,8 @@ const arch: type = @import("../arch/arch.zig");
 const vm_page: type = @import("../vm/vm_page.zig");
 const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
+const kern_exec: type = @import("kern_exec.zig");
+const subr_param: type = @import("subr_param.zig");
 const kern_time: type = @import("kern_time.zig");
 const user: type = @import("../sys/user.zig");
 
@@ -45,6 +47,9 @@ const KERN_PROC: u64 = 14;
 const KERN_PROC_ALL: u64 = 0;
 const KERN_PROC_PID: u64 = 1;
 const KERN_PROC_PROC: u64 = 8;
+/// kern.proc.pathname.<pid>: the path of a process's executable (-1: the
+/// caller).
+const KERN_PROC_PATHNAME: u64 = 12;
 const KERN_SMP_CPUS: u64 = 119;
 const KERN_SMP_MAXCPUS: u64 = 120;
 
@@ -54,6 +59,7 @@ const KERN_OSREV: u64 = 3;
 const KERN_VERSION: u64 = 4;
 const KERN_MAXPROC: u64 = 6;
 const KERN_MAXFILES: u64 = 7;
+const KERN_MAXFILESPERPROC: u64 = 27;
 const KERN_ARGMAX: u64 = 8;
 const KERN_SECURELEVEL: u64 = 9;
 const KERN_HOSTNAME: u64 = 10;
@@ -135,6 +141,7 @@ const name_mib = [_]NameMib{
     .{ .name = "kern.securelevel", .mib = &.{ CTL_KERN, KERN_SECURELEVEL } },
     .{ .name = "kern.maxproc", .mib = &.{ CTL_KERN, KERN_MAXPROC } },
     .{ .name = "kern.maxfiles", .mib = &.{ CTL_KERN, KERN_MAXFILES } },
+    .{ .name = "kern.maxfilesperproc", .mib = &.{ CTL_KERN, KERN_MAXFILESPERPROC } },
     .{ .name = "kern.boottime", .mib = &.{ CTL_KERN, KERN_BOOTTIME } },
     .{ .name = "kern.usrstack", .mib = &.{ CTL_KERN, KERN_USRSTACK } },
     .{ .name = "hw.machine", .mib = &.{ CTL_HW, HW_MACHINE } },
@@ -339,6 +346,24 @@ fn procList(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
     return report(oldp, oldlenp, raw[0 .. n * @sizeOf(user.KinfoProc)]);
 }
 
+/// sysctl(KERN_PROC, KERN_PROC_PATHNAME, pid): the NUL-terminated path of
+/// the executable of process `pid` (-1: the caller), as execve(2) recorded
+/// it. ENOENT when there is no such process, or it has no recorded path.
+fn procPathname(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
+    const pid: i32 = if (mib.len >= 4) @bitCast(@as(u32, @truncate(mib[3]))) else -1;
+    const target: *proc.Proc = if (pid == -1) kern_proc.current else blk: {
+        for (&kern_proc.table) |*candidate| {
+            if (candidate.state != .unused and candidate.pid == pid) break :blk candidate;
+        }
+        return sys.signed(-errno.ENOENT);
+    };
+    if (target.exe_path_len == 0) return sys.signed(-errno.ENOENT);
+    var buf: [param.MAXPATHLEN + 1]u8 = undefined;
+    @memcpy(buf[0..target.exe_path_len], target.exe_path[0..target.exe_path_len]);
+    buf[target.exe_path_len] = 0;
+    return report(oldp, oldlenp, buf[0 .. target.exe_path_len + 1]);
+}
+
 /// vm.loadavg: struct loadavg { fixpt_t ldavg[3]; long fscale; }.
 fn loadavg(oldp: u64, oldlenp: u64) u64 {
     var b: [24]u8 = undefined;
@@ -363,9 +388,10 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             KERN_OSREV => return reportInt(oldp, oldlenp, @intCast(OSRELDATE)),
             KERN_OSRELDATE => return reportInt(oldp, oldlenp, @intCast(OSRELDATE)),
             KERN_HOSTNAME => return report(oldp, oldlenp, "renux\x00"),
-            KERN_ARGMAX => return reportInt(oldp, oldlenp, 262144),
+            KERN_ARGMAX => return reportInt(oldp, oldlenp, @intCast(kern_exec.ARG_MAX)),
             KERN_MAXPROC => return reportInt(oldp, oldlenp, 64),
-            KERN_MAXFILES => return reportInt(oldp, oldlenp, 64),
+            KERN_MAXFILES => return reportInt(oldp, oldlenp, @intCast(subr_param.maxfiles)),
+            KERN_MAXFILESPERPROC => return reportInt(oldp, oldlenp, @intCast(subr_param.maxfilesperproc)),
             // FreeBSD's securelevel is -1 when unset (the kernel runs without a
             // securelevel); init reads this to decide whether to raise it.
             KERN_SECURELEVEL => return reportInt(oldp, oldlenp, -1),
@@ -378,7 +404,10 @@ fn query(mib: []const u64, oldp: u64, oldlenp: u64) u64 {
             KERN_SMP_ACTIVE => return reportInt(oldp, oldlenp, 0),
             KERN_FSCALE => return reportInt(oldp, oldlenp, 1),
             KERN_BOOTTRACE_BOOTTRACE => return reportInt(oldp, oldlenp, 0),
-            KERN_PROC => return procList(mib, oldp, oldlenp),
+            KERN_PROC => {
+                if (mib.len >= 3 and mib[2] == KERN_PROC_PATHNAME) return procPathname(mib, oldp, oldlenp);
+                return procList(mib, oldp, oldlenp);
+            },
             KERN_SMP_CPUS, KERN_SMP_MAXCPUS => return reportInt(oldp, oldlenp, 1),
             else => return sys.signed(-errno.ENOENT),
         },

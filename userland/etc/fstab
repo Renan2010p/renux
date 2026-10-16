@@ -4,7 +4,7 @@
 # /etc/fstab -- static file system information (see fstab(5)).
 #
 # The root is the tmpfs unpacked from the boot image. /home lives on the
-# persistent virtio disk (kernel/disk.img, made by tools/mkdisk.sh); "failok"
+# persistent virtio disk (disk.img at the top of the tree, made by tools/mkdisk.zig); "failok"
 # lets the system come up without it.
 #
 # Device	Mountpoint	FStype	Options		Dump	Pass#

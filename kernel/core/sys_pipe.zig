@@ -151,7 +151,8 @@ const pipe_ops: file.FileOps = .{
 };
 
 /// pipe2(2): `pipe2(int fildes[2], int flags)`; fildes[0] reads, fildes[1]
-/// writes. O_CLOEXEC marks both close-on-exec; O_NONBLOCK is accepted.
+/// writes. O_CLOEXEC marks both close-on-exec; O_NONBLOCK makes both ends
+/// non-blocking (FNONBLOCK).
 pub fn sysPipe2(args: [sys.MAXARGS]u64) u64 {
     const O_NONBLOCK: u64 = 0x0004;
     const O_CLOEXEC: u64 = 0x00100000;
@@ -176,12 +177,13 @@ pub fn sysPipe2(args: [sys.MAXARGS]u64) u64 {
     };
     next_ino += 1;
 
-    const rf: *file.File = kern_descrip.newFile(file.DTYPE_PIPE, file.FREAD, p, &pipe_ops) orelse {
+    const nonblock: i32 = if ((args[1] & O_NONBLOCK) != 0) file.FNONBLOCK else 0;
+    const rf: *file.File = kern_descrip.newFile(file.DTYPE_PIPE, file.FREAD | nonblock, p, &pipe_ops) orelse {
         vm_page.physfree(vm_page.PAddr.fromInt(page));
         kmem.free(@ptrCast(p));
         return sys.signed(-errno.ENFILE);
     };
-    const wf: *file.File = kern_descrip.newFile(file.DTYPE_PIPE, file.FWRITE, p, &pipe_ops) orelse {
+    const wf: *file.File = kern_descrip.newFile(file.DTYPE_PIPE, file.FWRITE | nonblock, p, &pipe_ops) orelse {
         p.writers = 0; // closing rf then frees the pipe
         _ = kern_descrip.closeFile(rf);
         return sys.signed(-errno.ENFILE);

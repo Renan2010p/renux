@@ -53,9 +53,9 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
     prf.log(prf.LOG_DEBUG, "vm: %u free pages", .{vm_page.freeCount()});
 }
 
-/// Physical RAM reported by the boot protocol: free memory plus what the
-/// loader and the kernel occupy (FreeBSD's "real memory").
-fn totalMemory() u64 {
+/// Physical RAM reported by the boot protocol, in bytes: free memory plus
+/// what the loader and the kernel occupy (FreeBSD's "real memory", physmem).
+pub fn physmem() u64 {
     var total: u64 = 0;
     const entries: usize = arch.boot.memmapEntryCount() orelse 0;
     var i: usize = 0;
@@ -72,7 +72,7 @@ fn totalMemory() u64 {
 ///   real memory  = <bytes> (<MB> MB)
 ///   avail memory = <bytes> (<MB> MB)
 fn printMemory(_: ?*const anyopaque) callconv(.c) void {
-    const total: u64 = totalMemory();
+    const total: u64 = physmem();
     const avail: u64 = @as(u64, vm_page.freeCount()) * param.PAGE_SIZE;
 
     prf.print("real memory  = ");

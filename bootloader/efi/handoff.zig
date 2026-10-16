@@ -145,10 +145,10 @@ fn toDirectMap(ptr: anytype) u64 {
 // -- kernel command line -----------------------------------------------------
 
 /// Write the kernel arguments for the loader's settings into `buf` and return
-/// their length: FreeBSD's boot flags, the console list and the root device,
-/// separated by single spaces, e.g.
+/// their length: FreeBSD's boot flags, the console list, the root device and
+/// the system-call trace, separated by single spaces, e.g.
 ///
-///     -s -v console=vidconsole,comconsole vfs.root.mountfrom=ext2fs:/dev/vda2
+///     -s -v console=vidconsole,comconsole vfs.root.mountfrom=ext2fs:/dev/vda2 truss=sh
 ///
 /// An argument that does not fit is left out.
 fn writeCommandLine(buf: []u8) usize {
@@ -164,6 +164,9 @@ fn writeCommandLine(buf: []u8) usize {
     // An installed system names its ext2 root here; without it the kernel
     // mounts the root image it carries.
     if (env.get("vfs.root.mountfrom")) |root| line.add("vfs.root.mountfrom=", root);
+    // Trace the system calls of every process with this name (a debugging
+    // aid of the Renux kernel; kernel/core/kern_syscall.zig).
+    if (env.get("truss")) |command| line.add("truss=", command);
     return line.len;
 }
 
