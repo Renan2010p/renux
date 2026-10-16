@@ -4,6 +4,10 @@
 #
 # Fetch the FreeBSD base system Renux runs as its userland.
 #
+# Superseded by `zig build fetch` (tools/fetch.zig), which does the same with
+# only Zig (HTTPS, xz, tar and SHA-256 from the standard library). Kept for
+# reference.
+#
 # Renux speaks the FreeBSD/amd64 ABI, so it runs FreeBSD's own programs
 # (login, getty, sh, the base utilities) unchanged. This downloads the base
 # set of the FreeBSD release whose osreldate the kernel reports

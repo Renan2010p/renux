@@ -181,42 +181,82 @@ pub fn wr32(b: []u8, off: u64, v: u32) void {
 
 // -- block access ------------------------------------------------------------------
 
-/// A filesystem block held for reading or changing.
+/// A filesystem block held for reading. Hold it with `bget` and give it back
+/// with `brelse` (or `defer b.release()`).
 pub const Blk = struct {
-    data: []u8,
-    bp: ?*vfs_bio.Buf,
+    data: []const u8,
+    held: ?vfs_bio.Held(.read) = null,
+
+    /// Give the block back.
+    pub fn release(self: *Blk) void {
+        if (self.held) |*h| h.release();
+    }
 };
+
+/// A filesystem block held for reading and change. Hold it with `bgetMut` or
+/// `bnew`; give it back with `brelse` (unchanged) or `bdirty` (changed).
+pub const BlkMut = struct {
+    data: []u8,
+    held: ?vfs_bio.Held(.write) = null,
+
+    /// Give the block back unchanged.
+    pub fn release(self: *BlkMut) void {
+        if (self.held) |*h| h.release();
+    }
+
+    /// Mark the block changed; it reaches the disk later (delayed write).
+    pub fn markDirty(self: *BlkMut) void {
+        if (self.held) |*h| h.markDirty();
+    }
+};
+
+/// Release a block (of either kind) unchanged.
+pub fn brelse(b: anytype) void {
+    var c = b;
+    c.release();
+}
+
+/// Release a changed block; it reaches the disk later (delayed write). Only a
+/// block held for change (`bgetMut`/`bnew`) accepts this: marking a read-only
+/// `bget` block dirty is a compile error.
+pub fn bdirty(b: anytype) void {
+    var c = b;
+    c.markDirty();
+    c.release();
+}
 
 /// Read block `bno`. Null on an I/O error or a block past the end.
 pub fn bget(mnt: *Ext2Mount, bno: u64) ?Blk {
     const bs: u64 = mnt.block_size;
     if (mnt.disk) |dp| {
         if (bno >= mnt.blocks_count and mnt.blocks_count != 0) return null;
-        const bp: *vfs_bio.Buf = vfs_bio.bread(dp, bno * bs, @intCast(bs)) orelse return null;
-        return .{ .data = bp.b_data[0..@intCast(bs)], .bp = bp };
+        const h = vfs_bio.bread(dp, bno * bs, @intCast(bs)) orelse return null;
+        return .{ .data = h.data(), .held = h };
     }
     const off: u64 = bno * bs;
     if (off + bs > mnt.image.len) return null;
-    return .{ .data = mnt.image[@intCast(off)..@intCast(off + bs)], .bp = null };
+    return .{ .data = mnt.image[@intCast(off)..@intCast(off + bs)], .held = null };
+}
+
+/// Read block `bno` for change.
+pub fn bgetMut(mnt: *Ext2Mount, bno: u64) ?BlkMut {
+    const bs: u64 = mnt.block_size;
+    if (mnt.disk) |dp| {
+        if (bno >= mnt.blocks_count and mnt.blocks_count != 0) return null;
+        const h = vfs_bio.breadMut(dp, bno * bs, @intCast(bs)) orelse return null;
+        return .{ .data = h.data(), .held = h };
+    }
+    const off: u64 = bno * bs;
+    if (off + bs > mnt.image.len) return null;
+    return .{ .data = mnt.image[@intCast(off)..@intCast(off + bs)], .held = null };
 }
 
 /// Block `bno` about to be overwritten whole: not read, zero-filled.
-fn bnew(mnt: *Ext2Mount, bno: u64) ?Blk {
+fn bnew(mnt: *Ext2Mount, bno: u64) ?BlkMut {
     const dp: *geom_disk.Disk = mnt.disk orelse return null;
     const bs: u64 = mnt.block_size;
-    const bp: *vfs_bio.Buf = vfs_bio.getblk(dp, bno * bs, @intCast(bs)) orelse return null;
-    @memset(bp.b_data[0..@intCast(bs)], 0);
-    return .{ .data = bp.b_data[0..@intCast(bs)], .bp = bp };
-}
-
-/// Release a block unchanged.
-pub fn brelse(b: Blk) void {
-    if (b.bp) |bp| vfs_bio.brelse(bp);
-}
-
-/// Release a changed block; it reaches the disk later (delayed write).
-fn bdirty(b: Blk) void {
-    if (b.bp) |bp| vfs_bio.bdwrite(bp);
+    const h = vfs_bio.getblk(dp, bno * bs, @intCast(bs)) orelse return null;
+    return .{ .data = h.data(), .held = h };
 }
 
 // -- mount -------------------------------------------------------------------------
@@ -274,9 +314,9 @@ pub fn mountDisk(mnt: *Ext2Mount, dp: *geom_disk.Disk, readonly: bool) bool {
     mnt.disk = dp;
     // The superblock is at byte 1024 whatever the block size: read it
     // through a 1 KiB view of the disk.
-    const bp: *vfs_bio.Buf = vfs_bio.bread(dp, SUPER_OFFSET, SUPER_SIZE) orelse return false;
-    @memcpy(&mnt.sb, bp.b_data[0..SUPER_SIZE]);
-    vfs_bio.brelse(bp);
+    var bp = vfs_bio.bread(dp, SUPER_OFFSET, SUPER_SIZE) orelse return false;
+    @memcpy(&mnt.sb, bp.data()[0..SUPER_SIZE]);
+    bp.release();
     // Drop that 1 KiB buffer: the filesystem reads the same bytes as part
     // of a whole block, and two buffers must not alias one sector.
     vfs_bio.binval(dp);
@@ -290,7 +330,7 @@ pub fn writeSuper(mnt: *Ext2Mount) void {
     if (mnt.readonly or mnt.disk == null) return;
     const bno: u64 = SUPER_OFFSET / mnt.block_size;
     const off: u64 = SUPER_OFFSET % mnt.block_size;
-    const b: Blk = bget(mnt, bno) orelse return;
+    const b: BlkMut = bgetMut(mnt, bno) orelse return;
     @memcpy(b.data[@intCast(off)..@intCast(off + SUPER_SIZE)], &mnt.sb);
     bdirty(b);
     mnt.sb_dirty = false;
@@ -345,7 +385,7 @@ fn gdRead32(mnt: *Ext2Mount, g: u64, field: u64) u32 {
 /// Add `delta` to the 16-bit counter `field` of group `g`'s descriptor.
 fn gdAdjust16(mnt: *Ext2Mount, g: u64, field: u64, delta: i32) void {
     const loc = gdLocation(mnt, g);
-    const b: Blk = bget(mnt, loc.bno) orelse return;
+    const b: BlkMut = bgetMut(mnt, loc.bno) orelse return;
     const v: i32 = @as(i32, rd16(b.data, loc.off + field)) + delta;
     wr16(b.data, loc.off + field, @intCast(@max(v, 0)));
     bdirty(b);
@@ -409,7 +449,7 @@ pub fn readInode(mnt: *Ext2Mount, ino: u64) ?Inode {
 pub fn writeInode(mnt: *Ext2Mount, ino: u64, in: *const Inode) Error!void {
     if (mnt.readonly) return error.ReadOnly;
     const loc = inodeLocation(mnt, ino) orelse return error.Io;
-    const b: Blk = bget(mnt, loc.bno) orelse return error.Io;
+    const b: BlkMut = bgetMut(mnt, loc.bno) orelse return error.Io;
     const d: []u8 = b.data[@intCast(loc.off)..];
     wr16(d, 0, in.mode);
     wr16(d, 2, @truncate(in.uid));
@@ -437,7 +477,7 @@ pub fn writeInode(mnt: *Ext2Mount, ino: u64, in: *const Inode) Error!void {
 /// Clear inode `ino` on disk (all bytes), before it is first used.
 fn clearInode(mnt: *Ext2Mount, ino: u64) Error!void {
     const loc = inodeLocation(mnt, ino) orelse return error.Io;
-    const b: Blk = bget(mnt, loc.bno) orelse return error.Io;
+    const b: BlkMut = bgetMut(mnt, loc.bno) orelse return error.Io;
     @memset(b.data[@intCast(loc.off)..@intCast(loc.off + mnt.inode_size)], 0);
     bdirty(b);
 }
@@ -488,7 +528,7 @@ fn ftypeOf(mode: u16) u8 {
 
 /// Find and set a clear bit among the first `nbits` of bitmap block `bno`.
 fn bitmapTake(mnt: *Ext2Mount, bno: u64, nbits: u64, first: u64) ?u64 {
-    const b: Blk = bget(mnt, bno) orelse return null;
+    const b: BlkMut = bgetMut(mnt, bno) orelse return null;
     var i: u64 = first;
     while (i < nbits) : (i += 1) {
         const byte: usize = @intCast(i / 8);
@@ -509,7 +549,7 @@ fn bitmapTake(mnt: *Ext2Mount, bno: u64, nbits: u64, first: u64) ?u64 {
 
 /// Clear bit `i` of bitmap block `bno`.
 fn bitmapRelease(mnt: *Ext2Mount, bno: u64, i: u64) void {
-    const b: Blk = bget(mnt, bno) orelse return;
+    const b: BlkMut = bgetMut(mnt, bno) orelse return;
     b.data[@intCast(i / 8)] &= ~(@as(u8, 1) << @intCast(i % 8));
     bdirty(b);
 }
@@ -605,7 +645,7 @@ fn freeInode(mnt: *Ext2Mount, ino: u64, dir: bool) void {
 /// Allocate a zero-filled block for inode `ino` and count it in `in`.
 fn allocZeroed(mnt: *Ext2Mount, ino: u64, in: *Inode) Error!u32 {
     const bno: u64 = try allocBlock(mnt, (ino - 1) / mnt.inodes_per_group);
-    const b: Blk = bnew(mnt, bno) orelse return error.Io;
+    const b: BlkMut = bnew(mnt, bno) orelse return error.Io;
     bdirty(b);
     in.blocks += mnt.block_size / 512;
     return @intCast(bno);
@@ -678,7 +718,7 @@ fn bmapAlloc(mnt: *Ext2Mount, ino: u64, in: *Inode, lbn: u64, fresh: *bool) Erro
         span /= per;
         const slot: u64 = (idx / span) * 4;
         idx %= span;
-        const b: Blk = bget(mnt, blk) orelse return error.Io;
+        const b: BlkMut = bgetMut(mnt, blk) orelse return error.Io;
         var e: u32 = rd32(b.data, slot);
         if (e == 0) {
             e = allocZeroed(mnt, ino, in) catch |err| {
@@ -707,7 +747,7 @@ fn freeTree(mnt: *Ext2Mount, in: *Inode, ptr: *u32, level: u32, base: u64, keep:
     while (k < level) : (k += 1) span *= per;
     if (base + span <= keep) return; // entirely kept
     const child_span: u64 = span / per;
-    if (bget(mnt, ptr.*)) |b| {
+    if (bgetMut(mnt, ptr.*)) |b| {
         var changed: bool = false;
         var i: u64 = 0;
         while (i < per) : (i += 1) {
@@ -778,7 +818,7 @@ pub fn truncate(mnt: *Ext2Mount, ino: u64, in: *Inode, length: u64, now: i64) Er
         truncateBlocks(mnt, in, keep);
         if (length % bs != 0) {
             if (bmap(mnt, in, length / bs)) |bno| {
-                if (bget(mnt, bno)) |b| {
+                if (bgetMut(mnt, bno)) |b| {
                     @memset(b.data[@intCast(length % bs)..], 0);
                     bdirty(b);
                 }
@@ -836,7 +876,7 @@ pub fn writeData(mnt: *Ext2Mount, ino: u64, in: *Inode, offset: u64, buf: []cons
         };
         // A block overwritten whole need not be read first (a freshly
         // allocated one is already zeroed in the cache).
-        const b: Blk = (if (!fresh and boff == 0 and n == bs) bnew(mnt, bno) else bget(mnt, bno)) orelse {
+        const b: BlkMut = (if (!fresh and boff == 0 and n == bs) bnew(mnt, bno) else bgetMut(mnt, bno)) orelse {
             failure = error.Io;
             break;
         };
@@ -981,7 +1021,7 @@ pub fn dirEnter(mnt: *Ext2Mount, dino: u64, dir: *Inode, name: []const u8, ino: 
     const nblocks: u64 = (dir.size + bs - 1) / bs;
     while (lbn < nblocks) : (lbn += 1) {
         const bno: u64 = bmap(mnt, dir, lbn) orelse continue;
-        const b: Blk = bget(mnt, bno) orelse return error.Io;
+        const b: BlkMut = bgetMut(mnt, bno) orelse return error.Io;
         var e: u64 = 0;
         while (e < bs) {
             const eino: u32 = rd32(b.data, e);
@@ -1008,7 +1048,7 @@ pub fn dirEnter(mnt: *Ext2Mount, dino: u64, dir: *Inode, name: []const u8, ino: 
     // No room: a new block holding just this entry.
     var fresh: bool = false;
     const bno: u64 = try bmapAlloc(mnt, dino, dir, nblocks, &fresh);
-    const b: Blk = bget(mnt, bno) orelse return error.Io;
+    const b: BlkMut = bgetMut(mnt, bno) orelse return error.Io;
     @memset(b.data, 0);
     putEntry(mnt, b.data, 0, ino, bs, name, ftype);
     bdirty(b);
@@ -1027,7 +1067,7 @@ pub fn dirRemove(mnt: *Ext2Mount, dino: u64, dir: *Inode, name: []const u8, now:
     var lbn: u64 = 0;
     while (lbn < nblocks) : (lbn += 1) {
         const bno: u64 = bmap(mnt, dir, lbn) orelse continue;
-        const b: Blk = bget(mnt, bno) orelse return error.Io;
+        const b: BlkMut = bgetMut(mnt, bno) orelse return error.Io;
         var e: u64 = 0;
         var prev: ?u64 = null;
         while (e < bs) {
@@ -1065,7 +1105,7 @@ pub fn dirRewrite(mnt: *Ext2Mount, dir: *const Inode, name: []const u8, ino: u64
     var lbn: u64 = 0;
     while (lbn < nblocks) : (lbn += 1) {
         const bno: u64 = bmap(mnt, dir, lbn) orelse continue;
-        const b: Blk = bget(mnt, bno) orelse return error.Io;
+        const b: BlkMut = bgetMut(mnt, bno) orelse return error.Io;
         var e: u64 = 0;
         while (e < bs) {
             const rec_len: u64 = rd16(b.data, e + 4);
@@ -1100,7 +1140,7 @@ pub fn dirInit(mnt: *Ext2Mount, ino: u64, in: *Inode, parent: u64, now: i64) Err
     const bs: u64 = mnt.block_size;
     var fresh: bool = false;
     const bno: u64 = try bmapAlloc(mnt, ino, in, 0, &fresh);
-    const b: Blk = bget(mnt, bno) orelse return error.Io;
+    const b: BlkMut = bgetMut(mnt, bno) orelse return error.Io;
     @memset(b.data, 0);
     putEntry(mnt, b.data, 0, ino, 12, ".", FT_DIR);
     putEntry(mnt, b.data, 12, parent, bs - 12, "..", FT_DIR);

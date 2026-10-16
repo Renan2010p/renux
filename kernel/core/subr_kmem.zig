@@ -74,7 +74,7 @@ fn popFree(idx: usize) ?usize {
     }
 
     const size: usize = CLASSES[idx];
-    const pa: u64 = vm_page.physalloc() orelse return null;
+    const pa: u64 = (vm_page.physalloc() orelse return null).int();
     const base: usize = @intCast(pa + hhdm);
     const count: usize = param.PAGE_SIZE / size;
 

@@ -4,7 +4,11 @@
 #
 # Build a hybrid BIOS/UEFI bootable ISO for Renux/amd64.
 #
-# Usage: mkiso.sh <kernel> <loader.efi> <out.iso>     (run by `zig build iso`)
+# Legacy: this is the old xorriso + mtools + Limine path. `zig build iso` no
+# longer uses it -- tools/mkiso.zig writes a UEFI-only ISO with no external
+# tools. Kept for reference and as the BIOS/hybrid fallback.
+#
+# Usage: mkiso.sh <kernel> <loader.efi> <out.iso>
 #
 # Following FreeBSD's boot model (Handbook, "The FreeBSD Booting Process"),
 # the loader loads only the kernel; the root filesystem is embedded in the

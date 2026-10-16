@@ -143,16 +143,16 @@ pub fn attach(dev: *vtpci.Vtpci) bool {
         subr_bus.device_printf(&self, "cannot allocate virtqueue\n", .{});
         return false;
     }
-    sc.hdr_pa = vm_page.physalloc() orelse return false;
+    sc.hdr_pa = (vm_page.physalloc() orelse return false).int();
     sc.hdr = @ptrFromInt(sc.hdr_pa + hhdm);
     sc.status = @ptrFromInt(sc.hdr_pa + hhdm + @sizeOf(OutHdr));
-    sc.buf_pa = vm_page.physallocContig(MAXPHYS / param.PAGE_SIZE) orelse return false;
+    sc.buf_pa = (vm_page.physallocContig(MAXPHYS / param.PAGE_SIZE) orelse return false).int();
     sc.buf = @ptrFromInt(sc.buf_pa + hhdm);
 
     dev.setStatus(virtio.VIRTIO_CONFIG_STATUS_DRIVER_OK);
 
     sc.disk = .{
-        .d_name = "vtbd",
+        .d_name = "vd",
         .d_unit = unit,
         .d_sectorsize = sectorsize,
         .d_mediasize = capacity * VIRTIO_BLK_SECTOR,

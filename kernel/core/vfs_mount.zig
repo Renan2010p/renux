@@ -60,6 +60,15 @@ pub fn find(name: []const u8) ?*mount.Vfs {
     return null;
 }
 
+/// Mount the filesystem named `name` as the system root (used by the boot to
+/// mount a disk root before falling back to the boot image).
+pub fn mountRootFs(name: []const u8, data: ?*anyopaque) ?*mount.Mount {
+    var err: i32 = 0;
+    const mp: *mount.Mount = mountFsErr(name, data, mount.MNT_LOCAL, &err) orelse return null;
+    setRoot(mp);
+    return mp;
+}
+
 fn setName(dst: *[mount.MNAMELEN]u8, src: []const u8) void {
     @memset(dst, 0);
     const n: usize = @min(src.len, dst.len - 1);
@@ -285,6 +294,17 @@ pub fn unmountAll() void {
         }
         if (!any) break;
     }
+}
+
+/// Unmount the root filesystem, on the way out. The VFS never unmounts the
+/// root while the system runs; doing it at shutdown is what marks a disk root
+/// clean (ext2fs writes the superblock's VALID_FS state) instead of leaving it
+/// "not properly unmounted". FreeBSD remounts its root read-only for the same
+/// reason. Only called with the other filesystems already gone.
+pub fn unmountRoot() void {
+    const mp: *mount.Mount = rootmount orelse return;
+    _ = mp.mnt_op.unmount(mp, mount.MNT_FORCE);
+    mp.mnt_used = false;
 }
 
 /// Fill `sbp` for `mp`.

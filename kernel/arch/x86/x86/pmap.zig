@@ -83,7 +83,7 @@ fn arenaOpen(pmap: u64) void {
 fn recordPage(pmap: u64, pa: u64) void {
     const a: *Arena = arenaOf(pmap) orelse return;
     if (a.head == null or a.head.?.used == BLOCK_PAGES) {
-        const blk_pa: u64 = vm_page.physalloc() orelse return;
+        const blk_pa: u64 = (vm_page.physalloc() orelse return).int();
         const b: *Block = @ptrFromInt((blk_pa & pte.FRAME_MASK) + hhdm);
         b.next = a.head;
         b.used = 0;
@@ -103,10 +103,10 @@ fn arenaClose(pmap: u64) void {
     while (b) |blk| {
         var k: usize = 0;
         while (k < blk.used) : (k += 1) {
-            vm_page.physfree(blk.pages[k]);
+            vm_page.physfree(vm_page.PAddr.fromInt(blk.pages[k]));
         }
         const nx: ?*Block = blk.next;
-        vm_page.physfree(@intFromPtr(blk) - hhdm);
+        vm_page.physfree(vm_page.PAddr.fromInt(@intFromPtr(blk) - hhdm));
         b = nx;
     }
     a.pmap = 0;
@@ -119,13 +119,13 @@ fn arenaClose(pmap: u64) void {
 /// Like allocPage(), but the page is not zeroed: for a copy that overwrites
 /// it whole.
 fn allocPageUninit(pmap: Pmap) ?u64 {
-    const pa: u64 = vm_page.physallocUninit() orelse return null;
+    const pa: u64 = (vm_page.physallocUninit() orelse return null).int();
     recordPage(pmap, pa);
     return pa;
 }
 
 pub fn allocPage(pmap: Pmap) ?u64 {
-    const pa: u64 = vm_page.physalloc() orelse return null;
+    const pa: u64 = (vm_page.physalloc() orelse return null).int();
     recordPage(pmap, pa);
     return pa;
 }
@@ -173,7 +173,7 @@ fn table(pa: u64) [*]u64 {
 
 /// Create a page map with the kernel half shared and an empty user half.
 pub fn create() ?Pmap {
-    const pa: u64 = vm_page.physalloc() orelse return null; // zeroed
+    const pa: u64 = (vm_page.physalloc() orelse return null).int(); // zeroed
     const dst: [*]u64 = table(pa);
     const src: [*]u64 = table(kernel_pmap);
     var i: usize = KERNEL_PML4_START;
@@ -287,7 +287,8 @@ pub fn destroy(p: Pmap, hhdm_off: u64) void {
 
 /// Map a kernel page in the kernel page map.
 pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
-    map(kernel_pmap, va, pa, prot);}
+    map(kernel_pmap, va, pa, prot);
+}
 
 /// Map a user page in page map `p`.
 pub fn enterUser(p: Pmap, va: u64, pa: u64, prot: Prot) void {

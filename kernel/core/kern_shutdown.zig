@@ -53,8 +53,10 @@ pub fn kern_reboot(howto: u64) noreturn {
         prf.printf("Syncing disks, buffers remaining... %u ", .{vfs_bio.dirtyCount()});
         vfs_mount.syncAll();
         prf.printf("%u done\n", .{vfs_bio.dirtyCount()});
-        // Unmounting marks the disks clean (and syncs them once more).
+        // Unmounting marks the disks clean (and syncs them once more). The
+        // root goes last, so a disk root is clean too.
         vfs_mount.unmountAll();
+        vfs_mount.unmountRoot();
         if (vfs_bio.dirtyCount() == 0) {
             prf.printLine("All buffers synced.");
         } else {

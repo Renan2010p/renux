@@ -22,7 +22,7 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return;
 
     arch.pmap.bootstrap(hhdm);
-    vm_page.init(hhdm);
+    vm_page.init(vm_page.Hhdm.fromInt(hhdm));
     kmem.init(hhdm);
 
     const entries: usize = arch.boot.memmapEntryCount() orelse 0;
@@ -30,7 +30,7 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
     while (i < entries) : (i += 1) {
         const entry: *arch.boot.MemmapEntry = arch.boot.memmapEntry(i) orelse continue;
         if (entry.type == arch.boot.MemmapEntry.USABLE) {
-            vm_page.physload(entry.base, entry.base + entry.length);
+            vm_page.physload(vm_page.PAddr.fromInt(entry.base), vm_page.PAddr.fromInt(entry.base + entry.length));
         }
     }
 
@@ -47,7 +47,7 @@ fn uvmInit(_: ?*const anyopaque) callconv(.c) void {
             continue;
         }
         const pa: u64 = p - hhdm;
-        vm_page.physunload(pa, pa + mod.size);
+        vm_page.physunload(vm_page.PAddr.fromInt(pa), vm_page.PAddr.fromInt(pa + mod.size));
     }
 
     prf.log(prf.LOG_DEBUG, "vm: %u free pages", .{vm_page.freeCount()});

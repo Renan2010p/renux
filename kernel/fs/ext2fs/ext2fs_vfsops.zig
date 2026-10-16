@@ -47,10 +47,10 @@ fn ext2Mount(mp: *mount.Mount, data: ?*anyopaque) i32 {
         kmem.freeAs(ext2fs.Ext2Mount, mnt);
         return errno.EINVAL;
     }
-    const pa: u64 = vm_page.physallocContig(CACHE_PAGES) orelse {
+    const pa: u64 = (vm_page.physallocContig(CACHE_PAGES) orelse {
         kmem.freeAs(ext2fs.Ext2Mount, mnt);
         return errno.ENOMEM;
-    };
+    }).int();
     mnt.cache = @ptrFromInt(pa + hhdm);
     mnt.ncache = 0;
     if (mnt.readonly) mp.mnt_flag |= mount.MNT_RDONLY;

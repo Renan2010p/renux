@@ -64,6 +64,16 @@ pub const Rlimit: type = extern struct {
     max: i64,
 };
 
+comptime {
+    // struct rlimit crosses the FreeBSD ABI: its layout is fixed, and a
+    // mistake here would show up as garbage in getrlimit(2)/setrlimit(2).
+    const checks: type = @import("checks.zig");
+    checks.assertSize(Rlimit, 16);
+    checks.assertOffsetOf(Rlimit, "cur", 0);
+    checks.assertOffsetOf(Rlimit, "max", 8);
+    checks.assertNoPadding(Rlimit);
+}
+
 /// Size of a login class name, NUL included.
 pub const MAXLOGCLASS: usize = 33;
 

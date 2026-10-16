@@ -10,6 +10,18 @@
 // bdwrite() marks it dirty for a later write. Unused buffers are recycled
 // least recently used first, writing them out if dirty.
 //
+// A caller never sees a *Buf. It holds a `Held(access)` handle instead, which
+// owns the reference for as long as it lives and gives it back with
+// release(). The handle is the buffer's borrow: the compiler keeps a read
+// handle from marking the buffer dirty (only Held(.write) offers markDirty),
+// and the runtime catches a buffer used or released twice. Get the handle
+// with bread (contents), breadMut (contents, for change) or getblk (to be
+// overwritten whole), and always give it back:
+//
+//     var b = vfs_bio.bread(dp, off, size) orelse return error.Io;
+//     defer b.release();
+//     ... b.data() ...
+//
 // Delayed writes reach the disk when a filesystem syncs (sync(2), fsync(2),
 // unmount, reboot) and from the syncer, which the scheduler runs when the
 // CPU is idle: a dirty buffer is written once it has waited SYNCDELAY ticks,
@@ -31,12 +43,15 @@ pub const MAXBSIZE: u32 = @intCast(param.PAGE_SIZE);
 /// Ticks a dirty buffer may wait before the syncer writes it (3 s at 100 Hz).
 const SYNCDELAY: u64 = 300;
 
-pub const Buf: type = struct {
+/// A buffer of the pool. Private: callers hold a `Held(access)` handle, never
+/// a raw pointer.
+const Buf: type = struct {
     b_disk: ?*geom_disk.Disk = null,
     /// Byte offset of the block on the disk, and its size.
     b_offset: u64 = 0,
     b_bcount: u32 = 0,
-    b_data: [*]u8 = undefined,
+    /// The page the buffer lives in, reached through the direct map.
+    b_data: vm_page.KAddr = vm_page.KAddr.fromInt(0),
     /// The contents match the disk (or are newer).
     b_valid: bool = false,
     /// The contents are newer than the disk.
@@ -48,6 +63,92 @@ pub const Buf: type = struct {
     /// Last use, for LRU recycling.
     b_lru: u64 = 0,
 };
+
+/// What a handle lets its holder do with the buffer's bytes. `read` gives a
+/// `[]const u8` and no markDirty(); `write` gives a `[]u8` and both. The
+/// distinction is checked at compile time.
+pub const Access: type = enum { read, write };
+
+/// The byte slice a handle of the given access exposes.
+pub fn Data(comptime access: Access) type {
+    return switch (access) {
+        .read => []const u8,
+        .write => []u8,
+    };
+}
+
+/// A held buffer: the caller's borrow of a `Buf`, and the only way to reach
+/// its bytes. Release it when done (usually `defer h.release()`); a handle is
+/// released exactly once.
+pub fn Held(comptime access: Access) type {
+    return struct {
+        buf: *Buf,
+        /// Set once the buffer has been given back. A handle used after that
+        /// is a bug, and is reported rather than corrupting a recycled buffer.
+        released: bool = false,
+
+        const Self = @This();
+
+        /// Byte offset of the block on the disk.
+        pub inline fn offset(self: Self) u64 {
+            return self.buf.b_offset;
+        }
+
+        /// Size of the block in bytes.
+        pub inline fn size(self: Self) u32 {
+            return self.buf.b_bcount;
+        }
+
+        /// The buffer's bytes. A read handle yields a `[]const u8`; a write
+        /// handle a `[]u8`.
+        pub fn data(self: Self) Data(access) {
+            if (self.released) {
+                prf.log(prf.LOG_ERR, "vfs_bio: use of a released buffer at offset %llu", .{self.buf.b_offset});
+            }
+            return self.buf.b_data.manyPtr(u8)[0..self.buf.b_bcount];
+        }
+
+        /// Mark the buffer dirty; the syncer writes it out later. Only a
+        /// write handle may do this, so changing a buffer borrowed for
+        /// reading is a compile error.
+        pub fn markDirty(self: *Self) void {
+            if (access == .read) @compileError("markDirty on a buffer held for reading (use breadMut/getblk)");
+            if (!self.buf.b_dirty) {
+                self.buf.b_dirty = true;
+                self.buf.b_dirtied = now();
+                ndirty += 1;
+            }
+        }
+
+        /// Write the buffer now and give it back. Returns 0 or an errno.
+        pub fn write(self: *Self) i32 {
+            if (access == .read) @compileError("write on a buffer held for reading (use breadMut/getblk)");
+            if (!self.buf.b_dirty) {
+                self.buf.b_dirty = true;
+                ndirty += 1;
+            }
+            const e: i32 = writeOut(self.buf);
+            self.release();
+            return e;
+        }
+
+        /// Give the buffer back. Safe to call once; a second call, or a hold
+        /// that was never counted, is reported and ignored rather than
+        /// corrupting the reference count.
+        pub fn release(self: *Self) void {
+            if (self.released) {
+                prf.log(prf.LOG_ERR, "vfs_bio: buffer released twice at offset %llu", .{self.buf.b_offset});
+                return;
+            }
+            self.released = true;
+            if (self.buf.b_refcnt == 0) {
+                prf.log(prf.LOG_ERR, "vfs_bio: buffer released with no hold at offset %llu", .{self.buf.b_offset});
+                return;
+            }
+            self.buf.b_refcnt -= 1;
+        }
+    };
+}
 
 var bufs: [NBUF]Buf = undefined;
 var nbuf: usize = 0;
@@ -69,7 +170,7 @@ fn find(dp: *geom_disk.Disk, offset: u64) ?*Buf {
 /// Write `bp` to its disk now.
 fn writeOut(bp: *Buf) i32 {
     const dp: *geom_disk.Disk = bp.b_disk orelse return errno.EIO;
-    const e: i32 = dp.d_strategy(dp, true, bp.b_offset, bp.b_data[0..bp.b_bcount]);
+    const e: i32 = dp.d_strategy(dp, true, bp.b_offset, bp.b_data.manyPtr(u8)[0..bp.b_bcount]);
     if (e == 0 and bp.b_dirty) {
         bp.b_dirty = false;
         ndirty -= 1;
@@ -82,8 +183,8 @@ fn writeOut(bp: *Buf) i32 {
 fn getNewBuf() ?*Buf {
     if (nbuf < NBUF) {
         const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
-        const pa: u64 = vm_page.physalloc() orelse return null;
-        bufs[nbuf] = .{ .b_data = @ptrFromInt(pa + hhdm) };
+        const pa: vm_page.PAddr = vm_page.physalloc() orelse return null;
+        bufs[nbuf] = .{ .b_data = pa.toKern(hhdm) };
         nbuf += 1;
         return &bufs[nbuf - 1];
     }
@@ -100,10 +201,10 @@ fn getNewBuf() ?*Buf {
     return bp;
 }
 
-/// The buffer for `size` bytes at `offset` on `dp`, held, without reading
-/// it (for a block that will be overwritten whole). Its data is whatever the
-/// cache had, or zeroes for a new buffer.
-pub fn getblk(dp: *geom_disk.Disk, offset: u64, size: u32) ?*Buf {
+/// Take a held buffer for `size` bytes at `offset` on `dp`. `read` reads the
+/// block from the disk; otherwise the caller will overwrite it whole and the
+/// contents are zeroed instead.
+fn hold(dp: *geom_disk.Disk, offset: u64, size: u32, read: bool) ?*Buf {
     if (size > MAXBSIZE) return null;
     lru_clock += 1;
     if (find(dp, offset)) |bp| {
@@ -118,53 +219,39 @@ pub fn getblk(dp: *geom_disk.Disk, offset: u64, size: u32) ?*Buf {
     bp.b_refcnt = 1;
     bp.b_lru = lru_clock;
     bp.b_dirty = false;
-    @memset(bp.b_data[0..size], 0);
+    if (read) {
+        if (dp.d_strategy(dp, false, offset, bp.b_data.manyPtr(u8)[0..size]) != 0) {
+            bp.b_valid = false;
+            bp.b_refcnt = 0;
+            return null;
+        }
+    } else {
+        @memset(bp.b_data.manyPtr(u8)[0..size], 0);
+    }
     bp.b_valid = true;
     return bp;
 }
 
-/// The buffer for `size` bytes at `offset` on `dp`, held, with the disk's
-/// contents. Returns null on an I/O error.
-pub fn bread(dp: *geom_disk.Disk, offset: u64, size: u32) ?*Buf {
-    if (find(dp, offset)) |bp| {
-        lru_clock += 1;
-        bp.b_refcnt += 1;
-        bp.b_lru = lru_clock;
-        return bp;
-    }
-    const bp: *Buf = getblk(dp, offset, size) orelse return null;
-    if (dp.d_strategy(dp, false, offset, bp.b_data[0..size]) != 0) {
-        bp.b_valid = false;
-        bp.b_refcnt = 0;
-        return null;
-    }
-    return bp;
+/// Read `size` bytes at `offset` on `dp` and hold them for reading. Returns
+/// null on an I/O error.
+pub fn bread(dp: *geom_disk.Disk, offset: u64, size: u32) ?Held(.read) {
+    const bp: *Buf = hold(dp, offset, size, true) orelse return null;
+    return .{ .buf = bp };
 }
 
-/// Give back a held buffer, unchanged.
-pub fn brelse(bp: *Buf) void {
-    if (bp.b_refcnt > 0) bp.b_refcnt -= 1;
+/// Read `size` bytes at `offset` and hold them for change as well: the caller
+/// may modify the block and mark it dirty.
+pub fn breadMut(dp: *geom_disk.Disk, offset: u64, size: u32) ?Held(.write) {
+    const bp: *Buf = hold(dp, offset, size, true) orelse return null;
+    return .{ .buf = bp };
 }
 
-/// Mark a held buffer dirty and give it back; it is written later.
-pub fn bdwrite(bp: *Buf) void {
-    if (!bp.b_dirty) {
-        bp.b_dirty = true;
-        bp.b_dirtied = now();
-        ndirty += 1;
-    }
-    brelse(bp);
-}
-
-/// Write a held buffer now and give it back. Returns 0 or an errno.
-pub fn bwrite(bp: *Buf) i32 {
-    if (!bp.b_dirty) {
-        bp.b_dirty = true;
-        ndirty += 1;
-    }
-    const e: i32 = writeOut(bp);
-    brelse(bp);
-    return e;
+/// The buffer for `size` bytes at `offset` on `dp`, held for change, without
+/// reading it (for a block that will be overwritten whole). Its data is
+/// zeroes for a new buffer.
+pub fn getblk(dp: *geom_disk.Disk, offset: u64, size: u32) ?Held(.write) {
+    const bp: *Buf = hold(dp, offset, size, false) orelse return null;
+    return .{ .buf = bp };
 }
 
 /// Write every dirty buffer of `dp` (all disks when null) and flush the

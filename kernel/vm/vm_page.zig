@@ -13,10 +13,19 @@
 // hold in-use boot structures that the memory map calls usable).
 
 const param: type = @import("../sys/param.zig");
+const addr: type = @import("../sys/addr.zig");
 const phys: type = @import("phys_bitmap.zig");
 const prf: type = @import("../core/subr_prf.zig");
 
-var hhdm: u64 = 0;
+/// The address types the allocator speaks: physical addresses out of the pool,
+/// and the kernel virtual addresses the direct map gives them.
+pub const PAddr = addr.PAddr;
+pub const KAddr = addr.KAddr;
+pub const Hhdm = addr.Hhdm;
+
+/// The direct-map offset, held as an Hhdm so a stray u64 cannot take its
+/// place.
+var hhdm: addr.Hhdm = addr.Hhdm.fromInt(0);
 
 /// The bitmaps cover up to 4 GiB (1 Mi bits, one per 4 KiB page).
 var free_bits: [131072]u8 = undefined;
@@ -27,13 +36,14 @@ var bm: phys.Bitmap = undefined;
 var mem_top: u64 = 0;
 
 /// True when `pa` names an aligned 4 KiB page within the usable physical memory.
-pub fn validPage(pa: u64) bool {
-    return pa != 0 and (pa & (param.PAGE_SIZE - 1)) == 0 and
-        mem_top >= param.PAGE_SIZE and pa <= mem_top - param.PAGE_SIZE;
+pub fn validPage(pa: PAddr) bool {
+    const a: u64 = pa.int();
+    return a != 0 and (a & (param.PAGE_SIZE - 1)) == 0 and
+        mem_top >= param.PAGE_SIZE and a <= mem_top - param.PAGE_SIZE;
 }
 
 /// Prepare the allocator with the direct-map offset used to reach memory.
-pub fn init(offset: u64) void {
+pub fn init(offset: addr.Hhdm) void {
     hhdm = offset;
     mem_top = 0;
     bm = phys.Bitmap.init(&free_bits, &present_bits, 0, @as(u64, free_bits.len) * 8);
@@ -41,29 +51,29 @@ pub fn init(offset: u64) void {
 }
 
 /// Address of the direct-map view of physical page `pa`.
-fn pagePtr(pa: u64) [*]u64 {
-    return @ptrFromInt(pa + hhdm);
+fn pagePtr(pa: PAddr) [*]u64 {
+    return hhdm.kern(pa).manyPtr(u64);
 }
 
 /// Mark the pages in [start, end) as available.
-pub fn physload(start: u64, end: u64) void {
-    if (end > mem_top) {
-        mem_top = end;
+pub fn physload(start: PAddr, end: PAddr) void {
+    if (end.int() > mem_top) {
+        mem_top = end.int();
     }
-    bm.load(start, end);
+    bm.load(start.int(), end.int());
     // Page zero is never handed out.
     bm.unload(0, param.PAGE_SIZE);
 }
 
 /// Mark the pages in [start, end) as unavailable (carve out boot-loader modules
 /// that land in memory the map still calls usable).
-pub fn physunload(start: u64, end: u64) void {
-    bm.unload(start, end);
+pub fn physunload(start: PAddr, end: PAddr) void {
+    bm.unload(start.int(), end.int());
 }
 
 /// Allocate a zeroed 4 KiB page, or null when memory is exhausted.
-pub fn physalloc() ?u64 {
-    const pa: u64 = bm.alloc() orelse return null;
+pub fn physalloc() ?PAddr {
+    const pa: PAddr = PAddr.fromInt(bm.alloc() orelse return null);
     const page: [*]u64 = pagePtr(pa);
     var i: usize = 0;
     while (i < param.PAGE_SIZE / 8) : (i += 1) {
@@ -75,33 +85,33 @@ pub fn physalloc() ?u64 {
 /// Allocate a page without zeroing it, for a caller that overwrites all of
 /// it at once (fork's page copies). Never hand such a page to user space
 /// before filling it.
-pub fn physallocUninit() ?u64 {
-    return bm.alloc();
+pub fn physallocUninit() ?PAddr {
+    return PAddr.fromInt(bm.alloc() orelse return null);
 }
 
 /// Allocate `n` zeroed, physically contiguous pages (kernel stacks); returns
 /// the address of the first, or null.
-pub fn physallocContig(n: u64) ?u64 {
-    const pa: u64 = bm.allocContig(n) orelse return null;
+pub fn physallocContig(n: u64) ?PAddr {
+    const pa: PAddr = PAddr.fromInt(bm.allocContig(n) orelse return null);
     const words: [*]u64 = pagePtr(pa);
     @memset(words[0 .. n * param.PAGE_SIZE / 8], 0);
     return pa;
 }
 
 /// Free `n` contiguous pages from physallocContig().
-pub fn physfreeContig(pa: u64, n: u64) void {
+pub fn physfreeContig(pa: PAddr, n: u64) void {
     var k: u64 = 0;
-    while (k < n) : (k += 1) physfree(pa + k * param.PAGE_SIZE);
+    while (k < n) : (k += 1) physfree(pa.add(k * param.PAGE_SIZE));
 }
 
 /// Return a page to the allocator. A page that is not currently allocated (a
 /// double free) or outside a loaded range is refused and reported, so the
 /// mistake can be found instead of corrupting memory.
-pub fn physfree(pa: u64) void {
-    if (!bm.free(pa)) {
+pub fn physfree(pa: PAddr) void {
+    if (!bm.free(pa.int())) {
         if (validPage(pa)) {
             prf.print("physfree: page not allocated (double free?) pa=");
-            prf.printHex(pa);
+            prf.printHex(pa.int());
             prf.printLine("");
         }
     }

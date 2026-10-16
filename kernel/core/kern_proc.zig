@@ -106,10 +106,10 @@ pub fn alloc() ?*proc.Proc {
         p.stop_sig = 0;
         p.cont_report = false;
         p.pmap = map;
-        p.kstack_page = kpage;
-        p.kstack_top = kpage + hhdm + param.KSTACK_PAGES * param.PAGE_SIZE;
+        p.kstack_page = kpage.int();
+        p.kstack_top = kpage.toKern(hhdm).int() + param.KSTACK_PAGES * param.PAGE_SIZE;
         // The canary sits at the bottom of the stack (stacks grow down).
-        @as(*u64, @ptrFromInt(kpage + hhdm)).* = param.KSTACK_CANARY;
+        kpage.toKern(hhdm).ptr(u64).* = param.KSTACK_CANARY;
         p.context = .{ .rsp = 0, .rbx = 0, .rbp = 0, .r12 = 0, .r13 = 0, .r14 = 0, .r15 = 0, .rip = 0 };
         p.chan = null;
         var fd: usize = 0;
@@ -169,7 +169,7 @@ pub fn free(p: *proc.Proc) void {
         }
     }
     if (p.kstack_page != 0) {
-        vm_page.physfreeContig(p.kstack_page, param.KSTACK_PAGES);
+        vm_page.physfreeContig(vm_page.PAddr.fromInt(p.kstack_page), param.KSTACK_PAGES);
     }
     p.state = .unused;
     p.pid = 0;

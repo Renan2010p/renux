@@ -10,11 +10,14 @@
 // the character device /dev/<name><unit>, as on FreeBSD, where disks have no
 // block devices.
 
+const std: type = @import("std");
 const conf: type = @import("../sys/conf.zig");
 const errno: type = @import("../sys/errno.zig");
 const ioccom: type = @import("../sys/ioccom.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kmem: type = @import("../core/subr_kmem.zig");
+const vm_page: type = @import("../vm/vm_page.zig");
+const arch: type = @import("../arch/arch.zig");
 
 /// Major number of the disk character devices; the minor is the disk's
 /// index in the table below.
@@ -22,9 +25,14 @@ pub const DISK_MAJOR: usize = 5;
 
 /// struct disk.
 pub const Disk: type = struct {
-    /// Driver-chosen name and unit, e.g. "vtbd" and 0 for /dev/vtbd0.
+    /// Driver-chosen name and unit. A whole disk's unit is a letter, as Linux
+    /// names them (/dev/vda, /dev/sda); a slice's is the partition number
+    /// (/dev/vda1), see geom_part.
     d_name: []const u8,
     d_unit: u32,
+    /// Whether devName renders the unit as a letter (whole disks) or as a
+    /// decimal number (slices).
+    d_unit_letter: bool = true,
     /// Bytes per sector, and the size of the medium in bytes.
     d_sectorsize: u32,
     d_mediasize: u64,
@@ -68,7 +76,17 @@ pub fn fromDev(dev: u64) ?*Disk {
     return if (i < ndisks) disks[i] else null;
 }
 
-/// Write "<name><unit>" into `buf`; returns the slice.
+/// The disk whose name is `name` (e.g. "vda", "vda1"), or null.
+pub fn byName(name: []const u8) ?*Disk {
+    var buf: [32]u8 = undefined;
+    for (list()) |dp| {
+        if (std.mem.eql(u8, devName(dp, &buf), name)) return dp;
+    }
+    return null;
+}
+
+/// Write the device name into `buf`; returns the slice. A whole disk renders
+/// its unit as a letter (0 -> a: "vda"); a slice as a number ("vda1").
 pub fn devName(dp: *const Disk, buf: []u8) []const u8 {
     var n: usize = 0;
     for (dp.d_name) |c| {
@@ -78,11 +96,20 @@ pub fn devName(dp: *const Disk, buf: []u8) []const u8 {
     var tmp: [10]u8 = undefined;
     var k: usize = 0;
     var u: u32 = dp.d_unit;
-    while (true) {
-        tmp[k] = @intCast('0' + u % 10);
-        k += 1;
-        u /= 10;
-        if (u == 0) break;
+    if (dp.d_unit_letter) {
+        while (true) {
+            tmp[k] = @intCast('a' + u % 26);
+            k += 1;
+            u /= 26;
+            if (u == 0) break;
+        }
+    } else {
+        while (true) {
+            tmp[k] = @intCast('0' + u % 10);
+            k += 1;
+            u /= 10;
+            if (u == 0) break;
+        }
     }
     while (k > 0) {
         k -= 1;
@@ -94,9 +121,16 @@ pub fn devName(dp: *const Disk, buf: []u8) []const u8 {
 
 // -- the character device ------------------------------------------------------------
 
-/// DIOCGSECTORSIZE and DIOCGMEDIASIZE (sys/disk.h).
+/// DIOCGSECTORSIZE and DIOCGMEDIASIZE (sys/disk.h), and DIOCRETASTE: ask the
+/// partition layer to read a new table off the disk (the installer writes one
+/// and then needs the slices to appear).
 const DIOCGSECTORSIZE: u64 = ioccom.ior('d', 128, u32);
 const DIOCGMEDIASIZE: u64 = ioccom.ior('d', 129, i64);
+const DIOCRETASTE: u64 = ioccom.io('d', 130);
+
+/// Set by the partition layer (geom_part) so a retaste ioctl can reach it
+/// without this module depending on it.
+pub var retaste: ?*const fn (dp: *Disk) void = null;
 
 /// A bounce buffer for transfers that are not whole sectors.
 var bounce: ?[*]u8 = null;
@@ -116,7 +150,11 @@ fn transfer(dp: *Disk, write: bool, offset: u64, ubuf: [*]u8, len: usize) isize 
     if (offset >= dp.d_mediasize) return 0;
     const want: usize = @intCast(@min(@as(u64, len), dp.d_mediasize - offset));
     if (bounce == null) {
-        bounce = @ptrCast(kmem.alloc(BOUNCE_SIZE) orelse return -errno.ENOMEM);
+        // A whole page: kmem's largest class (4096) cannot hold a bounce
+        // buffer plus its header, so the page comes from the VM directly.
+        const hhdm: u64 = arch.boot.hhdmOffset() orelse return -errno.ENOMEM;
+        const pa: vm_page.PAddr = vm_page.physalloc() orelse return -errno.ENOMEM;
+        bounce = pa.toKern(hhdm).manyPtr(u8);
     }
     const bb: [*]u8 = bounce.?;
     const ss: u64 = dp.d_sectorsize;
@@ -167,6 +205,9 @@ fn diskIoctl(ctx: ?*anyopaque, cmd: u64, arg: u64) i32 {
     switch (cmd) {
         DIOCGSECTORSIZE => @as(*align(1) u32, @ptrFromInt(arg)).* = dp.d_sectorsize,
         DIOCGMEDIASIZE => @as(*align(1) i64, @ptrFromInt(arg)).* = @intCast(dp.d_mediasize),
+        DIOCRETASTE => {
+            if (retaste) |f| f(dp);
+        },
         else => return -errno.ENOTTY,
     }
     return 0;

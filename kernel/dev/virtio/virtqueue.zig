@@ -47,7 +47,7 @@ pub fn alloc(vq: *Virtqueue, index: u16, num: u16, notify: *const fn (?*anyopaqu
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
     const size: u64 = virtio.vring_size(num, virtio.VIRTIO_PCI_VRING_ALIGN);
     const pages: u64 = (size + param.PAGE_SIZE - 1) / param.PAGE_SIZE;
-    const pa: u64 = vm_page.physallocContig(pages) orelse return false;
+    const pa: u64 = (vm_page.physallocContig(pages) orelse return false).int();
     const va: u64 = pa + hhdm;
     @memset(@as([*]u8, @ptrFromInt(va))[0..@intCast(pages * param.PAGE_SIZE)], 0);
 

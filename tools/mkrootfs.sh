@@ -5,7 +5,7 @@
 # Build the root filesystem image that is embedded in the kernel (FreeBSD's
 # MD_ROOT): stage the system into a tree, pack it into an ext2 image.
 #
-# Usage: mkrootfs.sh <userland> <image>
+# Usage: mkrootfs.sh <userland> <image> [mkfs]
 #
 # <userland> is the native userland as `zig build` installs it
 # (zig-out/userland: bin/, sbin/, usr/bin/, ...); the FreeBSD userland is
@@ -14,12 +14,13 @@
 # rebuild the kernel that embeds it.
 set -eu
 
-[ $# -eq 2 ] || {
-    echo "usage: mkrootfs.sh <userland> <image>" >&2
+[ $# -ge 2 ] && [ $# -le 3 ] || {
+    echo "usage: mkrootfs.sh <userland> <image> [mkfs]" >&2
     exit 2
 }
 STAGE="$1"
 OUT="$2"
+MKFS="${3:-mke2fs}"
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"   # tools/
 ROOT="$(CDPATH= cd -- "$HERE/.." && pwd)"              # repository root
@@ -35,8 +36,8 @@ PKGROOT="${PKGROOT:-$ROOT/tools/freebsd/pkgroot}"
     exit 1
 }
 
-command -v mke2fs >/dev/null 2>&1 || {
-    echo "mkrootfs: 'mke2fs' is required" >&2
+[ -x "$MKFS" ] || command -v "$MKFS" >/dev/null 2>&1 || {
+    echo "mkrootfs: the ext2 writer '$MKFS' is required" >&2
     exit 1
 }
 
@@ -83,7 +84,7 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         usr/bin/false usr/bin/yes usr/bin/printf usr/bin/which
         usr/bin/stat usr/bin/du usr/bin/tee usr/bin/xargs usr/bin/logname
         usr/bin/tty usr/bin/uptime usr/bin/w usr/bin/who usr/bin/hexdump
-        usr/bin/fortune usr/bin/resizewin usr/bin/ee
+        usr/bin/fortune usr/bin/resizewin usr/bin/ee usr/bin/dialog usr/bin/bsddialog
         usr/sbin/pwd_mkdb sbin/ldconfig
         sbin/mount sbin/umount bin/df bin/sync bin/dd usr/bin/truncate sbin/md5
         sbin/reboot sbin/halt sbin/poweroff sbin/shutdown usr/bin/wall
@@ -189,6 +190,17 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     # is a link to it, as on FreeBSD.
     cp "$FBSDLIB/usr/share/misc/termcap" "$FBSDLIB/usr/share/misc/termcap.db" "$WORK/usr/share/misc/"
     ln -sf /usr/share/misc/termcap "$WORK/etc/termcap"
+    # FreeBSD's base "xterm" entry (tc=xterm-new) has no smcup/rmcup, so
+    # full-screen programs (nano, htop, vi) cannot switch to the alternate
+    # screen: on exit they leave their drawing on the normal screen. It also
+    # lacks E3, the "erase the scrollback" capability clear(1) uses. Give
+    # xterm both, as a terminal on Linux has, by shadowing the entry with one
+    # that adds them and inherits the rest.
+    {
+        printf 'xterm|X11 terminal emulator:\\\n\t:E3=\\E[3J:te=\\E[?1049l:ti=\\E[?1049h:tc=xterm-new:\n'
+        cat "$WORK/usr/share/misc/termcap"
+    } > "$WORK/usr/share/misc/termcap.new"
+    mv -f "$WORK/usr/share/misc/termcap.new" "$WORK/usr/share/misc/termcap"
     # The C.UTF-8 locale, FreeBSD's default (login.conf's lang=C.UTF-8), so
     # the shell and the utilities handle UTF-8 text.
     if [ -d "$FBSDLIB/usr/share/locale/C.UTF-8" ]; then
@@ -199,16 +211,18 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
         mkdir -p "$WORK/usr/share/games/fortune"
         cp "$FBSDLIB"/usr/share/games/fortune/freebsd-tips* "$WORK/usr/share/games/fortune/"
     }
-    # bash (GPL) as root's login shell when the package is present, as
-    # chsh(1) would set it: the shell field of the account, /etc/shells, and
-    # the password databases rebuilt by pwd_mkdb(8) at boot (/etc/rc), since
-    # it is a FreeBSD program and does not run on the build host.
+    # The system shell is /bin/sh (FreeBSD's sh, BSD-licensed): the base
+    # scripts, the single-user shell and every #!/bin/sh expect it. bash
+    # (GPLv3) is a separate package -- it is offered through chsh(1) (listed
+    # in /etc/shells) but is not the default login shell. /etc/passwd and
+    # /etc/master.passwd already give root /bin/sh, and pwd_mkdb(8) rebuilds
+    # their databases at boot (/etc/rc).
     if [ -e "$WORK/usr/local/bin/bash" ]; then
-        sed -i 's|^\(root:[^:]*:0:0:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*\):/bin/sh$|\1:/usr/local/bin/bash|' "$WORK/etc/master.passwd"
-        sed -i 's|^\(root:[^:]*:0:0:[^:]*:[^:]*\):/bin/sh$|\1:/usr/local/bin/bash|' "$WORK/etc/passwd"
         grep -qx /usr/local/bin/bash "$WORK/etc/shells" || echo /usr/local/bin/bash >> "$WORK/etc/shells"
-        rm -f "$WORK/etc/pwd.db" "$WORK/etc/spwd.db"
-        cp "$FBSDLIB/root/.profile" "$WORK/root/.bash_profile"
+        # So a user who does switch to bash still has a profile it reads.
+        if [ -e "$WORK/root/.profile" ] && [ ! -e "$WORK/root/.bash_profile" ]; then
+            cp "$WORK/root/.profile" "$WORK/root/.bash_profile"
+        fi
     fi
 
     # The message of the day login(1) shows (login.conf's welcome=).
@@ -217,18 +231,18 @@ if [ -n "$FBSDLIB" ] && [ -d "$FBSDLIB" ]; then
     cp "$FBSDLIB/COPYRIGHT" "$WORK/COPYRIGHT.FreeBSD"
 fi
 
-# Pack the tree into an ext2 image. A fixed UUID and a fake time keep the image
-# byte-for-byte reproducible so an unchanged userland does not force a kernel
-# rebuild. 256-byte inodes hold timestamps past 2038 (128-byte ones cannot).
-find "$WORK" -exec touch -h -d @1000000000 {} + 2>/dev/null || true
+# Pack the tree into an ext2 image with our own mkfs (tools/mkfs.zig). It is
+# deterministic -- fixed timestamps and an all-zero UUID -- so an unchanged
+# userland does not force a kernel rebuild. 256-byte inodes hold timestamps
+# past 2038 (128-byte ones cannot).
 used_kb="$(du -sk "$WORK" | awk '{print $1}')"
 blocks=$((used_kb + used_kb / 2 + 8192))
 tmp="$WORK.img"
 rm -f "$tmp"
-E2FSPROGS_FAKE_TIME=1000000000 mke2fs -q -t ext2 -b 1024 -I 256 -m 0 -i 4096 \
-    -O ^resize_inode,^dir_index -U 00000000-0000-0000-0000-000000000000 \
+"$MKFS" -b 1024 -I 256 -m 0 -i 4096 \
+    -U 00000000-0000-0000-0000-000000000000 \
     -d "$WORK" "$tmp" "$blocks" || {
-    echo "mkrootfs: mke2fs failed" >&2
+    echo "mkrootfs: mkfs failed" >&2
     exit 1
 }
 

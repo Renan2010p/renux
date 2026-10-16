@@ -53,6 +53,10 @@ pub var boothowto: u32 = 0;
 pub const RB_SINGLE: u32 = 0x002; // -s: boot to single user
 pub const RB_VERBOSE: u32 = 0x800; // -v: print all potentially useful info
 
+/// The root the loader asked for ("ext2fs:/dev/vda2"), or null to use the
+/// embedded boot image. Set from the command line (vfs.root.mountfrom=...).
+var root_from: ?[]const u8 = null;
+
 /// Parse the kernel arguments the loader passed: the FreeBSD boot flags (`-v`,
 /// `-s`) and the loader variables that mean the same (`boot_verbose`,
 /// `boot_single`, optionally `=YES`).
@@ -86,6 +90,10 @@ fn bootFlags(_: ?*const anyopaque) callconv(.c) void {
             boothowto |= RB_SINGLE;
         } else if (strStarts(word, "truss=")) {
             kern_syscall.setTruss(word["truss=".len..]);
+        } else if (strStarts(word, "vfs.root.mountfrom=")) {
+            root_from = word["vfs.root.mountfrom=".len..];
+        } else if (strStarts(word, "root=")) {
+            root_from = word["root=".len..];
         } else if (strStarts(word, "console=")) {
             // The loader's console choice: comconsole, vidconsole, or both
             // (comma separated).
@@ -424,11 +432,47 @@ fn mountTmpfs(from: []const u8) ?*mount.Mount {
     return mp;
 }
 
+/// Mount the root the loader named on the command line ("ext2fs:/dev/vda2",
+/// or just the device). Returns null when the device or filesystem cannot be
+/// used, so the caller falls back to the boot image.
+fn mountDiskRoot(spec: []const u8) ?*mount.Mount {
+    var fstype: []const u8 = "ext2fs";
+    var dev: []const u8 = spec;
+    var i: usize = 0;
+    while (i < spec.len) : (i += 1) {
+        if (spec[i] == ':') {
+            fstype = spec[0..i];
+            dev = spec[i + 1 ..];
+            break;
+        }
+    }
+    if (strStarts(dev, "/dev/")) dev = dev["/dev/".len..];
+    if (dev.len == 0) return null;
+
+    const dp: *geom_disk.Disk = geom_disk.byName(dev) orelse {
+        prf.printf("Root device %s not found\n", .{dev});
+        return null;
+    };
+    prf.printf("Trying to mount root from %s:%s []...\n", .{ fstype, dev });
+    var args: ext2fs.Args = .{ .disk = dp, .readonly = false };
+    return vfs_mount.mountRootFs(fstype, &args) orelse {
+        prf.printLine("Mounting the root from disk failed.");
+        return null;
+    };
+}
+
 /// Mount the system root: a tmpfs, populated from the root image. The image is
 /// embedded in the kernel (FreeBSD's MD_ROOT) or, failing that, loaded as the
 /// /root.img module; either is announced as md0 like FreeBSD's md(4) does.
 /// Without an image the root is populated from the individual boot modules.
+/// When the loader named a root device (vfs.root.mountfrom=), it is tried
+/// first -- that is how an installed system boots from its disk.
 fn mountRoot() ?*mount.Mount {
+    if (root_from) |spec| {
+        if (mountDiskRoot(spec)) |mp| return mp;
+        prf.printLine("WARNING: cannot mount the root on disk; using the boot image");
+    }
+
     var root: ?*mount.Mount = null;
 
     if (rootimage.bytes.len > 0) {
@@ -525,7 +569,7 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     // Map the initial user stack.
     var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
     while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
-        const pa: u64 = vm_page.physalloc() orelse return;
+        const pa: u64 = (vm_page.physalloc() orelse return).int();
         arch.pmap.enterUser(init.pmap, va, pa, .user_rw);
     }
     if (!kern_exec.mapTrampoline(init.pmap)) {

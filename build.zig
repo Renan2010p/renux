@@ -19,8 +19,9 @@
 //   zig build kernel             the kernel
 //   zig build loader             the UEFI loader
 //   zig build userland           the C library and the native programs
-//   zig build iso                the bootable ISO (UEFI: Renux loader, BIOS: Limine)
-//   zig build run                boot the ISO in QEMU (serial console)
+//   zig build fetch              download the FreeBSD userland (base + packages)
+//   zig build iso                the bootable UEFI ISO (Zig writer, no xorriso)
+//   zig build run                boot the ISO in QEMU (UEFI, serial console)
 //   zig build run-efi            boot it through UEFI, in a window
 //   zig build test               host unit tests
 //
@@ -48,10 +49,12 @@ pub fn build(b: *Builder) void {
     const userland_step: *Builder.Step = b.step("userland", "Build the C library and the native programs");
     const libc: Libc = buildLibc(b);
     const stage: *Builder.Step.WriteFile = b.addWriteFiles();
+
     for (programs) |p| {
         const exe: *Builder.Step.Compile = buildProgram(b, libc, optimize, p);
         _ = stage.addCopyFile(exe.getEmittedBin(), b.fmt("{s}/{s}", .{ p.dest, p.name }));
     }
+
     const install_userland: *Builder.Step.InstallDir = b.addInstallDirectory(.{
         .source_dir = stage.getDirectory(),
         .install_dir = .prefix,
@@ -66,16 +69,27 @@ pub fn build(b: *Builder) void {
     // always runs (the FreeBSD tree is outside the build's knowledge); the
     // image is reproducible, so an unchanged system does not rebuild the
     // kernel.
+    // The ext2 writer (tools/mkfs.zig): mkrootfs packs the root image with it
+    // and mkdisk formats the persistent disk. No mke2fs.
+    const mkfs_tool: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "mkfs",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/mkfs.zig"),
+            .target = b.graph.host,
+        }),
+    });
+
     const mkrootfs: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "tools/mkrootfs.sh" });
     mkrootfs.setCwd(b.path("."));
     mkrootfs.addDirectoryArg(stage.getDirectory());
     const root_img: Builder.LazyPath = mkrootfs.addOutputFileArg("root.img");
+    mkrootfs.addArtifactArg(mkfs_tool);
     mkrootfs.has_side_effects = true;
 
     // -- kernel ---------------------------------------------------------------------
     const kernel_step: *Builder.Step = b.step("kernel", "Build the kernel");
     const empty_img: Builder.LazyPath = b.addWriteFiles().add("empty.img", "");
-    const kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img);
+    const kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, empty_img);
     const install_kernel: *Builder.Step.InstallFile = b.addInstallFileWithDir(kernel.getEmittedBin(), .{ .custom = "boot/kernel" }, "kernel");
     kernel_step.dependOn(&install_kernel.step);
 
@@ -89,28 +103,83 @@ pub fn build(b: *Builder) void {
     b.getInstallStep().dependOn(loader_step);
     b.getInstallStep().dependOn(userland_step);
 
+    // -- fetch ----------------------------------------------------------------------
+    // Download the FreeBSD userland Renux runs on (base system + packages)
+    // with a Zig program: HTTPS, xz/zstd, tar, SHA-256 and the pkg catalog's
+    // RSA signature, all from the standard library. No curl, tar, xz, openssl
+    // or mtools.
+    const fetch_step: *Builder.Step = b.step("fetch", "Download the FreeBSD userland (base + packages)");
+    const fetch_tool: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "fetch",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/fetch.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const fetch_run: *Builder.Step.Run = b.addRunArtifact(fetch_tool);
+    fetch_run.setCwd(b.path("."));
+    fetch_step.dependOn(&fetch_run.step);
+
     // -- ISO ------------------------------------------------------------------------
-    const iso_step: *Builder.Step = b.step("iso", "Build a bootable Renux ISO image");
-    const mkiso: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "tools/mkiso.sh" });
-    mkiso.setCwd(b.path("."));
-    mkiso.addFileArg(kernel.getEmittedBin());
-    mkiso.addFileArg(loader.getEmittedBin());
-    const iso: Builder.LazyPath = mkiso.addOutputFileArg("renux.iso");
+    // A UEFI-only ISO, written by tools/mkiso.zig: a FAT16 boot image holding
+    // the loader and the kernel, packed into an ISO 9660 volume with an El
+    // Torito EFI entry. No xorriso and no mtools: the two formats are written
+    // directly, so the medium is made with nothing but Zig and the compiler.
+    const iso_step: *Builder.Step = b.step("iso", "Build the Renux UEFI ISO image");
+    const mkiso: *Builder.Step.Compile = b.addExecutable(.{
+        .name = "mkiso",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/mkiso.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const mkiso_run: *Builder.Step.Run = b.addRunArtifact(mkiso);
+    mkiso_run.addFileArg(kernel.getEmittedBin());
+    mkiso_run.addFileArg(loader.getEmittedBin());
+    mkiso_run.addFileArg(b.path("stand/defaults/loader.conf"));
+    const iso: Builder.LazyPath = mkiso_run.addOutputFileArg("renux.iso");
     const install_iso: *Builder.Step.InstallFile = b.addInstallFileWithDir(iso, .prefix, "renux.iso");
     iso_step.dependOn(&install_iso.step);
 
+    // -- installer ISO --------------------------------------------------------------
+    // The install medium. Its kernel also carries the ESP image an install
+    // writes (the loader, the normal kernel and a loader.conf naming the disk
+    // root), exposed as /dev/md1; /dev/md0 is the root image.
+    const installer_step: *Builder.Step = b.step("installer-iso", "Build the Renux installer ISO");
+    const esp_run: *Builder.Step.Run = b.addRunArtifact(mkiso);
+    esp_run.addArg("--fat");
+    esp_run.addFileArg(loader.getEmittedBin());
+    esp_run.addFileArg(kernel.getEmittedBin());
+    esp_run.addFileArg(b.path("stand/defaults/loader-installed.conf"));
+    const esp_img: Builder.LazyPath = esp_run.addOutputFileArg("esp.img");
+
+    const installer_kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, esp_img);
+    const installer_run: *Builder.Step.Run = b.addRunArtifact(mkiso);
+    installer_run.addFileArg(installer_kernel.getEmittedBin());
+    installer_run.addFileArg(loader.getEmittedBin());
+    installer_run.addFileArg(b.path("stand/defaults/loader.conf"));
+    const installer_iso: Builder.LazyPath = installer_run.addOutputFileArg("renux-installer.iso");
+    const install_installer: *Builder.Step.InstallFile = b.addInstallFileWithDir(installer_iso, .prefix, "renux-installer.iso");
+    installer_step.dependOn(&install_installer.step);
+
     // -- QEMU -----------------------------------------------------------------------
+    // Both runs boot through UEFI (OVMF) and the Renux loader, the way the
+    // ISO does; there is no BIOS/Limine path left.
+    const ovmf: []const u8 = b.option([]const u8, "ovmf", "UEFI firmware image for run/run-efi") orelse
+        "/usr/share/qemu/edk2-x86_64-code.fd";
     // The persistent disk (disk.img, mounted on /home): made on the first run
     // and then kept, since it holds the user's files.
     const mkdisk: *Builder.Step.Run = b.addSystemCommand(&.{ "sh", "tools/mkdisk.sh", "disk.img" });
     mkdisk.setCwd(b.path("."));
+    mkdisk.addArtifactArg(mkfs_tool);
     mkdisk.has_side_effects = true;
     const disk: Builder.Step.Run.PathArgOptions = .{ .prefix = "file=", .suffix = ",if=virtio,format=raw" };
 
-    const run_step: *Builder.Step = b.step("run", "Boot Renux in QEMU (serial console)");
+    const run_step: *Builder.Step = b.step("run", "Boot Renux in QEMU (UEFI, serial console)");
     const qemu: *Builder.Step.Run = b.addSystemCommand(&.{
-        "qemu-system-x86_64", "-M",       "q35",  "-m",         "512M", "-boot", "d",
-        "-serial",            "stdio",    "-display", "none", "-no-reboot", "-drive",
+        "qemu-system-x86_64", "-M",    "q35",       "-m",   "512M",
+        "-drive",             b.fmt("if=pflash,format=raw,readonly=on,file={s}", .{ovmf}),
+        "-serial",            "stdio", "-display",  "none", "-no-reboot", "-drive",
     });
     qemu.addFileArg2(b.path("disk.img"), disk);
     qemu.addArg("-cdrom");
@@ -119,12 +188,10 @@ pub fn build(b: *Builder) void {
     run_step.dependOn(&qemu.step);
 
     const run_efi_step: *Builder.Step = b.step("run-efi", "Boot Renux through UEFI and the Renux loader, in a window");
-    const ovmf: []const u8 = b.option([]const u8, "ovmf", "UEFI firmware image for run-efi") orelse
-        "/usr/share/qemu/edk2-x86_64-code.fd";
     const qemu_efi: *Builder.Step.Run = b.addSystemCommand(&.{
-        "qemu-system-x86_64", "-M",      "q35",   "-m",        "512M",
-        "-drive",             b.fmt("if=pflash,format=raw,readonly=on,file={s}", .{ovmf}),
-        "-serial",            "stdio",   "-display", "gtk",     "-drive",
+        "qemu-system-x86_64", "-M",                                                        "q35",     "-m",     "512M",
+        "-drive",             b.fmt("if=pflash,format=raw,readonly=on,file={s}", .{ovmf}), "-serial", "stdio",  "-display",
+        "gtk",                "-vga",                                                      "virtio",  "-no-reboot", "-drive",
     });
     qemu_efi.addFileArg2(b.path("disk.img"), disk);
     qemu_efi.addArg("-cdrom");
@@ -132,10 +199,24 @@ pub fn build(b: *Builder) void {
     qemu_efi.step.dependOn(&mkdisk.step);
     run_efi_step.dependOn(&qemu_efi.step);
 
+    // `run-hda` boots the ISO with a real IDE disk on the legacy channel
+    // (-M pc), which the kernel drives through the ATA PIO driver as /dev/sda.
+    const run_hda_step: *Builder.Step = b.step("run-hda", "Boot Renux in QEMU with an IDE disk (-hda, UEFI, serial)");
+    const qemu_hda: *Builder.Step.Run = b.addSystemCommand(&.{
+        "qemu-system-x86_64", "-M",       "pc",       "-m",   "512M",
+        "-drive",             b.fmt("if=pflash,format=raw,readonly=on,file={s}", .{ovmf}),
+        "-serial",            "stdio",    "-display", "none", "-no-reboot", "-hda",
+    });
+    qemu_hda.addFileArg(b.path("disk.img"));
+    qemu_hda.addArg("-cdrom");
+    qemu_hda.addFileArg(iso);
+    qemu_hda.step.dependOn(&mkdisk.step);
+    run_hda_step.dependOn(&qemu_hda.step);
+
     // -- tests ----------------------------------------------------------------------
     // The pure, portable parts of the kernel, tested on the host.
     const test_step: *Builder.Step = b.step("test", "Run the host unit tests");
-    for ([_][]const u8{ "kernel/vm/phys_bitmap.zig", "kernel/core/subr_clock.zig", "kernel/sys/ioccom.zig" }) |src| {
+    for ([_][]const u8{ "kernel/vm/phys_bitmap.zig", "kernel/core/subr_clock.zig", "kernel/sys/ioccom.zig", "kernel/sys/addr.zig", "kernel/sys/checks.zig" }) |src| {
         const t: *Builder.Step.Compile = b.addTest(.{ .root_module = b.createModule(.{
             .root_source_file = b.path(src),
             .target = b.graph.host,
@@ -157,6 +238,7 @@ const Program: type = struct {
 
 const programs = [_]Program{
     .{ .name = "init", .src = "sbin/init", .dest = "sbin" },
+    .{ .name = "renux-installer", .src = "sbin/renux-installer", .dest = "sbin" },
     .{ .name = "getty", .src = "libexec/getty", .dest = "usr/libexec" },
     .{ .name = "login", .src = "usr/bin/login", .dest = "usr/bin" },
     .{ .name = "stat", .src = "usr/bin/stat", .dest = "usr/bin" },
@@ -237,7 +319,7 @@ fn buildProgram(b: *Builder, libc: Libc, optimize: builtin.OptimizeMode, p: Prog
 
 // -- kernel -----------------------------------------------------------------------------
 
-fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath) *Builder.Step.Compile {
+fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath, esp_img: Builder.LazyPath) *Builder.Step.Compile {
     const cpu_arch: std.Target.Cpu.Arch = b.graph.host.query.cpu_arch orelse b.graph.host.result.cpu.arch;
     const target: Builder.ResolvedTarget = b.resolveTargetQuery(.{
         .cpu_arch = cpu_arch,
@@ -289,6 +371,9 @@ fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath) *Builder
 
     // The root image the kernel carries (kernel/fs/rootimage.zig).
     kern.addAnonymousImport("rootimage", .{ .root_source_file = root_img });
+    // The installer's ESP image (kernel/fs/espimage.zig); empty unless the
+    // build is an installer one.
+    kern.addAnonymousImport("espimage", .{ .root_source_file = esp_img });
 
     const exe: *Builder.Step.Compile = b.addExecutable(.{
         .name = "kernel",

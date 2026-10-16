@@ -154,6 +154,16 @@ fn buildCmdline() []const u8 {
         }
         n += s.len;
     }
+    // The root device the kernel should mount (an installed system names its
+    // ext2 root here; without it the kernel uses its embedded root image).
+    if (env.get("vfs.root.mountfrom")) |r| {
+        if (n > 0 and cmdline_buf[n - 1] != ' ' and n < cmdline_buf.len) {
+            cmdline_buf[n] = ' ';
+            n += 1;
+        }
+        const s = std.fmt.bufPrint(cmdline_buf[n..], "vfs.root.mountfrom={s}", .{r}) catch "";
+        n += s.len;
+    }
     return std.mem.trimEnd(u8, cmdline_buf[0..n], " ");
 }
 

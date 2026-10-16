@@ -8,4 +8,4 @@
 # lets the system come up without it.
 #
 # Device	Mountpoint	FStype	Options		Dump	Pass#
-/dev/vtbd0	/home		ext2fs	rw,failok	0	0
+/dev/vda	/home		ext2fs	rw,failok	0	0

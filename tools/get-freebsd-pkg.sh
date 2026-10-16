@@ -4,6 +4,10 @@
 #
 # Fetch FreeBSD packages (bash, nano, ...) for the Renux root image.
 #
+# Superseded by `zig build fetch` (tools/fetch.zig), which does the same with
+# only Zig -- including the catalog's RSA signature -- with no curl, tar, xz,
+# sha256sum or openssl. Kept for reference.
+#
 # Renux runs FreeBSD/amd64 binaries, so it can use FreeBSD's packages as they
 # are. pkg(8) does not run on the build host, so this script does what it
 # does, with the same chain of trust:

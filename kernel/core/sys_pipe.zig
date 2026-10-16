@@ -136,7 +136,7 @@ fn pipeClose(f: *file.File) i32 {
     // The other end sees end-of-file or EPIPE now.
     kern_sched.ioWakeup();
     if (p.readers == 0 and p.writers == 0) {
-        vm_page.physfree(p.page);
+        vm_page.physfree(vm_page.PAddr.fromInt(p.page));
         kmem.free(@ptrCast(p));
     }
     return 0;
@@ -160,10 +160,10 @@ pub fn sysPipe2(args: [sys.MAXARGS]u64) u64 {
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return sys.signed(-errno.ENOMEM);
 
     const p: *Pipe = kmem.zallocAs(Pipe) orelse return sys.signed(-errno.ENFILE);
-    const page: u64 = vm_page.physalloc() orelse {
+    const page: u64 = (vm_page.physalloc() orelse {
         kmem.free(@ptrCast(p));
         return sys.signed(-errno.ENFILE);
-    };
+    }).int();
     p.* = .{
         .page = page,
         .buf = @ptrFromInt(page + hhdm),
@@ -177,7 +177,7 @@ pub fn sysPipe2(args: [sys.MAXARGS]u64) u64 {
     next_ino += 1;
 
     const rf: *file.File = kern_descrip.newFile(file.DTYPE_PIPE, file.FREAD, p, &pipe_ops) orelse {
-        vm_page.physfree(page);
+        vm_page.physfree(vm_page.PAddr.fromInt(page));
         kmem.free(@ptrCast(p));
         return sys.signed(-errno.ENFILE);
     };

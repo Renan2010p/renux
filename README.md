@@ -34,8 +34,8 @@ move to a future GPL version without asking every contributor for permission.
 
 The source tree holds only Renux's own code. The FreeBSD userland that runs
 on Renux (its base system and packages) is fetched from FreeBSD's servers by
-`tools/get-freebsd.sh` and `tools/get-freebsd-pkg.sh`, and keeps its own
-licenses; it is never committed here.
+`tools/fetch.zig` (`zig build fetch`), and keeps its own licenses; it is never
+committed here.
 
 ## ABI
 
@@ -65,9 +65,17 @@ See the status section near the end of this file.
 Requirements:
 
 - Zig **0.17.0-dev** (see `.zigversion`)
-- `gcc` (optionally, to build the Limine host tool once)
-- `xorriso` and `mtools`/`dosfstools` (to build the ISO image)
-- QEMU, and OVMF (`edk2-x86_64-code.fd`) for `run-efi`
+- QEMU, and OVMF (`edk2-x86_64-code.fd`) for `run` and `run-efi`
+
+The ISO is written by `tools/mkiso.zig`, so no `xorriso` or `mtools` are
+needed; the ISO is UEFI-only (the Renux loader), with no BIOS/Limine path.
+The FreeBSD userland is fetched by `tools/fetch.zig` (`zig build fetch`), so
+no `curl`, `tar`, `xz`, `sha256sum` or `openssl` are needed either.
+
+Still needed from the host while the tree is ported to Zig: `readelf`
+(binutils), which `tools/mkrootfs.sh` uses to read the fetched userland's
+`DT_NEEDED` entries (a Zig ELF reader is next). The ext2 images are already
+made by `tools/mkfs.zig` -- no `mke2fs`.
 
 Build from the repository root, with one `build.zig` for the whole system:
 
@@ -76,9 +84,12 @@ zig build                 # kernel, loader and native userland (the default)
 zig build kernel          # kernel/  -> zig-out/boot/kernel/kernel
 zig build loader          # stand/   -> zig-out/boot/loader.efi
 zig build userland        # userland/ -> zig-out/userland/, zig-out/lib/libc.a
-zig build iso             # zig-out/renux.iso (UEFI: Renux loader, BIOS: Limine)
-zig build run             # boot the ISO in QEMU (serial console)
+zig build fetch           # the FreeBSD userland (base + packages) -> tools/freebsd/
+zig build iso             # zig-out/renux.iso (UEFI, written by tools/mkiso.zig)
+zig build installer-iso   # zig-out/renux-installer.iso (the install medium)
+zig build run             # boot the ISO in QEMU (UEFI, serial console)
 zig build run-efi         # boot through UEFI and the Renux loader, in a window
+zig build run-hda         # boot with an IDE disk (qemu -hda, /dev/sda)
 zig build test            # host unit tests
 ```
 
@@ -93,14 +104,14 @@ zig-out/renux.iso             the bootable ISO
 ```
 
 The root image is made by `tools/mkrootfs.sh` from `zig-out/userland` plus
-the FreeBSD userland when it has been fetched (`tools/get-freebsd.sh`,
-`tools/get-freebsd-pkg.sh`), and embedded in the kernel. `-Dmdroot=false`
-builds a kernel without it.
+the FreeBSD userland when it has been fetched (`zig build fetch`), and
+embedded in the kernel. `-Dmdroot=false` builds a kernel without it.
 
 `zig build run` and `run-efi` attach a persistent disk, `disk.img` at the
 top of the tree (a sparse 1 GiB ext2 image made by `tools/mkdisk.sh` on the
 first run and never touched again, even by `rm -rf zig-out`). Renux sees it
-as `/dev/vtbd0` and mounts it on `/home` from `/etc/fstab`; files there
+as `/dev/vda` and mounts it on `/home` from `/etc/fstab`; `zig build run-hda`
+uses the legacy IDE channel instead, where the disk is `/dev/sda`. Files there
 survive a reboot. Shut down with `poweroff`, `reboot` or `shutdown` so the
 file system is marked clean; on the host, `e2fsck -f disk.img` checks it and
 `debugfs disk.img` looks inside.
@@ -118,17 +129,36 @@ Notes:
 Renux boots the way FreeBSD does, with its own loader in place of
 `/boot/loader`:
 
-- **UEFI**: `\EFI\BOOT\BOOTX64.EFI` is the Renux loader (`stand/efi/loader`
-  for the firmware side, `stand/common` for the menu, `loader.conf` and the
-  `OK` prompt). It reads `/boot/defaults/loader.conf` and `/boot/loader.conf`,
-  shows the boot menu ("Welcome to Renux": multi/single user, the loader
-  prompt, reboot, console, kernel selection, boot options) with an autoboot
-  countdown, loads `/boot/kernel/kernel` and reports each segment
-  (`text=0x... data=0x...+0x...`), the EFI framebuffer and the entry point.
-  The variables keep FreeBSD's names (`autoboot_delay`, `boot_single`,
+- **UEFI** (the only path): `\EFI\BOOT\BOOTX64.EFI` is the Renux loader
+  (`stand/efi/loader` for the firmware side, `stand/common` for the menu,
+  `loader.conf` and the `OK` prompt). It reads `/boot/defaults/loader.conf`
+  and `/boot/loader.conf`, shows the boot menu ("Welcome to Renux": multi/single
+  user, the loader prompt, reboot, console, kernel selection, boot options)
+  with an autoboot countdown, loads `/boot/kernel/kernel` and reports each
+  segment (`text=0x... data=0x...+0x...`), the EFI framebuffer and the entry
+  point. The variables keep FreeBSD's names (`autoboot_delay`, `boot_single`,
   `boot_verbose`, `console`, `kernel`, `kernels`, `beastie_disable`,
   `loader_logo`, ...).
-- **BIOS**: Limine loads the same kernel, as a fallback.
+
+The ISO is UEFI-only and written by `tools/mkiso.zig`: a FAT16 image with the
+loader and the kernel, wrapped in an ISO 9660 volume whose El Torito boot
+catalog points the firmware at it. There is no `xorriso`, no `mtools`, and no
+BIOS/Limine path.
+
+By default the kernel mounts its embedded root image. When the loader passes
+`vfs.root.mountfrom="ext2fs:/dev/vda2"` (a `loader.conf` variable), the kernel
+mounts that disk partition as the root instead, and falls back to the image if
+it cannot -- so an installed system boots from its disk.
+
+## Installing
+
+`zig build installer-iso` writes `zig-out/renux-installer.iso`. Boot it, log in
+as root, and run `renux-installer` (a `dialog` menu, as bsdinstall has) or
+`renux-installer -y /dev/vda`. The installer writes a GPT with an EFI system
+partition (FAT) and an ext2 root, copies the images the kernel carries
+(`/dev/md0` is the root image, `/dev/md1` the ESP image with the loader, the
+kernel and the `loader.conf`), and writes the installed system's `/etc/fstab`.
+Reboot with the medium removed and the disk boots on its own.
 
 The loader passes FreeBSD's boot flags to the kernel: `-s` boots single user
 (init offers a shell, then continues to multi-user when it exits), `-v` a
@@ -148,8 +178,8 @@ Every line reports something the system actually did.
   are no hard-coded device lines.
 - Internal progress messages (`log(LOG_INFO, ...)`, allocator and filesystem
   registration, ...) are only shown with **`boot -v`**: add `-v` (or
-  `boot_verbose=YES`) to the kernel command line, e.g. `cmdline: -v` in
-  `limine.conf`.
+  `boot_verbose=YES`) to the kernel command line, e.g. `boot_verbose="YES"` in
+  `loader.conf`.
 - `dmesg` shows the message buffer, starting at `---<<BOOT>>---`; loader-stage
   output (`Loading kernel...`, the spinner) is console-only.
 - The time of day comes from the CMOS real-time clock (`atrtc0`).
@@ -205,17 +235,20 @@ stand/                 boot loader and boot support
   efi/loader/          UEFI loader (BOOTX64.EFI)
   defaults/loader.conf /boot/defaults/loader.conf
   arch/amd64/          Renux boot protocol (shared with the kernel)
-  amd64/               Limine bindings and config (BIOS fallback)
-tools/                 build scripts: fetching FreeBSD (get-freebsd.sh,
-                       get-freebsd-pkg.sh) and Limine, mkrootfs.sh, mkiso.sh,
-                       mkdisk.sh, the zcc C toolchain and pkgtool
+  amd64/               Limine bindings and config (legacy BIOS path, unused
+                       by `zig build iso`)
+tools/                 build programs: mkiso.zig (the UEFI ISO writer),
+                       mkfs.zig (the ext2 writer), fetch.zig (the FreeBSD
+                       userland downloader), mkrootfs.sh, mkdisk.sh, the zcc
+                       C toolchain and pkgtool; get-freebsd*.sh and
+                       get-limine.sh are the replaced shell predecessors
 ```
 
 ## Status
 
 Working today:
 
-- **Boot:** the Renux UEFI loader (or Limine on BIOS) loads the kernel and nothing else; the root
+- **Boot:** the Renux UEFI loader loads the kernel and nothing else; the root
   filesystem is embedded in the kernel (FreeBSD's `MD_ROOT`) and unpacked at
   boot. Explicit linker script, GDT + TSS, IDT with trap handling; FreeBSD-style
   SYSINIT / mi_startup, boot log and `Loading kernel...` spinner.
@@ -231,7 +264,9 @@ Working today:
   family relative to a directory descriptor), hard and symbolic links,
   `nmount`/`unmount`/`statfs`/`getfsstat`, tty/termios.
 - **Storage:** a PCI bus scan, the VirtIO block driver (`vtblk`, legacy
-  interface), disks as `/dev/vtbdN`, a buffer cache with delayed writes and
+  interface), disks as Linux names them (`/dev/vda`, `/dev/sda`, partitions
+  `/dev/vda1`, ...; `kernel/geom` reads MBR and GPT), an ATA/IDE (PIO) driver
+  for `qemu -hda` and real IDE hardware, a buffer cache with delayed writes and
   a syncer, and a read-write ext2 file system (FreeBSD's `ext2fs`), checked
   clean by `e2fsck`. FreeBSD's `mount`, `umount`, `df`, `sync` and
   `reboot`/`halt`/`poweroff`/`shutdown` run unchanged.
