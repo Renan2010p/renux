@@ -10,6 +10,7 @@
 const pckbc: type = @import("../ic/pckbc.zig");
 const keymap: type = @import("wskbdmap_mfii.zig");
 const cons: type = @import("../cons.zig");
+const wskbdutil: type = @import("../wscons/wskbdutil.zig");
 const arch: type = @import("../../arch/arch.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
 const subr_bus: type = @import("../../core/subr_bus.zig");
@@ -34,51 +35,6 @@ const SC_LCTRL: u8 = 0x1d;
 var shift_down: bool = false;
 var ctrl_down: bool = false;
 var extended: bool = false;
-
-/// Push an escape sequence on the console input queue.
-fn emit(seq: []const u8) void {
-    for (seq) |c| {
-        cons.cnInput(c);
-    }
-}
-
-/// Translate an extended (0xE0-prefixed) make code into an ANSI sequence. When
-/// the terminal is in application cursor mode (DECCKM) the arrows and Home/End
-/// use the `\eO` forms the terminfo entries expect.
-fn extendedKey(code: u8) void {
-    const app: bool = cons.cnAppCursor();
-    switch (code) {
-        0x48 => emit(if (app) "\x1bOA" else "\x1b[A"), // up
-        0x50 => emit(if (app) "\x1bOB" else "\x1b[B"), // down
-        0x4d => emit(if (app) "\x1bOC" else "\x1b[C"), // right
-        0x4b => emit(if (app) "\x1bOD" else "\x1b[D"), // left
-        0x47 => emit(if (app) "\x1bOH" else "\x1b[H"), // Home
-        0x4f => emit(if (app) "\x1bOF" else "\x1b[F"), // End
-        0x53 => emit("\x1b[3~"), // Delete
-        0x49 => emit("\x1b[5~"), // Page Up
-        0x51 => emit("\x1b[6~"), // Page Down
-        0x52 => emit("\x1b[2~"), // Insert
-        else => {},
-    }
-}
-
-/// Map a printable character to the control character produced with Ctrl held
-/// (Ctrl+A..Ctrl+Z and the punctuation keys, as the BSD consoles do).
-fn controlChar(ch: u8) u8 {
-    if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z')) {
-        return ch & 0x1f;
-    }
-    return switch (ch) {
-        '[', '3' => 0x1b,
-        '\\', '4' => 0x1c,
-        ']', '5' => 0x1d,
-        '6' => 0x1e,
-        '-', '7', '/' => 0x1f,
-        '2', ' ', '@', '`' => 0x00,
-        '8' => 0x7f, // Ctrl+8 is DEL
-        else => ch,
-    };
-}
 
 /// IRQ 1 handler: consume every pending scan code. The status register is read
 /// once per byte: it describes the byte about to be read, so the mouse/AUX bit
@@ -111,7 +67,7 @@ fn handler() void {
                 continue;
             }
             if (!released) {
-                extendedKey(code);
+                wskbdutil.extendedKey(code);
             }
             continue;
         }
@@ -131,7 +87,7 @@ fn handler() void {
         const table = if (shift_down) &keymap.shifted else &keymap.normal;
         var ch: u8 = table[code];
         if (ctrl_down) {
-            ch = controlChar(ch);
+            ch = wskbdutil.controlChar(ch);
         }
         if (ch != 0 or ctrl_down) {
             cons.cnInput(ch);
@@ -139,15 +95,17 @@ fn handler() void {
     }
 }
 
-/// Bring up the keyboard: initialise the controller and hook IRQ 1.
-pub fn init() void {
-    pckbc.init();
+/// Bring up the keyboard: initialise the controller and hook IRQ 1. Returns
+/// false when the machine has no i8042 (a USB keyboard is then the console's).
+pub fn init() bool {
+    if (!pckbc.init()) return false;
     arch.intr.register(arch.intrdefs.irqVector(1), handler);
     arch.pic.enableIrq(1);
+    return true;
 }
 
 fn pckbdInit(_: ?*const anyopaque) callconv(.c) void {
-    init();
+    if (!init()) return;
     subr_bus.announce(&kbdc_dev, " port 0x60,0x64", .{});
     subr_bus.announce(&kbd_dev, " irq 1", .{});
 }

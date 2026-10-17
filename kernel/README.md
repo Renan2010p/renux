@@ -84,8 +84,8 @@ loader (bootloader/efi)
                  SI_SUB_INTR        interrupt vectors, the syscall entry
                  SI_SUB_DRIVERS     drivers register (consoles, memory disks,
                                     VirtIO, ATA, /dev/null, random, disks)
-                 SI_SUB_CONFIGURE   PCI scan, PIC, RTC, keyboard, framebuffer,
-                                    partitions
+                 SI_SUB_CONFIGURE   PCI scan, PIC, RTC, keyboard, USB devices,
+                                    framebuffer, partitions
                  SI_SUB_VFS         tmpfs and ext2fs register
                  SI_SUB_CLOCKS      the 8254 timer starts ticking
                  SI_SUB_LAST        the root is mounted, /sbin/init is started,
@@ -163,9 +163,10 @@ kernel/
 | Path | Device |
 | --- | --- |
 | `cons.zig`, `tty.zig`, `mem.zig` | the console, the tty devices, `/dev/null`, `/dev/zero`, ... |
-| `wscons/`, `rasops/`, `wsfont/` | the graphical console: VT100/xterm emulator, raster operations, the Spleen 8x16 font |
+| `wscons/`, `rasops/`, `wsfont/` | the graphical console: VT100/xterm emulator, raster operations, the Spleen 8x16 font; `wskbdutil.zig`, the key sequences both keyboards send |
 | `fb/` | `/dev/fb0`, FreeBSD's `fbio.h` interface |
 | `pckbport/` | the PS/2 keyboard and its keymap |
+| `usb/` | USB: the xHCI host controller (`controller/xhci.zig`), the EHCI firmware handoff (`controller/ehci_pci.zig`), device enumeration (`usb_device.zig`) and the boot-protocol keyboard (`input/ukbd.zig`) |
 | `ic/` | chips: the 16550 UART (`com`), i8042, i8253, VGA |
 | `pci/` | the PCI bus scan |
 | `virtio/` | VirtIO: virtqueues, the legacy PCI transport, the block device (`vtblk`) |

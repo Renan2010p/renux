@@ -25,6 +25,9 @@ comptime {
     _ = @import("dev/fb/fb.zig");
     _ = @import("dev/pci/pci.zig");
     _ = @import("dev/virtio/pci/virtio_pci_legacy.zig");
+    _ = @import("dev/usb/controller/xhci.zig");
+    _ = @import("dev/usb/controller/ehci_pci.zig");
+    _ = @import("dev/usb/input/ukbd.zig");
     _ = @import("dev/ata/ata.zig");
     _ = @import("dev/md/md.zig");
     _ = @import("geom/geom_disk.zig");

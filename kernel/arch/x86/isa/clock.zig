@@ -23,6 +23,13 @@ const sysinit: type = @import("../../../sys/sysinit.zig");
 pub const HZ: u32 = 100;
 
 var ticks: u64 = 0;
+
+/// Drivers polled on every tick (devices that are not interrupt driven yet,
+/// such as the USB host controller).
+pub const TickHandler: type = *const fn () void;
+const MAXTICKHANDLERS: usize = 4;
+var tick_handlers: [MAXTICKHANDLERS]TickHandler = undefined;
+var ntick_handlers: usize = 0;
 /// Channel poll(2) sleeps on: the tick wakes it so a poll timeout elapses.
 var poll_chan: u8 = 0;
 
@@ -33,6 +40,40 @@ pub fn pollChannel() *anyopaque {
 
 fn outb(port: u16, value: u8) void {
     bus_space.write1(.io, port, 0, value);
+}
+
+fn inb(port: u16) u8 {
+    return bus_space.read1(.io, port, 0);
+}
+
+/// Busy-wait `usec` microseconds (FreeBSD's DELAY()). PIT channel 2 counts
+/// down in one-shot mode, at most 50 ms at a time; it works before the tick
+/// is started and with interrupts off.
+pub fn DELAY(usec: u64) void {
+    const port61: u8 = inb(0x61);
+    var left: u64 = usec;
+    while (left > 0) {
+        const chunk: u64 = @min(left, 50_000);
+        left -= chunk;
+        const count: u16 = @intCast(@max(1, @as(u64, pit.TIMER_FREQ) * chunk / 1_000_000));
+        // Gate channel 2 on, speaker off; mode 0 (interrupt on terminal count).
+        outb(0x61, (port61 & ~@as(u8, 0x02)) | 0x01);
+        outb(isa.IO_TIMER1 + pit.TIMER_MODE, 0xb0);
+        outb(isa.IO_TIMER1 + pit.TIMER_CNTR2, @truncate(count));
+        outb(isa.IO_TIMER1 + pit.TIMER_CNTR2, @truncate(count >> 8));
+        // OUT2 (bit 5 of port 0x61) goes high when the count expires.
+        var spins: u64 = 0;
+        while ((inb(0x61) & 0x20) == 0 and spins < 100_000_000) : (spins += 1) {}
+    }
+    outb(0x61, port61);
+}
+
+/// Call `handler` on every tick, from the clock interrupt.
+pub fn registerTickHandler(handler: TickHandler) void {
+    if (ntick_handlers < MAXTICKHANDLERS) {
+        tick_handlers[ntick_handlers] = handler;
+        ntick_handlers += 1;
+    }
 }
 
 /// Program the PIT and start delivering ticks.
@@ -64,6 +105,7 @@ fn tick() void {
     // Fire interval timers (SIGALRM), then wake anyone waiting in poll(2) or
     // nanosleep(2) so it can re-check readiness / time out.
     kern_time.hardclock(ticks);
+    for (tick_handlers[0..ntick_handlers]) |handler| handler();
     kern_sched.wakeup(pollChannel());
 }
 

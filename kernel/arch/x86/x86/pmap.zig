@@ -444,6 +444,30 @@ pub fn enterUser(p: Pmap, va: u64, pa: u64, prot: Prot) void {
     map(p, va, pa, prot);
 }
 
+/// Kernel window for device registers mapped by mapdev(): PML4 slot 510
+/// (vmparam.KERNEL_SCRATCH_BASE), which the loaders leave empty. Mapped
+/// before the first process is created, it is shared by every page map.
+const DEVMAP_BASE: u64 = 0xffffff0000000000;
+const DEVMAP_SIZE: u64 = 1 << 30;
+var devmap_next: u64 = DEVMAP_BASE;
+
+/// Map `size` bytes of device registers at physical `pa` into the kernel,
+/// uncached (FreeBSD's pmap_mapdev()). Returns the virtual address of `pa`,
+/// or null when the window is full or page tables run out.
+pub fn mapdev(pa: u64, size: u64) ?u64 {
+    const start: u64 = pa & ~@as(u64, param.PAGE_SIZE - 1);
+    const end: u64 = (pa + size + param.PAGE_SIZE - 1) & ~@as(u64, param.PAGE_SIZE - 1);
+    if (devmap_next + (end - start) > DEVMAP_BASE + DEVMAP_SIZE) return null;
+    const va: u64 = devmap_next;
+    var off: u64 = 0;
+    while (off < end - start) : (off += param.PAGE_SIZE) {
+        install(kernel_pmap, va + off, start + off, pte.P | pte.RW | pte.NX | pte.PCD | pte.PWT | pte.UNMANAGED);
+        if (extract(kernel_pmap, va + off) == null) return null;
+    }
+    devmap_next += end - start;
+    return va + (pa - start);
+}
+
 /// Map device memory `pa` at `va` in page map `p`: never counted or freed.
 pub fn enterDevice(p: Pmap, va: u64, pa: u64, prot: Prot) void {
     install(p, va, pa, flagsFor(prot) | pte.UNMANAGED);

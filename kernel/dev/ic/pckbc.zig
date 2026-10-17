@@ -51,38 +51,56 @@ fn flush() void {
     }
 }
 
-fn waitInput() void {
-    while ((status() & STATUS_INPUT_FULL) != 0) {}
+/// Status reads before a wait gives up (each takes about a microsecond).
+/// A machine without an i8042 (or with the firmware's USB emulation gone)
+/// reads 0xff forever, and must not hang the boot.
+const WAIT_SPINS: usize = 100_000;
+
+fn waitInput() bool {
+    var i: usize = 0;
+    while (i < WAIT_SPINS) : (i += 1) {
+        if ((status() & STATUS_INPUT_FULL) == 0) return true;
+    }
+    return false;
 }
 
-fn waitOutput() void {
-    while ((status() & STATUS_OUTPUT_FULL) == 0) {}
+fn waitOutput() bool {
+    var i: usize = 0;
+    while (i < WAIT_SPINS) : (i += 1) {
+        if ((status() & STATUS_OUTPUT_FULL) != 0) return true;
+    }
+    return false;
 }
 
-fn writeCmd(cmd: u8) void {
-    waitInput();
+fn writeCmd(cmd: u8) bool {
+    if (!waitInput()) return false;
     outb(CMD_PORT, cmd);
+    return true;
 }
 
-fn writeData(data: u8) void {
-    waitInput();
+fn writeData(data: u8) bool {
+    if (!waitInput()) return false;
     outb(DATA_PORT, data);
+    return true;
 }
 
-/// Bring up the controller for the keyboard.
-pub fn init() void {
+/// Bring up the controller for the keyboard. Returns false when there is no
+/// controller answering.
+pub fn init() bool {
+    if (status() == 0xff) return false; // nothing decodes the ports
     flush();
-    writeCmd(CMD_ENABLE_KBD);
+    if (!writeCmd(CMD_ENABLE_KBD)) return false;
 
     // Enable the keyboard interrupt (config bit 0), keeping scan code
     // translation as the firmware set it.
-    writeCmd(CMD_READ_CONFIG);
-    waitOutput();
+    if (!writeCmd(CMD_READ_CONFIG)) return false;
+    if (!waitOutput()) return false;
     var config: u8 = readData();
     config |= 0x01;
     config &= ~@as(u8, 0x10);
-    writeCmd(CMD_WRITE_CONFIG);
-    writeData(config);
+    if (!writeCmd(CMD_WRITE_CONFIG)) return false;
+    if (!writeData(config)) return false;
 
     flush();
+    return true;
 }
