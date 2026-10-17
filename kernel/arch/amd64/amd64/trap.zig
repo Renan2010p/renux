@@ -17,6 +17,7 @@ const pmap: type = @import("../../x86/x86/pmap.zig");
 const syscall: type = @import("../../x86/x86/syscall.zig");
 const vector: type = @import("vector.zig");
 const vm_fault: type = @import("../../../vm/vm_fault.zig");
+const arch_vmparam: type = @import("../include/vmparam.zig");
 const vm_page: type = @import("../../../vm/vm_page.zig");
 const sys: type = @import("../../../sys/syscall.zig");
 const errno: type = @import("../../../sys/errno.zig");
@@ -28,9 +29,6 @@ const param: type = @import("../../../sys/param.zig");
 const signal: type = @import("../../../sys/signal.zig");
 const prf: type = @import("../../../core/subr_prf.zig");
 
-/// The trap frame of the trap currently being handled (used by fork()).
-var trap_frame: ?*trap.TrapFrame = null;
-
 /// Synthetic vector the `syscall` entry pushes so the dispatcher can apply the
 /// FreeBSD error convention (carry flag + errno).
 pub const FASTSYSCALL_VECTOR: u64 = 0x81;
@@ -38,9 +36,16 @@ pub const FASTSYSCALL_VECTOR: u64 = 0x81;
 /// The result a handler gives when it loaded the frame itself.
 const JUSTRETURN: u64 = sys.signed(-errno.EJUSTRETURN);
 
-/// The trap frame being handled on this CPU, if any.
+/// True when the trap being handled interrupted user mode: the clock
+/// charges its tick as user time then, system time otherwise.
+pub var intr_from_user: bool = false;
+
+/// The frame the running thread entered the kernel from user mode with (for
+/// fork, sigreturn, getcontext, thr_new, ...). Each thread keeps its own, so
+/// a thread that sleeps in a system call still finds its frame after other
+/// threads have trapped.
 pub fn currentFrame() ?*trap.TrapFrame {
-    return trap_frame;
+    return kern_proc.curthread.trapframe;
 }
 
 /// Common entry point for every vector stub (see vector.zig).
@@ -90,18 +95,19 @@ fn readCr2() u64 {
     );
 }
 
-/// Try to resolve a not-present page fault by mapping a demand-zero page.
+/// Page-fault error code bits.
+const PF_PRESENT: u64 = 1 << 0; // the page was present (a protection fault)
+const PF_WRITE: u64 = 1 << 1; // the access was a write
+const PF_USER: u64 = 1 << 2; // the access came from user mode
+
+/// Resolve a page fault on a user address from the current process's map
+/// (vm/vm_fault.zig): a page not made yet, or a write to a copy-on-write
+/// page. Returns false when the access is not allowed.
 fn handlePageFault(frame: *trap.TrapFrame) bool {
-    if ((frame.error_code & 1) != 0) {
-        return false; // protection fault, not a missing page
-    }
     const va: u64 = readCr2();
-    const r = vm_fault.regionFor(kern_proc.current, va) orelse return false;
-    const prot: pmap.Prot = if (r.exec) .user_rx else if (r.write) .user_rw else .user_ro;
-    // allocPage records the page in the address space, so it is freed with it.
-    const pa: u64 = pmap.allocPage(pmap.current()) orelse return false;
-    pmap.enterUser(pmap.current(), va & ~param.PAGE_MASK, pa, prot);
-    return true;
+    if (va >= arch_vmparam.VM_MAXUSER_ADDRESS) return false;
+    const p = kern_proc.current;
+    return vm_fault.fault(kern_proc.vmOf(p), p.pmap, va, (frame.error_code & PF_WRITE) != 0);
 }
 
 /// Trap dispatcher, called by trap_common().
@@ -110,13 +116,19 @@ export fn zb_trap_dispatch(frame: *trap.TrapFrame) callconv(.c) void {
 
     // Deliver a pending signal when control is about to return to user mode.
     if (frame.cs == gdt_defs.UCODE_SEL) {
+        // A thread whose sibling is ending the process (or exec'ing) leaves
+        // here instead of returning to user mode.
+        kern_exit.checkSingleThread();
         kern_signal.deliver(frame);
     }
 }
 
 /// Handle the trap, possibly adjusting `frame` on the way out.
 fn dispatchTrap(frame: *trap.TrapFrame) void {
-    trap_frame = frame;
+    // Only a trap from user mode carries the user registers; an interrupt
+    // taken in the kernel must not replace them.
+    if (frame.cs == gdt_defs.UCODE_SEL) kern_proc.curthread.trapframe = frame;
+    intr_from_user = frame.cs == gdt_defs.UCODE_SEL;
 
     if (frame.vector == vector.SYSCALL_VECTOR) {
         const result: u64 = syscall.dispatch(
@@ -172,9 +184,10 @@ fn dispatchTrap(frame: *trap.TrapFrame) void {
         // missing level shows at once.
         const e = pmap.walk(kern_proc.current.pmap, readCr2());
         prf.log(prf.LOG_ERR, "  pml4e %x pdpte %x pde %x pte %x", .{ e[0], e[1], e[2], e[3] });
-        // A fault from user mode kills the process (as SIGSEGV); only a kernel
-        // fault panics.
-        if ((frame.error_code & 0x4) != 0) {
+        // A bad user address -- touched by the program, or by the kernel on
+        // its behalf (a system call given a bad pointer) -- costs the
+        // process SIGSEGV; only a fault on a kernel address is the kernel's.
+        if ((frame.error_code & PF_USER) != 0 or readCr2() < arch_vmparam.VM_MAXUSER_ADDRESS) {
             kern_exit.exitSignal(signal.SIGSEGV);
         }
         prf.panic("unhandled page fault", null);

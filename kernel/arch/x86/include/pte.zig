@@ -17,6 +17,12 @@ pub const A: u64 = 1 << 5; // accessed
 pub const D: u64 = 1 << 6; // dirty
 pub const PS: u64 = 1 << 7; // page size (large page)
 pub const G: u64 = 1 << 8; // global
+/// Software bits (the hardware ignores bits 9-11):
+/// the page is shared copy-on-write; a write must copy it first.
+pub const COW: u64 = 1 << 9;
+/// The page is device memory, not from the page allocator: never counted
+/// or freed (FreeBSD maps such pages without PG_MANAGED).
+pub const UNMANAGED: u64 = 1 << 10;
 pub const NX: u64 = 1 << 63; // no execute
 
 /// Physical address mask in a 4 KiB page table entry.

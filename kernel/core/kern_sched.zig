@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
-// Scheduler and kernel-thread switching.
+// The scheduler.
 //
-// The Zig counterpart of NetBSD's sys/kern/sched_4bsd.c, reduced to a
-// round-robin over runnable processes. Timer interrupts preempt the running
-// process (the port's trap handler calls yield()); syscalls may block with sleep() and be
-// resumed by wakeup().
+// The Zig counterpart of FreeBSD's sys/kern/sched_4bsd.c, reduced to a
+// round-robin over runnable threads on one CPU. The clock interrupt preempts
+// the running thread (the port's trap handler calls yield()); a thread that
+// must wait in the kernel sleeps on a channel with sleep() and is made
+// runnable again by wakeup() on that channel, by a signal, or when its
+// timed sleep runs out (sleepUntil, checked on every clock tick).
+//
+// A process that is stopped (job control) has none of its threads run.
 
 const proc: type = @import("../sys/proc.zig");
 const arch: type = @import("../arch/arch.zig");
@@ -31,26 +35,25 @@ fn schedStackTop() u64 {
     return @intFromPtr(&sched_stack) + @sizeOf(@TypeOf(sched_stack));
 }
 
-/// First function a newly created process runs: it returns to ring 3 with the
-/// process's stored frame.
-fn procEntry() callconv(.c) noreturn {
-    arch.trap.usertrapret(&kern_proc.current.frame);
+/// First function a new thread runs: it enters ring 3 with the thread's
+/// stored frame.
+fn threadEntry() callconv(.c) noreturn {
+    arch.trap.usertrapret(&kern_proc.curthread.frame);
 }
 
-/// Prepare a process's kernel context so that the first swtch() to it lands in
-/// procEntry().
-pub fn prepareContext(p: *proc.Proc) void {
-    p.context = .{
-        .rsp = p.kstack_top,
+/// Prepare thread `td`'s kernel context so that the first swtch() to it
+/// lands in threadEntry().
+pub fn prepareContext(td: *proc.Thread) void {
+    td.context = .{
+        .rsp = td.kstack_top,
         .rbx = 0,
         .rbp = 0,
         .r12 = 0,
         .r13 = 0,
         .r14 = 0,
         .r15 = 0,
-        .rip = @intFromPtr(&procEntry),
+        .rip = @intFromPtr(&threadEntry),
     };
-    prf.log(prf.LOG_DEBUG, "sched: prepared context for pid %d", .{p.pid});
 }
 
 /// The scheduler loop. Runs on the boot stack and never returns.
@@ -62,26 +65,35 @@ pub fn scheduler() noreturn {
         // Typed control characters signal the foreground job promptly.
         tty.rint();
 
-        for (&kern_proc.table) |*p| {
-            if (p.state != .runnable) {
+        for (&kern_proc.threads) |*td| {
+            // A thread that exited is freed here, now that nothing runs on
+            // its kernel stack any more.
+            if (td.state == .dead) {
+                kern_proc.threadRelease(td);
+                continue;
+            }
+            if (td.state != .runnable or td.proc.state != .active) {
                 continue;
             }
             found = true;
-            p.state = .running;
+            const p: *proc.Proc = td.proc;
+            td.state = .running;
+            kern_proc.curthread = td;
             kern_proc.current = p;
-            arch.gdt.setKernelStack(p.kstack_top);
-            arch.syscall_entry.setKernelStack(p.kstack_top);
-            // Reloading CR3 flushes the TLB: skip it when the process runs
-            // in the address space already loaded (it was the last one).
+            arch.gdt.setKernelStack(td.kstack_top);
+            arch.syscall_entry.setKernelStack(td.kstack_top);
+            // Reloading CR3 flushes the TLB: skip it when the thread runs
+            // in the address space already loaded (its process's, or a
+            // sibling thread's).
             if (arch.pmap.current() != p.pmap) {
                 arch.pmap.activate(p.pmap);
             }
-            // Restore the process's user thread pointer (TLS base).
-            arch.cpu.setFsBase(p.fsbase);
+            // Restore the thread's user thread pointer (TLS base).
+            arch.cpu.setFsBase(td.fsbase);
             // And its FPU registers (saved by sched() when it stopped).
-            arch.fpu.fpurestore(&p.fpu);
+            arch.fpu.fpurestore(&td.fpu);
             in_scheduler = false;
-            arch.swtch.swtch(&sched_ctx, &p.context);
+            arch.swtch.swtch(&sched_ctx, &td.context);
         }
 
         if (!found) {
@@ -97,30 +109,32 @@ pub fn scheduler() noreturn {
     }
 }
 
-/// Panic if the current process overran its kernel stack: the canary at the
+/// Panic if the running thread overran its kernel stack: the canary at the
 /// bottom of the stack was overwritten. Without this, an overflow silently
 /// corrupts whatever page follows the stack.
 fn checkStack() void {
-    const p = kern_proc.current;
-    if (p.kstack_page == 0) return;
+    const td: *proc.Thread = kern_proc.curthread;
+    if (td.kstack_page == 0) return;
     const hhdm: u64 = arch.boot.hhdmOffset() orelse return;
-    const canary: *const u64 = @ptrFromInt(p.kstack_page + hhdm);
+    const canary: *const u64 = @ptrFromInt(td.kstack_page + hhdm);
     if (canary.* != param.KSTACK_CANARY) {
-        prf.printf("pid %d (%s): kernel stack overflow\n", .{ p.pid, p.name[0..p.name_len] });
+        const p: *proc.Proc = td.proc;
+        prf.printf("pid %d tid %d (%s): kernel stack overflow\n", .{ p.pid, td.tid, p.name[0..p.name_len] });
         prf.panic("kernel stack overflow", null);
     }
 }
 
-/// Give up the CPU and let the scheduler pick another process.
+/// Give up the CPU and let the scheduler pick another thread.
 pub fn sched() void {
     checkStack();
-    arch.fpu.fpusave(&kern_proc.current.fpu);
-    arch.swtch.swtch(&kern_proc.current.context, &sched_ctx);
+    const td: *proc.Thread = kern_proc.curthread;
+    arch.fpu.fpusave(&td.fpu);
+    arch.swtch.swtch(&td.context, &sched_ctx);
 }
 
 /// Voluntarily yield the CPU (still runnable).
 pub fn yield() void {
-    kern_proc.current.state = .runnable;
+    kern_proc.curthread.state = .runnable;
     sched();
 }
 
@@ -139,19 +153,45 @@ pub fn ioWakeup() void {
     wakeup(arch.clock.pollChannel());
 }
 
-/// Block the current process on `chan` until wakeup(chan).
+/// Block the running thread on `chan` until wakeup(chan) (or a signal, see
+/// kern_signal).
 pub fn sleep(chan: ?*anyopaque) void {
-    kern_proc.current.chan = chan;
-    kern_proc.current.state = .sleeping;
-    sched();
-    kern_proc.current.chan = null;
+    sleepUntil(chan, 0);
 }
 
-/// Wake every process sleeping on `chan`.
+/// Block the running thread on `chan` until wakeup(chan), a signal, or
+/// clock tick `deadline` (0: no deadline).
+pub fn sleepUntil(chan: ?*anyopaque, deadline: u64) void {
+    const td: *proc.Thread = kern_proc.curthread;
+    td.chan = chan;
+    td.wake_tick = deadline;
+    td.state = .sleeping;
+    sched();
+    td.chan = null;
+    td.wake_tick = 0;
+}
+
+/// Wake every thread sleeping on `chan`.
 pub fn wakeup(chan: ?*anyopaque) void {
-    for (&kern_proc.table) |*p| {
-        if (p.state == .sleeping and p.chan == chan) {
-            p.state = .runnable;
+    for (&kern_proc.threads) |*td| {
+        if (td.state == .sleeping and td.chan == chan) {
+            td.state = .runnable;
+        }
+    }
+}
+
+/// Make thread `td` runnable if it sleeps (on any channel): a signal or an
+/// exit asks it to look.
+pub fn wakeThread(td: *proc.Thread) void {
+    if (td.state == .sleeping) td.state = .runnable;
+}
+
+/// Wake the threads whose timed sleep ended at clock tick `ticks` (called
+/// on every tick).
+pub fn wakeTimedOut(ticks: u64) void {
+    for (&kern_proc.threads) |*td| {
+        if (td.state == .sleeping and td.wake_tick != 0 and ticks >= td.wake_tick) {
+            td.state = .runnable;
         }
     }
 }

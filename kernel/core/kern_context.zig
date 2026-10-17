@@ -28,7 +28,7 @@ fn getContext(addr: u64) u64 {
     const uc = userUcontext(addr) orelse return sys.signed(-errno.EFAULT);
     const raw: [*]u8 = @ptrCast(uc);
     @memset(raw[0..@sizeOf(ucontext.Ucontext)], 0);
-    uc.uc_sigmask = ucontext.setOf(kern_proc.current.sig_mask);
+    uc.uc_sigmask = ucontext.setOf(kern_proc.curthread.sig_mask);
     arch.exec_machdep.getMcontext(frame, &uc.uc_mcontext, true);
     return 0;
 }
@@ -38,7 +38,7 @@ fn setContext(addr: u64) u64 {
     const frame = arch.trap.currentFrame() orelse return sys.signed(-errno.EINVAL);
     const uc = userUcontext(addr) orelse return sys.signed(-errno.EFAULT);
     if (!arch.exec_machdep.setMcontext(frame, &uc.uc_mcontext)) return sys.signed(-errno.EINVAL);
-    kern_proc.current.sig_mask = ucontext.maskOf(uc.uc_sigmask) & ~signal.CANTMASK;
+    kern_proc.curthread.sig_mask = ucontext.maskOf(uc.uc_sigmask) & ~signal.CANTMASK;
     return sys.signed(-errno.EJUSTRETURN);
 }
 

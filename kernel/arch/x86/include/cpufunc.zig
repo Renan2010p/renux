@@ -63,6 +63,15 @@ fn enableSse() void {
 /// Early CPU bring-up, run from the machine-dependent entry point.
 pub fn startup() void {
     enableSse();
+    enableWriteProtect();
+}
+
+/// Set CR0.WP: read-only pages stay read-only for the kernel too. A page
+/// shared copy-on-write after fork is read-only in both processes; without
+/// WP a kernel write into it (copying a system call's result out) would
+/// change the other process's memory instead of faulting to copy the page.
+fn enableWriteProtect() void {
+    writeCr0(readCr0() | (1 << 16));
 }
 
 /// Halt the CPU until the next interrupt.

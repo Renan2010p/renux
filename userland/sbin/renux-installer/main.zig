@@ -4,15 +4,18 @@
 // renux-installer: install Renux onto a disk, the way bsdinstall does.
 //
 // A menu-driven installer (dialog) that writes a GPT with an EFI system
-// partition and an ext2 root, copies the images the kernel carries (/dev/md0
-// is the root image, /dev/md1 the ESP image), and generates the installed
-// system's /etc/fstab. Run with no arguments for the menu, or
+// partition and an ext2 root, copies the images the kernel carries (/dev/md2
+// is the installed root, gzip-compressed, with the system compiler; /dev/md1
+// the ESP image; /dev/md0, the live root, stands in for /dev/md2 in a build
+// without it), and generates the installed system's /etc/fstab. Run with no arguments for the menu, or
 // `renux-installer -y /dev/vda` to install unattended.
 //
-// The root image is already an ext2 filesystem, so installing is a byte copy
-// of it onto the root partition -- no formatter runs on the target -- and the
-// ESP image already holds the loader and the kernel.
+// The root image is already an ext2 filesystem, so installing is a copy of
+// it onto the root partition -- inflated on the way when it is compressed --
+// with no formatter run on the target; the ESP image already holds the
+// loader and the kernel.
 
+const std: type = @import("std");
 const libc: type = @import("libc");
 comptime {
     _ = @import("csu").crt0;
@@ -268,6 +271,70 @@ fn copyImage(src_path: [*:0]const u8, fd: u64, dst_off: u64, max: u64) u64 {
     return off;
 }
 
+/// Inflate the gzip-compressed image `src_path` (a memory disk) onto `fd` at
+/// byte offset `dst_off`, writing at most `max` bytes. Returns the bytes
+/// written, or null when there is no such image (the caller then copies
+/// the live root instead).
+fn inflateImage(src_path: [*:0]const u8, fd: u64, dst_off: u64, max: u64) ?u64 {
+    const src = openPath(src_path, sys.O_RDONLY);
+    if (src < 0) return null;
+    defer _ = sys.close(@intCast(src));
+    var sz: i64 = 0;
+    _ = sys.ioctl(@intCast(src), DIOCGMEDIASIZE, @intFromPtr(&sz));
+    if (sz <= 0) return null;
+    const len: u64 = @intCast(sz);
+
+    // The compressed image, read whole into anonymous memory.
+    const PROT_READ: u64 = 0x1;
+    const PROT_WRITE: u64 = 0x2;
+    const MAP_PRIVATE: u64 = 0x0002;
+    const MAP_ANON: u64 = 0x1000;
+    const addr: i64 = sys.mmapRaw(0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, std.math.maxInt(u64), 0);
+    if (addr <= 0) {
+        libc.stdio.printf("installer: no memory for %s (%u bytes)\n", .{ span(src_path), len });
+        return 0;
+    }
+    defer _ = sys.munmap(@intCast(addr), len);
+    const compressed: []u8 = @as([*]u8, @ptrFromInt(@as(u64, @intCast(addr))))[0..@intCast(len)];
+    var got: u64 = 0;
+    while (got < len) {
+        const n: u64 = sys.read(@intCast(src), compressed[@intCast(got)..]);
+        if (n == 0 or n > len - got) {
+            libc.stdio.printf("installer: reading %s failed at %u\n", .{ span(src_path), got });
+            return 0;
+        }
+        got += n;
+    }
+
+    var input: std.Io.Reader = .fixed(compressed);
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var gz: std.compress.flate.Decompress = .init(&input, .gzip, &window);
+    var buf: [256 * 1024]u8 = undefined;
+    var off: u64 = 0;
+    var next_report: u64 = 0;
+    while (true) {
+        const n: usize = gz.reader.readSliceShort(&buf) catch {
+            libc.stdio.printf("installer: %s is corrupt (at %u bytes)\n", .{ span(src_path), off });
+            return off;
+        };
+        if (n == 0) break;
+        if (off + n > max) {
+            libc.stdio.printf("installer: the disk is too small for the root (more than %u MB)\n", .{max / (1024 * 1024)});
+            return off;
+        }
+        if (!pwrite(fd, dst_off + off, buf[0..n])) {
+            libc.stdio.printf("installer: write to the target failed at offset %u\n", .{dst_off + off});
+            return off;
+        }
+        off += n;
+        if (off >= next_report) {
+            libc.stdio.printf("installer: %u MB written\n", .{off / (1024 * 1024)});
+            next_report += 128 * 1024 * 1024;
+        }
+    }
+    return off;
+}
+
 // -- the installed fstab -----------------------------------------------------
 //
 // The root image is copied byte for byte, so its /etc/fstab is rewritten here,
@@ -278,8 +345,9 @@ const Ext2 = struct {
     fd: u64,
     base: u64, // byte offset of the filesystem
     bs: u32,
-    itable: u64, // block of the first inode table
-    ipg: u32,
+    gdt: u64, // byte offset of the group descriptor table
+    ipg: u32, // inodes per group
+    inode_size: u32,
 
     fn readAt(self: Ext2, off: u64, buf: []u8) void {
         pread(self.fd, self.base + off, buf);
@@ -287,37 +355,45 @@ const Ext2 = struct {
     fn writeAt(self: Ext2, off: u64, buf: []const u8) void {
         _ = pwrite(self.fd, self.base + off, buf);
     }
-    fn inodeOff(self: Ext2, ino: u32, inode_size: u32) u64 {
-        return self.itable * self.bs + @as(u64, ino - 1) * inode_size;
+    /// Byte offset of inode `ino`: in the inode table of its block group.
+    fn inodeOff(self: Ext2, ino: u32) u64 {
+        const group: u64 = (ino - 1) / self.ipg;
+        var gd: [32]u8 = undefined;
+        self.readAt(self.gdt + group * 32, &gd);
+        const itable: u64 = get32(&gd, 8);
+        return itable * self.bs + @as(u64, (ino - 1) % self.ipg) * self.inode_size;
     }
 };
 
-/// Look up `name` in the directory inode `dir_ino`; returns its inode number.
-fn dirLookup(x: Ext2, dir_ino: u32, inode_size: u32, name: []const u8) ?u32 {
+fn get32(b: []const u8, o: usize) u32 {
+    return @as(u32, b[o]) | (@as(u32, b[o + 1]) << 8) | (@as(u32, b[o + 2]) << 16) | (@as(u32, b[o + 3]) << 24);
+}
+
+/// The largest block size the installer handles (ext2 allows 1, 2 or 4 KiB).
+const MAX_BS: usize = 4096;
+
+/// Look up `name` in the directory inode `dir_ino` (its direct blocks);
+/// returns its inode number.
+fn dirLookup(x: Ext2, dir_ino: u32, name: []const u8) ?u32 {
     var ino_buf: [256]u8 = undefined;
-    x.readAt(x.inodeOff(dir_ino, inode_size), ino_buf[0..inode_size]);
-    var block: u64 = 0;
+    x.readAt(x.inodeOff(dir_ino), ino_buf[0..x.inode_size]);
+    const bs: usize = x.bs;
+    var blk: [MAX_BS]u8 = undefined;
     var i: usize = 0;
     while (i < 12) : (i += 1) {
-        const b = @as(u32, ino_buf[40 + i * 4]) | (@as(u32, ino_buf[40 + i * 4 + 1]) << 8) |
-            (@as(u32, ino_buf[40 + i * 4 + 2]) << 16) | (@as(u32, ino_buf[40 + i * 4 + 3]) << 24);
-        if (b != 0) {
-            block = b;
-            break;
+        const block: u64 = get32(&ino_buf, 40 + i * 4);
+        if (block == 0) continue;
+        x.readAt(block * bs, blk[0..bs]);
+        var pos: usize = 0;
+        while (pos + 8 <= bs) {
+            const ent_ino: u32 = get32(&blk, pos);
+            const reclen: usize = @as(u16, blk[pos + 4]) | (@as(u16, blk[pos + 5]) << 8);
+            const namlen: usize = blk[pos + 6];
+            if (reclen < 8 or pos + reclen > bs) break;
+            if (ent_ino != 0 and namlen == name.len and pos + 8 + namlen <= bs and
+                eql(blk[pos + 8 .. pos + 8 + namlen], name)) return ent_ino;
+            pos += reclen;
         }
-    }
-    if (block == 0) return null;
-    var blk: [4096]u8 = undefined;
-    const bs: usize = x.bs;
-    x.readAt(block * bs, blk[0..bs]);
-    var pos: usize = 0;
-    while (pos + 8 <= bs) {
-        const ent_ino = @as(u32, blk[pos]) | (@as(u32, blk[pos + 1]) << 8) | (@as(u32, blk[pos + 2]) << 16) | (@as(u32, blk[pos + 3]) << 24);
-        const reclen = @as(u16, blk[pos + 4]) | (@as(u16, blk[pos + 5]) << 8);
-        const namlen: usize = blk[pos + 6];
-        if (reclen == 0) break;
-        if (ent_ino != 0 and namlen == name.len and eql(blk[pos + 8 .. pos + 8 + namlen], name)) return ent_ino;
-        pos += reclen;
     }
     return null;
 }
@@ -336,31 +412,36 @@ fn writeFstab(fd: u64, base: u64, content: []const u8) bool {
     var sb: [1024]u8 = undefined;
     pread(fd, base + 1024, &sb);
     if ((sb[56] | (@as(u16, sb[57]) << 8)) != 0xEF53) return false; // magic
-    const log_bs: u32 = @as(u32, sb[24]) | (@as(u32, sb[25]) << 8) | (@as(u32, sb[26]) << 16) | (@as(u32, sb[27]) << 24);
+    const log_bs: u32 = get32(&sb, 24);
+    if (log_bs > 2) return false; // blocks larger than MAX_BS
+    const bs: u32 = @as(u32, 1024) << @intCast(log_bs);
     const inode_size: u32 = @as(u16, sb[88]) | (@as(u16, sb[89]) << 8);
-    const first_data: u32 = @as(u32, sb[20]) | (@as(u32, sb[21]) << 8) | (@as(u32, sb[22]) << 16) | (@as(u32, sb[23]) << 24);
-    const gd_off: u64 = (@as(u64, first_data) + 1) * (@as(u64, 1024) << @intCast(log_bs));
-    var gd: [32]u8 = undefined;
-    pread(fd, base + gd_off, &gd);
-    const itable: u64 = @as(u32, gd[8]) | (@as(u32, gd[9]) << 8) | (@as(u32, gd[10]) << 16) | (@as(u32, gd[11]) << 24);
-    const ipg: u32 = @as(u32, sb[40]) | (@as(u32, sb[41]) << 8) | (@as(u32, sb[42]) << 16) | (@as(u32, sb[43]) << 24);
-
-    const x: Ext2 = .{ .fd = fd, .base = base, .bs = @as(u32, 1024) << @intCast(log_bs), .itable = itable, .ipg = ipg };
-    const etc = dirLookup(x, 2, inode_size, "etc") orelse return false;
-    const fstab = dirLookup(x, etc, inode_size, "fstab") orelse return false;
+    if (inode_size > 256) return false;
+    // The group descriptors follow the superblock's block.
+    const first_data: u64 = get32(&sb, 20);
+    const x: Ext2 = .{
+        .fd = fd,
+        .base = base,
+        .bs = bs,
+        .gdt = (first_data + 1) * bs,
+        .ipg = get32(&sb, 40),
+        .inode_size = inode_size,
+    };
+    const etc = dirLookup(x, 2, "etc") orelse return false;
+    const fstab = dirLookup(x, etc, "fstab") orelse return false;
 
     // The file's first direct block.
     var ino_buf: [256]u8 = undefined;
-    const io = x.inodeOff(fstab, inode_size);
+    const io = x.inodeOff(fstab);
     x.readAt(io, ino_buf[0..inode_size]);
-    const data_block: u32 = @as(u32, ino_buf[40]) | (@as(u32, ino_buf[41]) << 8) | (@as(u32, ino_buf[42]) << 16) | (@as(u32, ino_buf[43]) << 24);
-    if (data_block == 0 or content.len > x.bs) return false;
-    var blk: [1024]u8 = @splat(0);
+    const data_block: u32 = get32(&ino_buf, 40);
+    if (data_block == 0 or content.len > bs) return false;
+    var blk: [MAX_BS]u8 = @splat(0);
     @memcpy(blk[0..content.len], content);
-    x.writeAt(data_block * x.bs, blk[0..x.bs]);
+    x.writeAt(@as(u64, data_block) * bs, blk[0..bs]);
     // i_size, and one block counted in i_blocks.
     put32(ino_buf[0..], 4, @intCast(content.len));
-    put32(ino_buf[0..], 28, x.bs / 512);
+    put32(ino_buf[0..], 28, bs / 512);
     x.writeAt(io, ino_buf[0..inode_size]);
     return true;
 }
@@ -388,8 +469,13 @@ fn install(dev: [*:0]const u8) bool {
     libc.stdio.printf("installer: writing the GPT on %s\n", .{span(dev)});
     writeGpt(@intCast(fd), sectors);
 
-    libc.stdio.printf("installer: copying the root image\n", .{});
-    _ = copyImage("/dev/md0", @intCast(fd), ROOT_START * SECTOR, (sectors - 34 - ROOT_START) * SECTOR);
+    // The installed root (with the system compiler) when the installer
+    // carries it, else the live root.
+    const root_max: u64 = (sectors - 34 - ROOT_START) * SECTOR;
+    libc.stdio.printf("installer: writing the root file system\n", .{});
+    if (inflateImage("/dev/md2", @intCast(fd), ROOT_START * SECTOR, root_max) == null) {
+        _ = copyImage("/dev/md0", @intCast(fd), ROOT_START * SECTOR, root_max);
+    }
 
     libc.stdio.printf("installer: writing the EFI system partition\n", .{});
     _ = copyImage("/dev/md1", @intCast(fd), ESP_START * SECTOR, ESP_SECTORS * SECTOR);

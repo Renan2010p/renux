@@ -21,8 +21,10 @@ const sys: type = @import("../../../sys/syscall.zig");
 const errno: type = @import("../../../sys/errno.zig");
 const signal: type = @import("../../../sys/signal.zig");
 const ucontext: type = @import("../../../sys/ucontext.zig");
+const proc: type = @import("../../../sys/proc.zig");
 const kern_proc: type = @import("../../../core/kern_proc.zig");
 const kern_exec: type = @import("../../../core/kern_exec.zig");
+const kern_signal: type = @import("../../../core/kern_signal.zig");
 const trap: type = @import("trap.zig");
 
 const TrapFrame: type = trapframe.TrapFrame;
@@ -77,7 +79,7 @@ pub const sigcode = [_]u8{
 /// Fill `mc` with the context `frame` returns to. With `clear_ret` the
 /// context reads as a system call that returned 0 (getcontext(2)).
 pub fn getMcontext(frame: *const TrapFrame, mc: *align(1) Mcontext, clear_ret: bool) void {
-    const p = kern_proc.current;
+    const td: *proc.Thread = kern_proc.curthread;
     const raw: [*]u8 = @ptrCast(mc);
     @memset(raw[0..@sizeOf(Mcontext)], 0);
     mc.mc_rdi = frame.rdi;
@@ -108,7 +110,7 @@ pub fn getMcontext(frame: *const TrapFrame, mc: *align(1) Mcontext, clear_ret: b
         mc.mc_rflags &= ~PSL_C;
     }
     mc.mc_flags = ucontext_md._MC_HASBASES;
-    mc.mc_fsbase = p.fsbase;
+    mc.mc_fsbase = td.fsbase;
     mc.mc_len = @sizeOf(Mcontext);
 
     // The registers hold this process's FPU state (the kernel never uses
@@ -127,7 +129,7 @@ pub fn setMcontext(frame: *TrapFrame, mc: *align(1) const Mcontext) bool {
     if ((mc.mc_flags & ucontext_md._MC_HASBASES) != 0 and mc.mc_fsbase >= VM_MAXUSER_ADDRESS) return false;
     if (mc.mc_rip >= VM_MAXUSER_ADDRESS) return false;
 
-    const p = kern_proc.current;
+    const td: *proc.Thread = kern_proc.curthread;
     frame.rdi = mc.mc_rdi;
     frame.rsi = mc.mc_rsi;
     frame.rdx = mc.mc_rdx;
@@ -157,17 +159,24 @@ pub fn setMcontext(frame: *TrapFrame, mc: *align(1) const Mcontext) bool {
         fpu.fpurestore(&s);
     }
     if ((mc.mc_flags & ucontext_md._MC_HASBASES) != 0) {
-        p.fsbase = mc.mc_fsbase;
+        td.fsbase = mc.mc_fsbase;
         cpufunc.setFsBase(mc.mc_fsbase);
     }
     return true;
 }
 
-/// Divert the process to `catcher` for `sig` (FreeBSD's sendsig). `oldmask`
-/// is the signal mask to restore when the handler returns. Returns false when
-/// the frame cannot be placed (the caller then kills the process).
-pub fn sendsig(frame: *TrapFrame, sig: u32, catcher: u64, siginfo: bool, oldmask: u64) bool {
+/// Divert thread `td` to `catcher` for `sig` (FreeBSD's sendsig). `oldmask`
+/// is the signal mask to restore when the handler returns. The handler runs
+/// on the thread's alternate stack when `onstack` (SA_ONSTACK) is set, one
+/// is enabled and the thread is not on it already; otherwise below the red
+/// zone of the interrupted stack. Returns false when the frame cannot be
+/// placed (the caller then kills the process).
+pub fn sendsig(frame: *TrapFrame, td: *proc.Thread, sig: u32, catcher: u64, siginfo: bool, onstack: bool, oldmask: u64) bool {
+    const oonstack: bool = kern_signal.sigonstack(td, frame.rsp);
     var sp: u64 = frame.rsp -% REDZONE;
+    if (td.altstack) |ss| {
+        if (onstack and !oonstack) sp = ss.ss_sp +% ss.ss_size;
+    }
     sp -%= @sizeOf(Sigframe);
     sp &= ~@as(u64, 15);
     if (sp < 4096 or sp >= VM_MAXUSER_ADDRESS) return false;
@@ -178,6 +187,9 @@ pub fn sendsig(frame: *TrapFrame, sig: u32, catcher: u64, siginfo: bool, oldmask
     sf.sf_ahu = catcher;
     getMcontext(frame, &sf.sf_uc.uc_mcontext, false);
     sf.sf_uc.uc_sigmask = ucontext.setOf(oldmask);
+    sf.sf_uc.uc_stack = td.altstack orelse .{ .ss_sp = 0, .ss_size = 0, .ss_flags = 0 };
+    sf.sf_uc.uc_stack.ss_flags = if (td.altstack != null) (if (oonstack) signal.SS_ONSTACK else 0) else signal.SS_DISABLE;
+    sf.sf_uc.uc_mcontext.mc_onstack = @intFromBool(oonstack);
     sf.sf_si.si_signo = @intCast(sig);
     sf.sf_si.si_code = signal.SI_NOINFO;
 
@@ -198,6 +210,6 @@ pub fn sysSigreturn(args: [sys.MAXARGS]u64) u64 {
     if (args[0] == 0 or args[0] >= VM_MAXUSER_ADDRESS) return sys.signed(-errno.EFAULT);
     const uc: *align(1) const ucontext.Ucontext = @ptrFromInt(args[0]);
     if (!setMcontext(frame, &uc.uc_mcontext)) return sys.signed(-errno.EINVAL);
-    kern_proc.current.sig_mask = ucontext.maskOf(uc.uc_sigmask) & ~signal.CANTMASK;
+    kern_proc.curthread.sig_mask = ucontext.maskOf(uc.uc_sigmask) & ~signal.CANTMASK;
     return sys.signed(-errno.EJUSTRETURN);
 }

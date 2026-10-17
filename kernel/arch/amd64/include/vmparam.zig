@@ -3,9 +3,9 @@
 //
 // amd64 virtual memory parameters.
 //
-// This is the Zig counterpart of NetBSD's sys/arch/amd64/include/vmparam.h:
-// the kernel virtual address layout constants. Only what early bring-up needs
-// is defined; the full user/kernel split will grow as the VM system does.
+// The Zig counterpart of FreeBSD's sys/amd64/include/vmparam.h: the layout of
+// the address space. The user half is FreeBSD/amd64's: 128 TiB, with the
+// main stack at the top and mmap(2) room below it.
 
 const param: type = @import("../../../sys/param.zig");
 
@@ -21,11 +21,16 @@ pub const PAGE_SIZE: u64 = param.PAGE_SIZE;
 /// split an existing large page.
 pub const KERNEL_SCRATCH_BASE: u64 = 0xffffff0000000000;
 
-/// Top of the initial user stack, in the lower (user) half.
-pub const USER_STACK_TOP: u64 = 0x0000_0000_8000_0000;
+/// One past the highest user address (FreeBSD's VM_MAXUSER_ADDRESS).
+pub const VM_MAXUSER_ADDRESS: u64 = 0x0000_7fff_ffff_f000;
 
-/// Size of the initial user stack.
-pub const USER_STACK_SIZE: u64 = 0x0000_0000_0080_0000;
+/// Top of the main thread's stack (FreeBSD's USRSTACK: one page below the
+/// top, where FreeBSD keeps its shared page).
+pub const USER_STACK_TOP: u64 = VM_MAXUSER_ADDRESS - PAGE_SIZE;
+
+/// Address space reserved for the main stack below USER_STACK_TOP, filled
+/// on demand like any anonymous memory (the default RLIMIT_STACK).
+pub const USER_STACK_SIZE: u64 = 64 * 1024 * 1024;
 
 /// Largest stack a process may ask for (FreeBSD's MAXSSIZ, 512 MiB on
 /// amd64): setrlimit(RLIMIT_STACK) is clamped to it. libthr places the main

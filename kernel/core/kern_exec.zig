@@ -24,6 +24,9 @@ const vfs_subr: type = @import("vfs_subr.zig");
 const arch: type = @import("../arch/arch.zig");
 const std: type = @import("std");
 const kern_proc: type = @import("kern_proc.zig");
+const vm_map: type = @import("../vm/vm_map.zig");
+const vm_fault: type = @import("../vm/vm_fault.zig");
+const kern_exit: type = @import("kern_exit.zig");
 const vm_page: type = @import("../vm/vm_page.zig");
 const param: type = @import("../sys/param.zig");
 const prf: type = @import("subr_prf.zig");
@@ -159,22 +162,14 @@ pub const StartInfo: type = struct {
     envp: u64,
 };
 
-/// Read from a vnode, for the ELF loader.
-fn vnodeRead(ctx: *anyopaque, offset: u64, buf: []u8) usize {
-    const vp: *vnode.Vnode = @ptrCast(@alignCast(ctx));
-    const n: isize = vp.v_op.read(vp, offset, buf);
-    if (n <= 0) {
-        return 0;
-    }
-    return @intCast(n);
-}
-
-/// Load the program at `path` (relative to `start`, or absolute) into page map
-/// `pmap`, at link address + `base`. Returns null when the path cannot be
-/// resolved, opened or interpreted.
-pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8, base: u64) ?exec_elf.Result {
+/// Load the program at `path` (relative to `start`, or absolute) into the
+/// address space (`map`, `pmap`), at link address + `base`. Returns null
+/// when the path cannot be resolved, opened or interpreted.
+pub fn loadInto(start: ?*vnode.Vnode, map: *vm_map.VmMap, pmap: arch.pmap.Pmap, path: []const u8, base: u64) ?exec_elf.Result {
     prf.log(prf.LOG_DEBUG, "exec: loading %s", .{path});
     const vp: *vnode.Vnode = vfs_lookup.nameiAt(start, path) orelse return null;
+    // The map takes its own references on the file; this one ends here.
+    defer vfs_subr.vrele(vp);
 
     var vap: vnode.Vattr = .{
         .type = .vnone,
@@ -188,24 +183,20 @@ pub fn loadInto(start: ?*vnode.Vnode, pmap: arch.pmap.Pmap, path: []const u8, ba
         .mtime = 0,
         .ctime = 0,
     };
-    var size: u64 = 0;
-    if (vp.v_op.getattr(vp, &vap) == 0) {
-        size = vap.size;
-    }
-
-    const src: exec_elf.Source = .{ .ctx = vp, .size = size, .read = vnodeRead };
-    const result: ?exec_elf.Result = exec_elf.load(pmap, src, base);
-    vfs_subr.vrele(vp);
-    return result;
+    if (vp.v_op.getattr(vp, &vap) != 0) return null;
+    const img: exec_elf.Image = .{ .vp = vp, .size = vap.size, .map = map, .pmap = pmap };
+    return exec_elf.load(&img, base);
 }
 
-/// Map a fresh user stack in `pmap`.
-fn mapStack(pmap: arch.pmap.Pmap) bool {
-    var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
-    while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
-        const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
-        arch.pmap.enterUser(pmap, va, pa, .user_rw);
-    }
+/// Reserve the main thread's stack in `map`: anonymous memory below
+/// USER_STACK_TOP, made as the stack grows into it.
+pub fn mapStack(map: *vm_map.VmMap, pmap: arch.pmap.Pmap) bool {
+    vm_map.insert(map, pmap, .{
+        .start = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE,
+        .end = arch.vmparam.USER_STACK_TOP,
+        .prot = vm_map.PROT_READ | vm_map.PROT_WRITE,
+        .object = .anon,
+    }) catch return false;
     return true;
 }
 
@@ -216,64 +207,33 @@ pub fn trampolineVa() u64 {
 
 /// Map the signal trampoline: a page holding the port's sigcode, where a
 /// process resumes to run a signal handler and then call sigreturn(2).
-pub fn mapTrampoline(pmap: arch.pmap.Pmap) bool {
-    const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
-    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
-
-    const stub = arch.exec_machdep.sigcode;
-    const dst: [*]u8 = @ptrFromInt(pa + hhdm);
-    var i: usize = 0;
-    while (i < stub.len) : (i += 1) {
-        dst[i] = stub[i];
-    }
-    arch.pmap.enterUser(pmap, trampolineVa(), pa, .user_rx);
+pub fn mapTrampoline(map: *vm_map.VmMap, pmap: arch.pmap.Pmap) bool {
+    const va: u64 = trampolineVa();
+    vm_map.insert(map, pmap, .{
+        .start = va,
+        .end = va + param.PAGE_SIZE,
+        .prot = vm_map.PROT_READ | vm_map.PROT_WRITE,
+        .object = .anon,
+    }) catch return false;
+    if (!vm_fault.writeBytes(map, pmap, va, &arch.exec_machdep.sigcode)) return false;
+    vm_map.protect(map, pmap, va, va + param.PAGE_SIZE, vm_map.PROT_READ | vm_map.PROT_EXEC) catch return false;
     return true;
 }
 
-/// Write one byte to `va` in `pmap`, through the page's physical address.
-fn putU8(pmap: arch.pmap.Pmap, va: u64, value: u8) bool {
-    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
-    const pa: u64 = arch.pmap.extract(pmap, va) orelse return false;
-    const dst: *u8 = @ptrFromInt(pa + hhdm);
-    dst.* = value;
-    return true;
+/// Write a little-endian 64-bit word to `va` in (`map`, `pmap`).
+fn putU64(map: *vm_map.VmMap, pmap: arch.pmap.Pmap, va: u64, value: u64) bool {
+    const bytes: [8]u8 = @bitCast(std.mem.nativeToLittle(u64, value));
+    return vm_fault.writeBytes(map, pmap, va, &bytes);
 }
 
-/// Write a byte string to `va` in `pmap`, a page at a time through the
-/// pages' physical addresses.
-fn putBytes(pmap: arch.pmap.Pmap, va: u64, src: []const u8) bool {
-    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
-    var done: usize = 0;
-    while (done < src.len) {
-        const addr: u64 = va + done;
-        const in_page: usize = @intCast(param.PAGE_SIZE - (addr % param.PAGE_SIZE));
-        const n: usize = @min(in_page, src.len - done);
-        const pa: u64 = arch.pmap.extract(pmap, addr) orelse return false;
-        const dst: [*]u8 = @ptrFromInt(pa + hhdm);
-        @memcpy(dst[0..n], src[done..][0..n]);
-        done += n;
-    }
-    return true;
-}
-
-/// Write a little-endian 64-bit word to `va` in `pmap`.
-fn putU64(pmap: arch.pmap.Pmap, va: u64, value: u64) bool {
-    var bytes: [8]u8 = undefined;
-    var i: usize = 0;
-    while (i < 8) : (i += 1) {
-        bytes[i] = @truncate(value >> @intCast(i * 8));
-    }
-    return putBytes(pmap, va, &bytes);
-}
-
-/// Build the initial stack in `pmap` for `args`: the strings at the top, then
-/// below them argc, the argv and envp pointer vectors and the aux vector.
-/// Returns where the process should start, or null on failure.
-pub fn buildStack(pmap: arch.pmap.Pmap, args: *const ImageArgs, auxv: []const AuxPair) ?StartInfo {
+/// Build the initial stack in (`map`, `pmap`) for `args`: the strings at the
+/// top, then below them argc, the argv and envp pointer vectors and the aux
+/// vector. Returns where the process should start, or null on failure.
+pub fn buildStack(map: *vm_map.VmMap, pmap: arch.pmap.Pmap, args: *const ImageArgs, auxv: []const AuxPair) ?StartInfo {
     // The strings, as one block (arguments, then environment).
     const strings: []const u8 = args.strings();
     const strings_va: u64 = arch.vmparam.USER_STACK_TOP - strings.len;
-    if (!putBytes(pmap, strings_va, strings)) return null;
+    if (!vm_fault.writeBytes(map, pmap, strings_va, strings)) return null;
     const sp: u64 = strings_va;
     const argc: usize = args.argc;
     const envc: usize = args.envc;
@@ -286,7 +246,7 @@ pub fn buildStack(pmap: arch.pmap.Pmap, args: *const ImageArgs, auxv: []const Au
     base &= ~@as(u64, 15); // 16-byte aligned
     base -= 8; // leave rsp so that rsp % 16 == 8 at entry, and argv 8-aligned
 
-    if (!putU64(pmap, base, argc)) return null;
+    if (!putU64(map, pmap, base, argc)) return null;
     var cursor: u64 = base + 8;
 
     // argv, its terminator, envp, its terminator: the address of each string
@@ -295,50 +255,50 @@ pub fn buildStack(pmap: arch.pmap.Pmap, args: *const ImageArgs, auxv: []const Au
     var start: usize = 0;
     for (0..argc + envc) |index| {
         if (index == argc) {
-            if (!putU64(pmap, cursor, 0)) return null; // argv terminator
+            if (!putU64(map, pmap, cursor, 0)) return null; // argv terminator
             cursor += 8;
         }
-        if (!putU64(pmap, cursor, string_va)) return null;
+        if (!putU64(map, pmap, cursor, string_va)) return null;
         cursor += 8;
         const end: usize = std.mem.indexOfScalarPos(u8, strings, start, 0).?;
         string_va += end + 1 - start;
         start = end + 1;
     }
     if (envc == 0) {
-        if (!putU64(pmap, cursor, 0)) return null; // argv terminator
+        if (!putU64(map, pmap, cursor, 0)) return null; // argv terminator
         cursor += 8;
     }
-    if (!putU64(pmap, cursor, 0)) return null; // envp terminator
+    if (!putU64(map, pmap, cursor, 0)) return null; // envp terminator
     cursor += 8;
 
     // FreeBSD's Elf_Auxinfo is { a_type; a_un; }: a 4-byte type first (padded
     // to 8), then the value.  Both rtld-elf and libc read it this way.
     for (auxv) |pair| {
-        if (!putU64(pmap, cursor, pair.type)) return null;
+        if (!putU64(map, pmap, cursor, pair.type)) return null;
         cursor += 8;
-        if (!putU64(pmap, cursor, pair.val)) return null;
+        if (!putU64(map, pmap, cursor, pair.val)) return null;
         cursor += 8;
     }
     // AT_PAGESIZES points at the page-size array in the last slots;
     // AT_PAGESIZESLEN is its length in bytes.  FreeBSD's libc (getpagesizes)
     // reads them.
     const pagesizes_va: u64 = base + (entries - PAGESIZES_SLOTS) * 8;
-    if (!putU64(pmap, cursor, AT_PAGESIZES)) return null;
+    if (!putU64(map, pmap, cursor, AT_PAGESIZES)) return null;
     cursor += 8;
-    if (!putU64(pmap, cursor, pagesizes_va)) return null;
+    if (!putU64(map, pmap, cursor, pagesizes_va)) return null;
     cursor += 8;
-    if (!putU64(pmap, cursor, AT_PAGESIZESLEN)) return null;
+    if (!putU64(map, pmap, cursor, AT_PAGESIZESLEN)) return null;
     cursor += 8;
-    if (!putU64(pmap, cursor, PAGESIZES_SLOTS * 8)) return null;
+    if (!putU64(map, pmap, cursor, PAGESIZES_SLOTS * 8)) return null;
     cursor += 8;
-    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL type
+    if (!putU64(map, pmap, cursor, 0)) return null; // AT_NULL type
     cursor += 8;
-    if (!putU64(pmap, cursor, 0)) return null; // AT_NULL value
+    if (!putU64(map, pmap, cursor, 0)) return null; // AT_NULL value
     cursor += 8;
     var ps: u64 = 0;
     while (ps < PAGESIZES_SLOTS) : (ps += 1) {
         const v: u64 = if (ps == 0) param.PAGE_SIZE else 0;
-        if (!putU64(pmap, cursor, v)) return null;
+        if (!putU64(map, pmap, cursor, v)) return null;
         cursor += 8;
     }
 
@@ -355,46 +315,47 @@ pub fn buildStack(pmap: arch.pmap.Pmap, args: *const ImageArgs, auxv: []const Au
 const TLS_TCB_SIZE: u64 = 16;
 const TLS_TCB_ALIGN: u64 = 16;
 
-/// Build the initial thread-local storage for `p` from the main image's PT_TLS
-/// and install it as the thread pointer (IA32_FS_BASE). The FreeBSD amd64
+/// Build the initial thread-local storage for thread `td` (the only thread
+/// of its process) from the main image's PT_TLS and install it as the
+/// thread pointer (IA32_FS_BASE). The FreeBSD amd64
 /// kernel does the same, so a statically linked FreeBSD libc can bootstrap:
 /// its own TLS allocator runs (and reads thread-local state) before it installs
 /// the final TCB. With no PT_TLS the thread pointer is left at zero.
-pub fn setupInitialTls(p: *proc.Proc, pmap: arch.pmap.Pmap, main: exec_elf.Result) bool {
+pub fn setupInitialTls(td: *proc.Thread, map: *vm_map.VmMap, pmap: arch.pmap.Pmap, main: exec_elf.Result) bool {
+    const p: *proc.Proc = td.proc;
     if (main.tls_memsz == 0) {
-        p.fsbase = 0;
+        td.fsbase = 0;
         return true;
     }
-    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
 
     const alignment: u64 = if (main.tls_align > TLS_TCB_ALIGN) main.tls_align else TLS_TCB_ALIGN;
     const tls_space: u64 = param.alignUp(main.tls_memsz, alignment);
     const size: u64 = param.alignUp(tls_space + TLS_TCB_SIZE, param.PAGE_SIZE);
-    const base: u64 = param.alignUp(p.mmap_next, param.PAGE_SIZE);
-
-    var va: u64 = base;
-    while (va < base + size) : (va += param.PAGE_SIZE) {
-        const pa: u64 = arch.pmap.allocPage(pmap) orelse return false;
-        arch.pmap.enterUser(pmap, va, pa, .user_rw);
-    }
+    const limit: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
+    const base: u64 = vm_map.findSpace(map, @max(p.mmap_next, param.USER_MMAP_BASE), size, param.PAGE_SIZE, limit) orelse return false;
+    vm_map.insert(map, pmap, .{
+        .start = base,
+        .end = base + size,
+        .prot = vm_map.PROT_READ | vm_map.PROT_WRITE,
+        .object = .anon,
+    }) catch return false;
 
     // Copy the initialised part of the TLS template; the rest stays zero.
-    var i: u64 = 0;
-    while (i < main.tls_filesz) : (i += 1) {
-        const srcpa: u64 = arch.pmap.extract(pmap, main.tls_vaddr + i) orelse return false;
-        const dstpa: u64 = arch.pmap.extract(pmap, base + i) orelse return false;
-        const byte: u8 = @as(*const u8, @ptrFromInt(srcpa + hhdm)).*;
-        @as(*u8, @ptrFromInt(dstpa + hhdm)).* = byte;
+    var chunk: [512]u8 = undefined;
+    var copied: u64 = 0;
+    while (copied < main.tls_filesz) {
+        const n: usize = @intCast(@min(chunk.len, main.tls_filesz - copied));
+        if (!vm_fault.readBytes(map, pmap, main.tls_vaddr + copied, chunk[0..n])) return false;
+        if (!vm_fault.writeBytes(map, pmap, base + copied, chunk[0..n])) return false;
+        copied += n;
     }
 
     // The thread pointer sits just past the TLS data; the TCB is {self, dtv}.
     const tp: u64 = base + tls_space;
-    const selfpa: u64 = arch.pmap.extract(pmap, tp) orelse return false;
-    @as(*u64, @ptrFromInt(selfpa + hhdm)).* = tp;
-    const dtvpa: u64 = arch.pmap.extract(pmap, tp + 8) orelse return false;
-    @as(*u64, @ptrFromInt(dtvpa + hhdm)).* = 0;
+    if (!putU64(map, pmap, tp, tp)) return false;
+    if (!putU64(map, pmap, tp + 8, 0)) return false;
 
-    p.fsbase = tp;
+    td.fsbase = tp;
     p.mmap_next = base + size;
     return true;
 }
@@ -481,6 +442,10 @@ fn recordExePath(p: *proc.Proc, path: []const u8) void {
 /// caller's address space). A "#!" script runs its interpreter. On success the
 /// caller returns to ring 3.
 pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64, envp_ptr: u64) i32 {
+    // The other threads of the process end first (FreeBSD's
+    // thread_single in do_execve): the new image starts with one thread.
+    kern_exit.singleThread();
+
     // Copy the caller's arguments and environment while its address space
     // is still current (FreeBSD's exec_copyin_args).
     var args: ImageArgs = ImageArgs.init() catch return -errno.ENOMEM;
@@ -535,12 +500,20 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
         p.name_len = m;
     }
 
+    // The new image's address space: its map and page tables, built aside
+    // and swapped in only once everything succeeded; on a failure they go.
     const newmap: arch.pmap.Pmap = arch.pmap.create() orelse return -errno.ENOMEM;
-    const main: exec_elf.Result = loadInto(p.cwd, newmap, exe_path, 0) orelse return -errno.ENOEXEC;
-    if (!mapStack(newmap)) {
+    var newvm: vm_map.VmMap = .{};
+    var committed: bool = false;
+    defer if (!committed) {
+        vm_map.deinit(&newvm);
+        arch.pmap.destroy(newmap, 0);
+    };
+    const main: exec_elf.Result = loadInto(p.cwd, &newvm, newmap, exe_path, 0) orelse return -errno.ENOEXEC;
+    if (!mapStack(&newvm, newmap)) {
         return -errno.ENOMEM;
     }
-    if (!mapTrampoline(newmap)) {
+    if (!mapTrampoline(&newvm, newmap)) {
         return -errno.ENOMEM;
     }
 
@@ -551,7 +524,7 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     var interp_base: u64 = 0;
     if (main.interp_len > 0) {
         const ipath: []const u8 = main.interp[0..main.interp_len];
-        const interp_res: exec_elf.Result = loadInto(p.cwd, newmap, ipath, INTERP_BASE) orelse return -errno.ENOEXEC;
+        const interp_res: exec_elf.Result = loadInto(p.cwd, &newvm, newmap, ipath, INTERP_BASE) orelse return -errno.ENOEXEC;
         entry = interp_res.entry;
         interp_base = INTERP_BASE;
     }
@@ -579,13 +552,11 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     auxv[an] = .{ .type = AT_EGID, .val = p.uid };
     an += 1;
 
-    const info: StartInfo = buildStack(newmap, image_args, auxv[0..an]) orelse return -errno.ENOMEM;
+    const info: StartInfo = buildStack(&newvm, newmap, image_args, auxv[0..an]) orelse return -errno.ENOMEM;
 
     p.brk = main.brk;
     p.mmap_next = param.USER_MMAP_BASE;
-    p.inherit_zero = @splat(.{});
-    p.anon = @splat(.{});
-    if (!setupInitialTls(p, newmap, main)) {
+    if (!setupInitialTls(kern_proc.curthread, &newvm, newmap, main)) {
         return -errno.ENOMEM;
     }
 
@@ -601,22 +572,35 @@ pub fn execve(frame: *arch.trapframe.TrapFrame, path: []const u8, argv_ptr: u64,
     }
 
     // The new image starts with a clean FPU (FreeBSD's fpstate_drop).
-    p.fpu = arch.fpu.initial();
-    arch.fpu.fpurestore(&p.fpu);
+    const td: *proc.Thread = kern_proc.curthread;
+    td.fpu = arch.fpu.initial();
+    arch.fpu.fpurestore(&td.fpu);
 
     // Descriptors marked close-on-exec do not survive the new image.
     kern_descrip.fdCloseOnExec(p);
     p.sig_pending = 0;
+    td.sig_pending = 0;
+    // The old image's alternate signal stack is gone with it.
+    td.altstack = null;
 
+    // Swap in the new address space; the old one goes (its pages, its page
+    // tables, its map and the files it mapped).
+    committed = true;
     const oldmap: arch.pmap.Pmap = p.pmap;
+    const borrowed: bool = p.vm_borrowed_from != null;
+    var oldvm: vm_map.VmMap = p.vm;
     arch.pmap.activate(newmap);
     p.pmap = newmap;
-    // The old address space is no longer needed: free exactly the pages
-    // recorded for it (its own tables and data; the shared kernel half was
-    // never recorded, so it is untouched).
-    if (oldmap != 0 and oldmap != newmap) {
+    p.vm = newvm;
+    // Shared file mappings of the old image write their changes back.
+    if (!borrowed) vm_map.remove(&oldvm, oldmap, 0, arch.vmparam.VM_MAXUSER_ADDRESS) catch {};
+    vm_map.deinit(&oldvm);
+    // A vfork child was running in its parent's address space: that one
+    // stays, and the parent, waiting for this exec, goes on.
+    if (!borrowed and oldmap != 0 and oldmap != newmap) {
         arch.pmap.destroy(oldmap, 0);
     }
+    kern_proc.vforkDone(p);
 
     frame.rip = entry;
     frame.rsp = info.rsp;

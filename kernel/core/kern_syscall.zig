@@ -7,10 +7,12 @@
 // a system call number and calls the matching handler from the table. The
 // machine-dependent entry (x86/x86/syscall.zig) fills in the arguments.
 
+const std: type = @import("std");
 const syscalls: type = @import("syscalls.zig");
 const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const prf: type = @import("subr_prf.zig");
+const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const subr_syscall: type = @import("subr_syscall.zig");
 
@@ -25,11 +27,16 @@ fn nosys(number: u64) u64 {
     return sys.signed(-errno.ENOSYS);
 }
 
-/// Command name whose system calls are traced (the `truss=<comm>` kernel
-/// argument), or empty. A kernel-side counterpart of FreeBSD's truss(1) for
-/// bringing up programs before ktrace exists.
-var truss_buf: [20]u8 = undefined;
+/// Command names whose system calls are traced (the `truss=<comm>[,<comm>...]`
+/// kernel argument), separated by commas, or empty. A kernel-side
+/// counterpart of FreeBSD's truss(1) for bringing up programs before ktrace
+/// exists; several names follow a program through the exec of another
+/// (`truss=zig,maker`).
+var truss_buf: [64]u8 = undefined;
 var truss_len: usize = 0;
+/// Trace only the calls that fail (the `truss.errors=1` kernel argument):
+/// a long run then shows what went wrong without every call.
+var truss_errors_only: bool = false;
 
 /// Trace every system call made by processes named `comm`.
 pub fn setTruss(comm: []const u8) void {
@@ -37,13 +44,21 @@ pub fn setTruss(comm: []const u8) void {
     @memcpy(truss_buf[0..truss_len], comm[0..truss_len]);
 }
 
+/// Trace only the system calls that fail.
+pub fn setTrussErrorsOnly(on: bool) void {
+    truss_errors_only = on;
+}
+
+/// Whether the running process's name is one of the traced names.
 fn traced() bool {
     if (truss_len == 0) return false;
-    const p = kern_proc.current;
+    const p: *proc.Proc = kern_proc.current;
     const name: []const u8 = p.name[0..p.name_len];
-    if (name.len != truss_len) return false;
-    for (name, truss_buf[0..truss_len]) |a, b| if (a != b) return false;
-    return true;
+    var names: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, truss_buf[0..truss_len], ',');
+    while (names.next()) |wanted| {
+        if (std.mem.eql(u8, name, wanted)) return true;
+    }
+    return false;
 }
 
 /// Dispatch `number` with `args`, returning the value to place in the result
@@ -66,10 +81,12 @@ pub fn syscall(number: u64, args: [sys.MAXARGS]u64) u64 {
         }
     }
     const r: u64 = dispatch(number, args);
-    if (tracing) {
+    const failed: bool = @as(i64, @bitCast(r)) < 0;
+    if (tracing and (failed or !truss_errors_only)) {
+        // name[pid/tid]: the thread matters once a process has several.
         const p = kern_proc.current;
-        prf.printf("%s[%d]: sys %u(%x, %x, %x, %x) = %d", .{
-            p.name[0..p.name_len], p.pid, number, args[0], args[1], args[2], args[3], @as(i64, @bitCast(r)),
+        prf.printf("%s[%d/%d]: sys %u(%x, %x, %x, %x) = %d", .{
+            p.name[0..p.name_len], p.pid, kern_proc.curthread.tid, number, args[0], args[1], args[2], args[3], @as(i64, @bitCast(r)),
         });
         // Show the pathname of calls that take one.
         if (has_path) prf.printf(" \"%s\"", .{pbuf[0..plen]});

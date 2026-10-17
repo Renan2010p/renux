@@ -167,6 +167,8 @@ fn writeCommandLine(buf: []u8) usize {
     // Trace the system calls of every process with this name (a debugging
     // aid of the Renux kernel; kernel/core/kern_syscall.zig).
     if (env.get("truss")) |command| line.add("truss=", command);
+    // Only the calls that fail.
+    if (env.isYes("truss_errors")) line.add("truss.errors=1", "");
     return line.len;
 }
 

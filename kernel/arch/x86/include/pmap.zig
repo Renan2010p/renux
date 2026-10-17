@@ -21,4 +21,8 @@ pub const Prot: type = enum {
     user_ro,
     /// User executable code (read/execute).
     user_rx,
+    /// User memory that is writable and executable (read/write/execute): a
+    /// thread stack when the dynamic linker asks for executable stacks, or a
+    /// JIT's code buffer.
+    user_rwx,
 };

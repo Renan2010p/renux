@@ -12,6 +12,7 @@
 const sys: type = @import("../sys/syscall.zig");
 const arch: type = @import("../arch/arch.zig");
 const proc: type = @import("../sys/proc.zig");
+const user: type = @import("../sys/user.zig");
 const file: type = @import("../sys/file.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_fork: type = @import("kern_fork.zig");
@@ -49,10 +50,24 @@ fn sysExit(args: [sys.MAXARGS]u64) u64 {
     kern_exit.exit(status);
 }
 
+/// fork(2).
 fn sysFork(args: [sys.MAXARGS]u64) u64 {
     _ = args;
-    const frame = arch.trap.currentFrame() orelse return sys.ERROR;
+    const frame: *arch.trapframe.TrapFrame = arch.trap.currentFrame() orelse return sys.ERROR;
     return sys.signed(kern_fork.fork(frame));
+}
+
+/// vfork(2).
+fn sysVfork(args: [sys.MAXARGS]u64) u64 {
+    _ = args;
+    const frame: *arch.trapframe.TrapFrame = arch.trap.currentFrame() orelse return sys.ERROR;
+    return sys.signed(kern_fork.vfork(frame));
+}
+
+/// rfork(2): `rfork(flags)`.
+fn sysRfork(args: [sys.MAXARGS]u64) u64 {
+    const frame: *arch.trapframe.TrapFrame = arch.trap.currentFrame() orelse return sys.ERROR;
+    return sys.signed(kern_fork.rfork(frame, args[0] & 0xffff_ffff));
 }
 
 /// wait4(2): `wait4(pid, status, options, rusage)`.
@@ -62,10 +77,17 @@ fn sysWait(args: [sys.MAXARGS]u64) u64 {
     const options: u32 = @truncate(args[2]);
 
     var status: i32 = 0;
-    const pid: i32 = kern_exit.wait(sel, &status, options);
+    var usage: proc.Usage = .{};
+    const pid: i32 = kern_exit.wait(sel, &status, options, &usage);
     if (pid > 0 and status_ptr != 0) {
         const dst: *align(1) i32 = @ptrFromInt(status_ptr);
         dst.* = status;
+    }
+    // A child reported stopped or continued has used nothing yet as far as
+    // this report goes: FreeBSD fills the rusage only for a reaped child,
+    // zero otherwise.
+    if (pid >= 0 and args[3] != 0) {
+        @as(*align(1) user.Rusage, @ptrFromInt(args[3])).* = kern_resource.toRusage(usage);
     }
     return sys.signed(pid);
 }
@@ -172,9 +194,8 @@ const Entry: type = struct {
 const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_exit, .handler = sysExit },
     .{ .num = sys.SYS_fork, .handler = sysFork },
-    // vfork(2) as fork: the child may only exec or _exit, which copying the
-    // address space satisfies (the parent is simply not suspended).
-    .{ .num = sys.SYS_vfork, .handler = sysFork },
+    .{ .num = sys.SYS_vfork, .handler = sysVfork },
+    .{ .num = sys.SYS_rfork, .handler = sysRfork },
     .{ .num = sys.SYS_read, .handler = sys_generic.sysRead },
     .{ .num = sys.SYS_write, .handler = sys_generic.sysWrite },
     .{ .num = sys.SYS_open, .handler = vfs_syscalls.sysOpen },
@@ -187,9 +208,11 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_munmap, .handler = vm_mmap.sysMunmap },
     .{ .num = sys.SYS_mprotect, .handler = vm_mmap.sysMprotect },
     .{ .num = sys.SYS_madvise, .handler = vm_mmap.sysMadvise },
+    .{ .num = sys.SYS_msync, .handler = vm_mmap.sysMsync },
     .{ .num = sys.SYS_issetugid, .handler = kern_prot.sysIssetugid },
     .{ .num = sys.SYS_sysarch, .handler = arch_sysarch.sysarch.sysSysarch },
     .{ .num = sys.SYS_sigprocmask, .handler = kern_signal.sysSigprocmask },
+    .{ .num = sys.SYS_sigaltstack, .handler = kern_signal.sysSigaltstack },
     .{ .num = sys.SYS_gettimeofday, .handler = kern_time.sysGettimeofday },
     .{ .num = sys.SYS_lseek, .handler = sys_generic.sysLseek },
     .{ .num = sys.SYS_getpid, .handler = sysGetpid },
@@ -228,6 +251,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS___sysctl, .handler = kern_sysctl.sysSysctl },
     .{ .num = sys.SYS___sysctlbyname, .handler = kern_sysctl.sysSysctlbyname },
     .{ .num = sys.SYS_getrlimit, .handler = kern_resource.sysGetrlimit },
+    .{ .num = sys.SYS_getrusage, .handler = kern_resource.sysGetrusage },
     .{ .num = sys.SYS_setrlimit, .handler = kern_resource.sysSetrlimit },
     .{ .num = sys.SYS_fstatat, .handler = vfs_syscalls.sysFstatat },
     .{ .num = sys.SYS_clock_gettime, .handler = kern_time.sysClockGettime },
@@ -261,6 +285,7 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_fsync, .handler = vfs_syscalls.sysFsync },
     .{ .num = sys.SYS_fdatasync, .handler = vfs_syscalls.sysFsync },
     .{ .num = sys.SYS_ftruncate, .handler = vfs_syscalls.sysFtruncate },
+    .{ .num = sys.SYS_posix_fallocate, .handler = vfs_syscalls.sysPosixFallocate },
     .{ .num = sys.SYS_truncate, .handler = vfs_syscalls.sysTruncate },
     .{ .num = sys.SYS_chmod, .handler = vfs_syscalls.sysChmod },
     .{ .num = sys.SYS_fchmod, .handler = vfs_syscalls.sysFchmod },
@@ -297,6 +322,11 @@ const syscall_list: []const Entry = &.{
     .{ .num = sys.SYS_minherit, .handler = vm_mmap.sysMinherit },
     .{ .num = sys.SYS_thr_self, .handler = kern_thr.sysThrSelf },
     .{ .num = sys.SYS_thr_kill, .handler = kern_thr.sysThrKill },
+    .{ .num = sys.SYS_thr_kill2, .handler = kern_thr.sysThrKill2 },
+    .{ .num = sys.SYS_thr_new, .handler = kern_thr.sysThrNew },
+    .{ .num = sys.SYS_thr_exit, .handler = kern_thr.sysThrExit },
+    .{ .num = sys.SYS_thr_set_name, .handler = kern_thr.sysThrSetName },
+    .{ .num = sys.SYS_sched_yield, .handler = kern_thr.sysSchedYield },
     .{ .num = sys.SYS_getrandom, .handler = sys_getrandom.sysGetrandom },
     .{ .num = sys.SYS_mkdirat, .handler = vfs_syscalls.sysMkdirat },
     .{ .num = sys.SYS_unlinkat, .handler = vfs_syscalls.sysUnlinkat },

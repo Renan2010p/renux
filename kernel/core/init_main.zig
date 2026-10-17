@@ -15,12 +15,14 @@ const rasops: type = @import("../dev/rasops/rasops.zig");
 const cons: type = @import("../dev/cons.zig");
 const fbd: type = @import("../dev/fb/fb.zig");
 const vnode: type = @import("../sys/vnode.zig");
+const proc: type = @import("../sys/proc.zig");
 const mount: type = @import("../sys/mount.zig");
 const ext2fs: type = @import("../fs/ext2fs/ext2fs.zig");
 const rootimage: type = @import("../fs/rootimage.zig");
 const conf: type = @import("../sys/conf.zig");
 const sysinit: type = @import("../sys/sysinit.zig");
 const kern_exec: type = @import("kern_exec.zig");
+const exec_elf: type = @import("exec_elf.zig");
 const kern_syscall: type = @import("kern_syscall.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
@@ -88,6 +90,8 @@ fn bootFlags(_: ?*const anyopaque) callconv(.c) void {
             }
         } else if (strStarts(word, "boot_single")) {
             boothowto |= RB_SINGLE;
+        } else if (strStarts(word, "truss.errors=")) {
+            kern_syscall.setTrussErrorsOnly(!strStarts(word["truss.errors=".len..], "0"));
         } else if (strStarts(word, "truss=")) {
             kern_syscall.setTruss(word["truss=".len..]);
         } else if (strStarts(word, "vfs.root.mountfrom=")) {
@@ -554,24 +558,25 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
 
     kern_proc.init();
 
-    // Create the init process; alloc() gives it its own address space.
-    const init = kern_proc.alloc() orelse {
+    // Create the init process and its thread; alloc() gives the process its
+    // own address space.
+    const init_td: *proc.Thread = kern_proc.alloc() orelse {
         prf.log(prf.LOG_ERR, "cannot create init process", .{});
         return;
     };
+    const init: *proc.Proc = init_td.proc;
 
-    const result = kern_exec.loadInto(null, init.pmap, "/sbin/init", 0) orelse {
+    const result: exec_elf.Result = kern_exec.loadInto(null, &init.vm, init.pmap, "/sbin/init", 0) orelse {
         prf.log(prf.LOG_ERR, "cannot load /sbin/init", .{});
         return;
     };
 
-    // Map the initial user stack.
-    var va: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
-    while (va < arch.vmparam.USER_STACK_TOP) : (va += param.PAGE_SIZE) {
-        const pa: u64 = (vm_page.physalloc() orelse return).int();
-        arch.pmap.enterUser(init.pmap, va, pa, .user_rw);
+    // Reserve the initial user stack and map the signal trampoline.
+    if (!kern_exec.mapStack(&init.vm, init.pmap)) {
+        prf.log(prf.LOG_ERR, "cannot map init's stack", .{});
+        return;
     }
-    if (!kern_exec.mapTrampoline(init.pmap)) {
+    if (!kern_exec.mapTrampoline(&init.vm, init.pmap)) {
         prf.log(prf.LOG_ERR, "cannot map trampoline", .{});
         return;
     }
@@ -591,35 +596,35 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     defer image_args.deinit();
     for (args) |a| image_args.addArg(a) catch unreachable; // a few bytes
     for (env) |e| image_args.addEnv(e) catch unreachable;
-    const info: kern_exec.StartInfo = kern_exec.buildStack(init.pmap, &image_args, &.{}) orelse {
+    const info: kern_exec.StartInfo = kern_exec.buildStack(&init.vm, init.pmap, &image_args, &.{}) orelse {
         prf.log(prf.LOG_ERR, "cannot build init stack", .{});
         return;
     };
 
     // Build the user frame init starts with. The SysV ABI expects rsp % 16 == 8
     // at function entry, so bias the stack by 8.
-    init.frame.r15 = 0;
-    init.frame.r14 = 0;
-    init.frame.r13 = 0;
-    init.frame.r12 = 0;
-    init.frame.r11 = 0;
-    init.frame.r10 = 0;
-    init.frame.r9 = 0;
-    init.frame.r8 = 0;
-    init.frame.rdi = info.rsp; // FreeBSD entry: %rdi points at argc
-    init.frame.rsi = 0;
-    init.frame.rbp = 0;
-    init.frame.rbx = 0;
-    init.frame.rdx = 0;
-    init.frame.rcx = 0;
-    init.frame.rax = 0;
-    init.frame.vector = 0;
-    init.frame.error_code = 0;
-    init.frame.rip = result.entry;
-    init.frame.cs = arch.gdt_defs.UCODE_SEL;
-    init.frame.rflags = 0x202; // reserved bit + IF
-    init.frame.rsp = info.rsp;
-    init.frame.ss = arch.gdt_defs.UDATA_SEL;
+    init_td.frame.r15 = 0;
+    init_td.frame.r14 = 0;
+    init_td.frame.r13 = 0;
+    init_td.frame.r12 = 0;
+    init_td.frame.r11 = 0;
+    init_td.frame.r10 = 0;
+    init_td.frame.r9 = 0;
+    init_td.frame.r8 = 0;
+    init_td.frame.rdi = info.rsp; // FreeBSD entry: %rdi points at argc
+    init_td.frame.rsi = 0;
+    init_td.frame.rbp = 0;
+    init_td.frame.rbx = 0;
+    init_td.frame.rdx = 0;
+    init_td.frame.rcx = 0;
+    init_td.frame.rax = 0;
+    init_td.frame.vector = 0;
+    init_td.frame.error_code = 0;
+    init_td.frame.rip = result.entry;
+    init_td.frame.cs = arch.gdt_defs.UCODE_SEL;
+    init_td.frame.rflags = 0x202; // reserved bit + IF
+    init_td.frame.rsp = info.rsp;
+    init_td.frame.ss = arch.gdt_defs.UDATA_SEL;
 
     // The process starts with the root as its working directory.
     init.cwd = vfs_mount.getRoot();
@@ -630,13 +635,13 @@ fn start_init(_: ?*const anyopaque) callconv(.c) void {
     init.cwd_len = 1;
     init.brk = result.brk;
     init.mmap_next = param.USER_MMAP_BASE;
-    if (!kern_exec.setupInitialTls(init, init.pmap, result)) {
+    if (!kern_exec.setupInitialTls(init_td, &init.vm, init.pmap, result)) {
         prf.log(prf.LOG_ERR, "cannot set up initial TLS", .{});
         return;
     }
 
-    kern_sched.prepareContext(init);
-    init.state = .runnable;
+    kern_sched.prepareContext(init_td);
+    init_td.state = .runnable;
 
     prf.log(prf.LOG_DEBUG, "init: starting at %x", .{result.entry});
 

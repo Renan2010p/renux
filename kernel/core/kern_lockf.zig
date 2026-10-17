@@ -68,7 +68,7 @@ pub fn sysFlock(args: [sys.MAXARGS]u64) u64 {
 
     while (!grantable(vp, f, exclusive)) {
         if ((op & LOCK_NB) != 0) return sys.signed(-errno.EWOULDBLOCK);
-        if (kern_signal.interrupted(p)) return sys.signed(-errno.EINTR);
+        if (kern_signal.interrupted()) return sys.signed(-errno.EINTR);
         kern_sched.ioWait();
     }
     // Convert a lock already held, then take the new one.

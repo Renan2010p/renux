@@ -8,6 +8,7 @@
 // directory/chdir calls. Each resolves its path against the process's working
 // directory before reaching the VFS layer.
 
+const std: type = @import("std");
 const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const param: type = @import("../sys/param.zig");
@@ -50,6 +51,30 @@ pub fn sysFtruncate(args: [sys.MAXARGS]u64) u64 {
     const err: i32 = vp.v_op.truncate(vp, length);
     if (err != 0) {
         return sys.signed(-err);
+    }
+    return 0;
+}
+
+/// posix_fallocate(2): `posix_fallocate(fd, offset, len)`; make the file at
+/// least `offset + len` bytes long. Renux's file systems reserve no blocks
+/// ahead, so the file grows sparse and its blocks are allocated as they
+/// are written. As in FreeBSD (kern_posix_error), the result is the error
+/// number itself, 0 on success, not a failed call.
+pub fn sysPosixFallocate(args: [sys.MAXARGS]u64) u64 {
+    const offset: i64 = @bitCast(args[1]);
+    const len: i64 = @bitCast(args[2]);
+    if (offset < 0 or len <= 0) return @intCast(errno.EINVAL);
+    if (offset > std.math.maxInt(i64) - len) return @intCast(errno.EFBIG);
+    const f: *file.File = kern_descrip.fdGetfile(kern_proc.current, @intCast(args[0])) orelse return @intCast(errno.EBADF);
+    if (f.f_type != file.DTYPE_VNODE) return @intCast(errno.ESPIPE);
+    if ((f.f_flag & file.FWRITE) == 0) return @intCast(errno.EBADF);
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(f.f_data orelse return @intCast(errno.EBADF)));
+    var vap: vnode.Vattr = std.mem.zeroes(vnode.Vattr);
+    if (vp.v_op.getattr(vp, &vap) != 0) return @intCast(errno.EIO);
+    const want: u64 = @intCast(offset + len);
+    if (want > vap.size) {
+        const err: i32 = vp.v_op.truncate(vp, want);
+        if (err != 0) return @intCast(err);
     }
     return 0;
 }

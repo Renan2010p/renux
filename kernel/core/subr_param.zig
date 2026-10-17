@@ -29,6 +29,9 @@ pub var maxfiles: u32 = MAXFILES_FLOOR;
 /// The most files one process may have open (kern.maxfilesperproc).
 pub var maxfilesperproc: u32 = MAXFILES_FLOOR / 10 * 9;
 
+/// The most memory all pipe buffers may take together (kern.ipc.maxpipekva).
+pub var maxpipekva: usize = 512 * 1024;
+
 /// FreeBSD's MAXFILES, the floor of maxfiles: 40 + 32 * maxusers, with
 /// maxusers at its own floor of 32.
 const MAXFILES_FLOOR: u32 = 40 + 32 * 32;
@@ -55,6 +58,9 @@ pub fn initParam2(physpages: u64) void {
     if (files > files_clamp) files = files_clamp;
     maxfiles = @intCast(files);
     maxfilesperproc = maxfiles / 10 * 9;
+
+    // 1/64 of memory, at least 512 KiB (FreeBSD's init_param3).
+    maxpipekva = @intCast(@max(physpages * param.PAGE_SIZE / 64, 512 * 1024));
 }
 
 fn initParams(_: ?*const anyopaque) callconv(.c) void {

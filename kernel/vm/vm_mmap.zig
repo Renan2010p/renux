@@ -1,205 +1,275 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
-// brk and mmap.
+// The memory-mapping system calls: brk, mmap, munmap, mprotect, minherit,
+// madvise.
 //
-// This is the Zig counterpart of NetBSD's sys/uvm/vm_mmap.c, reduced to brk:
-// it grows or shrinks the process's heap by mapping or abandoning pages. Pages
-// are mapped eagerly here; demand-zero faults will replace this once the region
-// registry is per-process.
+// The Zig counterpart of FreeBSD's sys/vm/vm_mmap.c. Each call changes the
+// process's address map (vm_map.zig); no page is made here. Pages appear on
+// the first touch (vm_fault.zig), so a large reservation costs nothing until
+// it is used, and munmap gives the memory back at once.
 
+const std: type = @import("std");
 const sys: type = @import("../sys/syscall.zig");
 const errno: type = @import("../sys/errno.zig");
 const proc: type = @import("../sys/proc.zig");
 const param: type = @import("../sys/param.zig");
 const arch: type = @import("../arch/arch.zig");
-const vm_page: type = @import("vm_page.zig");
 const kern_proc: type = @import("../core/kern_proc.zig");
-const vm_fault: type = @import("vm_fault.zig");
 const kern_descrip: type = @import("../core/kern_descrip.zig");
 const prf: type = @import("../core/subr_prf.zig");
 const file: type = @import("../sys/file.zig");
 const vnode: type = @import("../sys/vnode.zig");
+const vm_map: type = @import("vm_map.zig");
 
-/// mmap(2) flag bits (FreeBSD).
+// mmap(2) flags (FreeBSD's sys/mman.h).
+const MAP_SHARED: u64 = 0x0001;
+const MAP_PRIVATE: u64 = 0x0002;
+const MAP_FIXED: u64 = 0x0010;
+const MAP_RESERVED0020: u64 = 0x0020; // ignored, as FreeBSD does
+const MAP_RESERVED0040: u64 = 0x0040; // ignored, as FreeBSD does
+const MAP_HASSEMAPHORE: u64 = 0x0200;
+const MAP_STACK: u64 = 0x0400;
+const MAP_NOSYNC: u64 = 0x0800;
 const MAP_ANON: u64 = 0x1000;
+const MAP_GUARD: u64 = 0x2000;
+const MAP_EXCL: u64 = 0x4000;
+const MAP_NOCORE: u64 = 0x20000;
+const MAP_PREFAULT_READ: u64 = 0x40000;
+const MAP_32BIT: u64 = 0x80000;
+const MAP_ALIGNMENT_MASK: u64 = 0xff << 24;
+/// The flags mmap(2) accepts.
+const MAP_KNOWN: u64 = MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_HASSEMAPHORE | MAP_STACK | MAP_NOSYNC |
+    MAP_ANON | MAP_EXCL | MAP_NOCORE | MAP_PREFAULT_READ | MAP_GUARD | MAP_32BIT | MAP_ALIGNMENT_MASK;
+/// The flags MAP_GUARD may be combined with.
+const MAP_GUARD_KNOWN: u64 = MAP_FIXED | MAP_GUARD | MAP_EXCL | MAP_32BIT | MAP_ALIGNMENT_MASK;
 
-/// mmap(2) protection bits (FreeBSD).
-const PROT_WRITE: u64 = 0x2;
-const PROT_EXEC: u64 = 0x4;
+/// The protection bits, and PROT_MAX (the most a later mprotect(2) may
+/// grant, in bits 16..18; accepted, and not enforced yet).
+const PROT_ALL: u64 = vm_map.PROT_READ | vm_map.PROT_WRITE | vm_map.PROT_EXEC;
+const PROT_MAX_SHIFT: u6 = 16;
+/// MAP_ALIGNED(n) puts n in bits 24..31: align to 2^n bytes; n == 1 is
+/// MAP_ALIGNED_SUPER, a superpage (2 MiB) boundary. FreeBSD's malloc
+/// (jemalloc) relies on it to find a chunk's metadata by masking an address.
+const MAP_ALIGNMENT_SHIFT: u6 = 24;
+const MAP_ALIGNED_SUPER: u64 = 1;
+const SUPERPAGE_SIZE: u64 = 2 * 1024 * 1024;
 
-/// brk(2): set the program break; returns the new break or an error. The heap
-/// grows from just after the loaded image up to just below the signal
-/// trampoline.
+/// The lowest address mmap(2) hands out by itself, and the room below the
+/// main stack it may use.
+const MMAP_MIN: u64 = param.USER_MMAP_BASE;
+fn mmapLimit() u64 {
+    return arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE;
+}
+/// MAP_32BIT asks for an address below 2 GiB.
+const LIMIT_32BIT: u64 = 0x8000_0000;
+
+fn pageDown(a: u64) u64 {
+    return a & ~@as(u64, param.PAGE_SIZE - 1);
+}
+
+fn pageUp(a: u64) u64 {
+    return param.alignUp(a, param.PAGE_SIZE);
+}
+
+/// brk(2): `brk(addr)`, move the program break; 0 asks for it. The heap is
+/// anonymous memory from the end of the program up to the break.
 pub fn sysBrk(args: [sys.MAXARGS]u64) u64 {
     const addr: u64 = args[0];
     const p: *proc.Proc = kern_proc.current;
+    if (addr == 0) return p.brk;
 
-    // A zero argument queries the current break without changing it.
-    if (addr == 0) {
-        return p.brk;
+    const old_end: u64 = pageUp(p.brk);
+    const new_end: u64 = pageUp(addr);
+    if (new_end > old_end) {
+        if (new_end > mmapLimit() or vm_map.overlaps(kern_proc.vmOf(p), old_end, new_end)) return sys.signed(-errno.ENOMEM);
+        vm_map.insert(kern_proc.vmOf(p), p.pmap, .{
+            .start = old_end,
+            .end = new_end,
+            .prot = vm_map.PROT_READ | vm_map.PROT_WRITE,
+            .object = .anon,
+        }) catch return sys.signed(-errno.ENOMEM);
+    } else if (new_end < old_end) {
+        vm_map.remove(kern_proc.vmOf(p), p.pmap, new_end, old_end) catch return sys.signed(-errno.ENOMEM);
     }
-
-    const limit: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
-    if (addr >= limit) {
-        return sys.signed(-errno.ENOMEM);
-    }
-
-    if (addr > p.brk) {
-        var va: u64 = param.alignUp(p.brk, param.PAGE_SIZE);
-        const end: u64 = param.alignUp(addr, param.PAGE_SIZE);
-        while (va < end) : (va += param.PAGE_SIZE) {
-            const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
-            arch.pmap.enterUser(p.pmap, va, pa, .user_rw);
-        }
-    }
-
     p.brk = addr;
-    prf.log(prf.LOG_DEBUG, "brk: pid %d -> %x", .{ p.pid, p.brk });
     return p.brk;
 }
 
-/// mmap(2): map memory for the process. Supports anonymous memory and
-/// read/copy mappings of a vnode-backed file (which is what rtld-elf uses to
-/// read and load shared objects). `addr`, when non-zero, is honored as the
-/// mapping address (rtld passes an explicit base). Returns the mapped address
-/// or an error.
+/// mmap(2): `mmap(addr, len, prot, flags, fd, pos)`. Map anonymous memory,
+/// a file (privately: changes stay in the process) or a device's memory.
+/// With MAP_FIXED the mapping goes exactly at `addr`, replacing what was
+/// there (unless MAP_EXCL); otherwise `addr` is a hint and the first hole
+/// that fits is used. The checks are FreeBSD's kern_mmap. Returns the
+/// address.
 pub fn sysMmap(args: [sys.MAXARGS]u64) u64 {
-    const addr: u64 = args[0];
     const len: u64 = args[1];
-    const protbits: u64 = args[2];
-    const flags: u64 = args[3];
+    var flags: u64 = args[3] & ~(MAP_RESERVED0020 | MAP_RESERVED0040);
     // FreeBSD's mmap takes an `int` fd; the caller may pass -1 zero-extended.
     const fd: i64 = @as(i32, @bitCast(@as(u32, @truncate(args[4]))));
-    const offset: u64 = args[5];
-
-    if (len == 0) {
-        return sys.signed(-errno.ENOMEM);
-    }
+    var pos: u64 = args[5];
     const p: *proc.Proc = kern_proc.current;
 
-    const limit: u64 = arch.vmparam.USER_STACK_TOP - arch.vmparam.USER_STACK_SIZE - param.PAGE_SIZE;
-    const size: u64 = param.alignUp(len, param.PAGE_SIZE);
+    if ((args[2] & ~(PROT_ALL | (PROT_ALL << PROT_MAX_SHIFT))) != 0) return sys.signed(-errno.EINVAL);
+    const prot: u8 = @truncate(args[2] & PROT_ALL);
+    if (len == 0) return sys.signed(-errno.EINVAL);
+    if ((flags & MAP_ANON) != 0 and (fd != -1 or pos != 0)) return sys.signed(-errno.EINVAL);
+    if ((flags & MAP_STACK) != 0) {
+        if (fd != -1 or (prot & (vm_map.PROT_READ | vm_map.PROT_WRITE)) != (vm_map.PROT_READ | vm_map.PROT_WRITE)) return sys.signed(-errno.EINVAL);
+        flags |= MAP_ANON;
+        pos = 0;
+    }
+    if ((flags & ~MAP_KNOWN) != 0) return sys.signed(-errno.EINVAL);
+    if ((flags & (MAP_EXCL | MAP_FIXED)) == MAP_EXCL) return sys.signed(-errno.EINVAL);
+    if ((flags & (MAP_SHARED | MAP_PRIVATE)) == (MAP_SHARED | MAP_PRIVATE)) return sys.signed(-errno.EINVAL);
+    if ((flags & MAP_GUARD) != 0 and (prot != 0 or fd != -1 or pos != 0 or (flags & ~MAP_GUARD_KNOWN) != 0)) return sys.signed(-errno.EINVAL);
 
-    // MAP_ALIGNED(n) asks for an address aligned to 2^n bytes, and
-    // MAP_ALIGNED_SUPER (n == 1) for a superpage (2 MiB) boundary. FreeBSD's
-    // malloc (jemalloc) relies on it: it finds a chunk's metadata by masking
-    // the low bits of an address.
-    const MAP_ALIGNMENT_SHIFT: u6 = 24;
-    const MAP_ALIGNED_SUPER: u64 = 1;
+    // A file position need not be page-aligned: map from its page, and hand
+    // back the address of the byte asked for.
+    const pageoff: u64 = pos % param.PAGE_SIZE;
+    pos -= pageoff;
+    const size: u64 = pageUp(len + pageoff);
+    if (size < len) return sys.signed(-errno.ENOMEM);
+    const addr: u64 = args[0] -% pageoff;
+
+    // Where the mapping goes.
     const align_req: u64 = (flags >> MAP_ALIGNMENT_SHIFT) & 0xff;
     const alignment: u64 = if (align_req == MAP_ALIGNED_SUPER)
-        2 * 1024 * 1024
-    else if (align_req >= 12 and align_req < 48)
+        SUPERPAGE_SIZE
+    else if (align_req >= param.PAGE_SHIFT and align_req < 48)
         @as(u64, 1) << @intCast(align_req)
     else
         param.PAGE_SIZE;
-
     var base: u64 = undefined;
-    if (addr != 0) {
-        base = addr & ~@as(u64, param.PAGE_SIZE - 1);
+    if ((flags & MAP_FIXED) != 0) {
+        if (addr % param.PAGE_SIZE != 0) return sys.signed(-errno.EINVAL);
+        if (addr + size > arch.vmparam.VM_MAXUSER_ADDRESS or addr + size < addr) return sys.signed(-errno.EINVAL);
+        if ((flags & MAP_32BIT) != 0 and addr + size > LIMIT_32BIT) return sys.signed(-errno.EINVAL);
+        if ((flags & MAP_EXCL) != 0 and vm_map.overlaps(kern_proc.vmOf(p), addr, addr + size)) return sys.signed(-errno.ENOMEM);
+        base = addr;
     } else {
-        base = param.alignUp(p.mmap_next, alignment);
-    }
-    if (base + size > limit) {
-        return sys.signed(-errno.ENOMEM);
-    }
-
-    var prot: arch.pmap.Prot = .user_ro;
-    if ((protbits & PROT_EXEC) != 0) {
-        prot = .user_rx;
-    } else if ((protbits & PROT_WRITE) != 0) {
-        prot = .user_rw;
+        const limit: u64 = if ((flags & MAP_32BIT) != 0) LIMIT_32BIT else mmapLimit();
+        const hint: u64 = if (args[0] != 0) pageDown(addr) else @max(p.mmap_next, MMAP_MIN);
+        base = vm_map.findSpace(kern_proc.vmOf(p), hint, size, alignment, limit) orelse
+            vm_map.findSpace(kern_proc.vmOf(p), MMAP_MIN, size, alignment, limit) orelse
+            return sys.signed(-errno.ENOMEM);
+        if (args[0] == 0) p.mmap_next = base + size;
     }
 
-    const hhdm: u64 = arch.boot.hhdmOffset() orelse return sys.signed(-errno.ENOMEM);
+    // What the pages are.
+    const file_backed: bool = fd >= 0 and (flags & (MAP_ANON | MAP_GUARD)) == 0;
+    if (!file_backed) {
+        vm_map.insert(kern_proc.vmOf(p), p.pmap, .{ .start = base, .end = base + size, .prot = prot, .object = .anon }) catch
+            return sys.signed(-errno.ENOMEM);
+        return base;
+    }
+    const offset: u64 = pos;
+    const f: *file.File = kern_descrip.fdGetfile(p, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
 
-    // A file mapping: resolve the open file to a vnode and copy its contents,
-    // page by page, into fresh anonymous pages (private, copy semantics). A
-    // device with an mmap hook (e.g. /dev/fb0) maps its own physical memory.
-    const file_backed: bool = fd >= 0 and (flags & MAP_ANON) == 0;
-    if (file_backed) {
-        const f: *file.File = kern_descrip.fdGetfile(p, @intCast(fd)) orelse return sys.signed(-errno.EBADF);
-        if (f.f_ops.mmap) |devmmap| {
-            var va: u64 = base;
-            var off: u64 = offset & ~@as(u64, param.PAGE_SIZE - 1);
-            while (va < base + size) : ({
-                va += param.PAGE_SIZE;
-                off += param.PAGE_SIZE;
-            }) {
-                const pa: u64 = devmmap(f, off, @intCast(protbits)) orelse return sys.signed(-errno.ENXIO);
-                arch.pmap.enterUser(p.pmap, va, pa, prot);
-            }
-        } else {
-            if (f.f_type != file.DTYPE_VNODE) {
-                return sys.signed(-errno.ENODEV);
-            }
-            const raw: ?*anyopaque = f.f_data orelse return sys.signed(-errno.EBADF);
-            const vp: *vnode.Vnode = @ptrCast(@alignCast(raw));
-
-            var va: u64 = base;
-            var foff: u64 = offset & ~@as(u64, param.PAGE_SIZE - 1);
-            while (va < base + size) : ({
-                va += param.PAGE_SIZE;
-                foff += param.PAGE_SIZE;
-            }) {
-                // allocPage hands out a zeroed page: the read fills what the
-                // file has and the rest (past EOF) stays zero.
-                const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
-                const dst: [*]u8 = @ptrFromInt(pa + hhdm);
-                const n: isize = vp.v_op.read(vp, foff, dst[0..param.PAGE_SIZE]);
-                if (n < 0) {
-                    return sys.signed(-errno.EIO);
-                }
-                arch.pmap.enterUser(p.pmap, va, pa, prot);
-            }
+    if (f.f_ops.mmap) |devmmap| {
+        // A device with an mmap hook (/dev/fb0) maps its own memory now.
+        vm_map.insert(kern_proc.vmOf(p), p.pmap, .{ .start = base, .end = base + size, .prot = prot, .object = .device }) catch
+            return sys.signed(-errno.ENOMEM);
+        const e: *vm_map.Entry = vm_map.lookup(kern_proc.vmOf(p), base).?;
+        var page: u64 = 0;
+        while (page < size) : (page += param.PAGE_SIZE) {
+            const pa: u64 = devmmap(f, offset + page, @intCast(args[2])) orelse {
+                vm_map.remove(kern_proc.vmOf(p), p.pmap, base, base + size) catch {};
+                return sys.signed(-errno.ENXIO);
+            };
+            arch.pmap.enterDevice(p.pmap, base + page, pa, e.pmapProt());
         }
-    } else {
-        // Anonymous memory is filled on demand (vm/vm_fault.zig). Pages that
-        // are mapped already (MAP_FIXED over a previous mapping, as rtld does
-        // for .bss) are replaced by zeroed pages now, since the new mapping
-        // must read as zeros.
-        const lazy: bool = vm_fault.register(p, base, base + size, prot == .user_rw, prot == .user_rx);
-        var va: u64 = base;
-        while (va < base + size) : (va += param.PAGE_SIZE) {
-            if (lazy and arch.pmap.extract(p.pmap, va) == null) continue;
-            const pa: u64 = arch.pmap.allocPage(p.pmap) orelse return sys.signed(-errno.ENOMEM);
-            arch.pmap.enterUser(p.pmap, va, pa, prot);
-        }
+        return base + pageoff;
     }
 
-    if (base + size > p.mmap_next) {
-        p.mmap_next = base + size;
-    }
-    prf.log(prf.LOG_DEBUG, "mmap: pid %d at %x len %x", .{ p.pid, base, size });
-    return base;
+    if (f.f_type != file.DTYPE_VNODE) return sys.signed(-errno.ENODEV);
+    const vp: *vnode.Vnode = @ptrCast(@alignCast(f.f_data orelse return sys.signed(-errno.EBADF)));
+    vm_map.insert(kern_proc.vmOf(p), p.pmap, .{
+        .start = base,
+        .end = base + size,
+        .prot = prot,
+        .object = .{ .vnode = .{
+            .vp = vp,
+            .offset = offset,
+            .file_end = std.math.maxInt(u64),
+            // A shared, writable mapping of a file opened for writing sends
+            // its changes back to the file.
+            .shared = (flags & MAP_SHARED) != 0 and (f.f_flag & file.FWRITE) != 0,
+        } },
+    }) catch return sys.signed(-errno.ENOMEM);
+    prf.log(prf.LOG_DEBUG, "mmap: pid %d file at %x len %x", .{ p.pid, base, size });
+    return base + pageoff;
 }
 
-/// munmap(2): anonymous regions are left in place; just report success.
+/// A page-aligned range of user addresses, [start, end).
+const UserRange: type = struct { start: u64, end: u64 };
+
+/// The page-aligned range [addr, addr + len) of a call, or null when `addr`
+/// is not page-aligned or the range wraps (EINVAL).
+fn userRange(addr: u64, len: u64) ?UserRange {
+    if (addr % param.PAGE_SIZE != 0) return null;
+    const end: u64 = pageUp(addr + len);
+    if (end < addr or end > arch.vmparam.VM_MAXUSER_ADDRESS) return null;
+    return .{ .start = addr, .end = end };
+}
+
+/// munmap(2): `munmap(addr, len)`; remove the mappings in the range and
+/// free their pages.
 pub fn sysMunmap(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
+    if (args[1] == 0) return sys.signed(-errno.EINVAL);
+    const r: UserRange = userRange(args[0], args[1]) orelse return sys.signed(-errno.EINVAL);
+    const p: *proc.Proc = kern_proc.current;
+    vm_map.remove(kern_proc.vmOf(p), p.pmap, r.start, r.end) catch return sys.signed(-errno.ENOMEM);
     return 0;
 }
 
-/// minherit(2): how a range is passed to a fork child. INHERIT_ZERO ranges
-/// are given zero-filled (libc keeps its arc4random state there so a child
-/// never repeats the parent's random stream); INHERIT_SHARE and
-/// INHERIT_COPY are what fork does anyway (it copies), INHERIT_NONE is
-/// treated as INHERIT_ZERO.
+/// msync(2): `msync(addr, len, flags)`; write the changed pages of shared
+/// file mappings in the range back to their files (FreeBSD's kern_msync).
+/// The writes are done at once whatever the flags; MS_INVALIDATE has
+/// nothing to drop, since mappings and files never hold different copies
+/// that the file has newer.
+pub fn sysMsync(args: [sys.MAXARGS]u64) u64 {
+    const MS_ASYNC: u64 = 0x0001;
+    const MS_INVALIDATE: u64 = 0x0002;
+    const flags: u64 = args[2];
+    if ((flags & (MS_ASYNC | MS_INVALIDATE)) == (MS_ASYNC | MS_INVALIDATE)) return sys.signed(-errno.EINVAL);
+    const start: u64 = pageDown(args[0]);
+    const end: u64 = pageUp(args[0] + args[1]);
+    if (end < start) return sys.signed(-errno.EINVAL);
+    const p: *proc.Proc = kern_proc.current;
+    vm_map.sync(kern_proc.vmOf(p), p.pmap, start, end);
+    return 0;
+}
+
+/// mprotect(2): `mprotect(addr, len, prot)`; change the protection of the
+/// mappings in the range.
+pub fn sysMprotect(args: [sys.MAXARGS]u64) u64 {
+    const r: UserRange = userRange(args[0], args[1]) orelse return sys.signed(-errno.EINVAL);
+    const prot: u8 = @truncate(args[2] & (vm_map.PROT_READ | vm_map.PROT_WRITE | vm_map.PROT_EXEC));
+    const p: *proc.Proc = kern_proc.current;
+    vm_map.protect(kern_proc.vmOf(p), p.pmap, r.start, r.end, prot) catch return sys.signed(-errno.ENOMEM);
+    return 0;
+}
+
+/// minherit(2): `minherit(addr, len, inherit)`; how a fork child gets the
+/// range: INHERIT_COPY a copy-on-write copy, INHERIT_ZERO fresh
+/// zero-filled memory, INHERIT_NONE nothing. INHERIT_SHARE is treated as a
+/// copy (memory shared across processes is not supported yet).
 pub fn sysMinherit(args: [sys.MAXARGS]u64) u64 {
     const INHERIT_SHARE: u64 = 0;
     const INHERIT_COPY: u64 = 1;
-    const start: u64 = args[0] & ~@as(u64, param.PAGE_SIZE - 1);
-    const end: u64 = param.alignUp(args[0] + args[1], param.PAGE_SIZE);
-    if (args[2] == INHERIT_SHARE or args[2] == INHERIT_COPY) return 0;
-    const p = kern_proc.current;
-    for (&p.inherit_zero) |*r| {
-        if (r.end == 0) {
-            r.* = .{ .start = start, .end = end };
-            return 0;
-        }
-    }
-    return sys.signed(-errno.ENOMEM);
+    const INHERIT_NONE: u64 = 2;
+    const INHERIT_ZERO: u64 = 3;
+    const r: UserRange = userRange(args[0], args[1]) orelse return sys.signed(-errno.EINVAL);
+    const inherit: vm_map.Inherit = switch (args[2]) {
+        INHERIT_SHARE, INHERIT_COPY => .copy,
+        INHERIT_NONE => .none,
+        INHERIT_ZERO => .zero,
+        else => return sys.signed(-errno.EINVAL),
+    };
+    const p: *proc.Proc = kern_proc.current;
+    vm_map.setInherit(kern_proc.vmOf(p), r.start, r.end, inherit) catch return sys.signed(-errno.ENOMEM);
+    return 0;
 }
 
 /// madvise(2): `madvise(addr, len, behavior)`. Advice only tells the kernel
@@ -209,11 +279,5 @@ pub fn sysMinherit(args: [sys.MAXARGS]u64) u64 {
 pub fn sysMadvise(args: [sys.MAXARGS]u64) u64 {
     const MADV_CORE: u64 = 9; // the highest advice value FreeBSD defines
     if (args[2] > MADV_CORE) return sys.signed(-errno.EINVAL);
-    return 0;
-}
-
-/// mprotect(2): protection changes are not tracked yet; report success.
-pub fn sysMprotect(args: [sys.MAXARGS]u64) u64 {
-    _ = args;
     return 0;
 }

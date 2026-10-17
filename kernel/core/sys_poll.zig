@@ -227,7 +227,7 @@ fn selectCommon(nd_in: u64, rd: u64, wr: u64, ex: u64, until: ?u64) u64 {
             }
             return ready;
         }
-        if (kern_signal.interrupted(p)) return sys.signed(-errno.EINTR);
+        if (kern_signal.interrupted()) return sys.signed(-errno.EINTR);
         kern_sched.sleep(arch.clock.pollChannel());
     }
 }
@@ -250,15 +250,15 @@ pub fn sysSelect(args: [sys.MAXARGS]u64) u64 {
 
 /// pselect(2): select with a timespec and a signal mask held for the wait.
 pub fn sysPselect(args: [sys.MAXARGS]u64) u64 {
-    const p = kern_proc.current;
+    const td: *proc.Thread = kern_proc.curthread;
     var until: ?u64 = null;
     if (args[4] != 0) {
         const ts: *align(1) const kern_time.Timespec = @ptrFromInt(args[4]);
         until = ticksFrom(ts.tv_sec, ts.tv_nsec, 1_000_000_000);
     }
-    const saved: u64 = p.sig_mask;
-    if (args[5] != 0) p.sig_mask = @as(*align(1) const u64, @ptrFromInt(args[5])).*;
+    const saved: u64 = td.sig_mask;
+    if (args[5] != 0) td.sig_mask = @as(*align(1) const u64, @ptrFromInt(args[5])).*;
     const r: u64 = selectCommon(args[0], args[1], args[2], args[3], until);
-    p.sig_mask = saved;
+    td.sig_mask = saved;
     return r;
 }

@@ -42,6 +42,8 @@ pub const EPIPE: i32 = 32;
 pub const EMLINK: i32 = 31;
 pub const ENAMETOOLONG: i32 = 63;
 pub const ENOTEMPTY: i32 = 66;
+/// Too many processes or threads (FreeBSD's EPROCLIM).
+pub const EPROCLIM: i32 = 67;
 pub const EOPNOTSUPP: i32 = 45;
 pub const ETIMEDOUT: i32 = 60;
 pub const ENOSYS: i32 = 78;

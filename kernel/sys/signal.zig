@@ -7,8 +7,10 @@
 // signal numbers and the two special handler values. The numbers match
 // NetBSD's.
 
-/// Highest signal number plus one; signals are numbered 1..NSIG-1.
-pub const NSIG: u32 = 32;
+/// Highest signal number plus one; signals are numbered 1..NSIG-1. Masks are
+/// 64-bit words, so this covers FreeBSD's signals up to 63, including the
+/// ones its threads library uses (SIGTHR, SIGLIBRT).
+pub const NSIG: u32 = 64;
 
 pub const SIGHUP: u32 = 1;
 pub const SIGINT: u32 = 2;
@@ -41,6 +43,10 @@ pub const SIGWINCH: u32 = 28;
 pub const SIGINFO: u32 = 29;
 pub const SIGUSR1: u32 = 30;
 pub const SIGUSR2: u32 = 31;
+/// Used by FreeBSD's threads library between its threads (ignored by default).
+pub const SIGTHR: u32 = 32;
+/// Used by FreeBSD's librt (ignored by default).
+pub const SIGLIBRT: u32 = 33;
 
 /// The default handler.
 pub const SIG_DFL: u64 = 0;
@@ -57,6 +63,13 @@ pub fn defaultTerminates(sig: u32) bool {
 
 /// sigaction(2) flags.
 pub const SA_ONSTACK: u32 = 0x0001;
+
+/// sigaltstack(2) flags (stack_t.ss_flags).
+pub const SS_ONSTACK: i32 = 0x0001; // running on the alternate stack
+pub const SS_DISABLE: i32 = 0x0004; // no alternate stack
+/// The smallest alternate stack sigaltstack(2) accepts (amd64's
+/// __MINSIGSTKSZ, 512 * 4).
+pub const MINSIGSTKSZ: u64 = 512 * 4;
 pub const SA_RESTART: u32 = 0x0002;
 pub const SA_RESETHAND: u32 = 0x0004;
 pub const SA_NODEFER: u32 = 0x0010;

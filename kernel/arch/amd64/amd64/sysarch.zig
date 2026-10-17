@@ -35,7 +35,7 @@ pub fn sysSysarch(args: [sys.MAXARGS]u64) u64 {
             const p: *align(1) const u64 = @ptrFromInt(parms);
             const base: u64 = p.*;
             cpufunc.setFsBase(base);
-            kern_proc.current.fsbase = base;
+            kern_proc.curthread.fsbase = base;
             return 0;
         },
         AMD64_GET_FSBASE, AMD64_GET_TLSBASE => {

@@ -301,16 +301,23 @@ fn fillProc(k: *user.KinfoProc, p: *proc.Proc) void {
     k.ki_uid = p.uid;
     k.ki_ruid = p.uid;
     k.ki_svuid = p.uid;
+    // A live process runs ('R') when one of its threads does or waits for
+    // the CPU, and sleeps ('S') otherwise.
+    var running: bool = false;
+    var first_tid: i32 = 0;
+    for (&kern_proc.threads) |*td| {
+        if (td.state == .unused or td.state == .dead or td.proc != p) continue;
+        if (first_tid == 0) first_tid = td.tid;
+        if (td.state == .running or td.state == .runnable) running = true;
+    }
     k.ki_stat = switch (p.state) {
-        .running, .runnable => 'R',
-        .sleeping => 'S',
         .zombie => 'Z',
         .stopped => 'T',
-        else => 'S',
+        else => if (running) 'R' else 'S',
     };
     k.ki_pri = .{ .class = 0, .level = 80, .native = 80, .user = 0 };
-    k.ki_tid = p.pid;
-    k.ki_numthreads = 1;
+    k.ki_tid = first_tid;
+    k.ki_numthreads = @intCast(p.nthreads);
     k.ki_size = p.brk;
     var j: usize = 0;
     while (j < p.name_len and j < user.COMMLEN) : (j += 1) {

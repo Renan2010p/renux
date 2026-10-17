@@ -17,7 +17,10 @@
 //   - a hash table on (disk, offset) finds a cached block without scanning
 //     the pool (FreeBSD's bufhash);
 //   - a least-recently-used list orders the buffers, so the one to recycle
-//     is at its head, written out first when dirty (FreeBSD's free queues).
+//     is at its head, written out first when dirty (FreeBSD's free queues);
+//   - when the page allocator runs dry it asks the cache for pages back
+//     (`reclaim`): the least recently used buffers nobody holds give up
+//     their pages, and get a new one when they are used again.
 //
 // A caller never sees a *Buf. It holds a `Held(access)` handle instead, which
 // owns the reference for as long as it lives and gives it back with
@@ -44,6 +47,7 @@ const param: type = @import("../sys/param.zig");
 const vm_page: type = @import("../vm/vm_page.zig");
 const prf: type = @import("subr_prf.zig");
 const vm_init: type = @import("../vm/vm_init.zig");
+const sysinit: type = @import("../sys/sysinit.zig");
 
 /// The most buffers the pool may grow to (512 MiB of cache with 4 KiB
 /// pages); the actual limit is a quarter of memory (`poolLimit`).
@@ -68,7 +72,8 @@ const Buf: type = struct {
     /// Byte offset of the block on the disk, and its size.
     b_offset: u64 = 0,
     b_bcount: u32 = 0,
-    /// The page the buffer lives in, reached through the direct map.
+    /// The page the buffer lives in, reached through the direct map; 0
+    /// after `reclaim` took it back.
     b_data: vm_page.KAddr = vm_page.KAddr.fromInt(0),
     /// The contents match the disk (or are newer).
     b_valid: bool = false,
@@ -293,6 +298,12 @@ fn getNewBuf() ?*Buf {
     while (index != NONE) : (index = bufs[index].lru_next) {
         const bp: *Buf = &bufs[index];
         if (bp.b_refcnt != 0) continue;
+        if (bp.b_data.int() == 0) {
+            // A buffer whose page was reclaimed needs a new one.
+            const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
+            const pa: vm_page.PAddr = vm_page.physalloc() orelse continue;
+            bp.b_data = pa.toKern(hhdm);
+        }
         if (bp.b_dirty) {
             if (writeOut(bp) != 0) prf.log(prf.LOG_ERR, "vfs_bio: write error while recycling a buffer", .{});
         }
@@ -302,6 +313,34 @@ fn getNewBuf() ?*Buf {
         return bp;
     }
     return null;
+}
+
+/// Give back to the page allocator the pages of up to `pages` buffers
+/// nobody holds, least recently used first, writing out dirty ones (the
+/// page allocator's reclaim hook). Returns the pages freed.
+fn reclaim(pages: usize) usize {
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return 0;
+    var freed: usize = 0;
+    var index: u32 = lru_head;
+    while (index != NONE and freed < pages) : (index = bufs[index].lru_next) {
+        const bp: *Buf = &bufs[index];
+        if (bp.b_refcnt != 0 or bp.b_data.int() == 0) continue;
+        if (bp.b_dirty and writeOut(bp) != 0) continue;
+        if (bp.b_valid) hashRemove(bp);
+        bp.b_valid = false;
+        vm_page.physfree(vm_page.PAddr.fromInt(bp.b_data.int() - hhdm));
+        bp.b_data = vm_page.KAddr.fromInt(0);
+        freed += 1;
+    }
+    return freed;
+}
+
+fn registerReclaim(_: ?*const anyopaque) callconv(.c) void {
+    vm_page.reclaim_hook = reclaim;
+}
+
+comptime {
+    sysinit.SYSINIT("sysinit_bio_reclaim", sysinit.SI_SUB_VM, sysinit.SI_ORDER_ANY, registerReclaim, null);
 }
 
 /// Take a held buffer for `size` bytes at `offset` on `dp`. `read` reads the

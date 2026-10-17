@@ -35,6 +35,76 @@ var bm: phys.Bitmap = undefined;
 /// One past the highest usable physical address seen by physload.
 var mem_top: u64 = 0;
 
+/// Mappings of each page in user address spaces (FreeBSD's wire and object
+/// references, reduced to one count): copy-on-write fork shares a page
+/// between processes, and the page is freed when its last mapping goes. A
+/// page that is not mapped in user space has a count of 0.
+var refs: [free_bits.len * 8]u16 = @splat(0);
+
+/// Called when an allocation finds no free page: the buffer cache gives
+/// back up to `pages` clean pages (FreeBSD's vm_lowmem event, Linux's
+/// shrinkers). Returns how many it freed.
+pub var reclaim_hook: ?*const fn (pages: usize) usize = null;
+
+/// Pages asked of the reclaim hook at a time.
+const RECLAIM_BATCH: usize = 256;
+
+/// Set while the hook runs: freeing buffers must not reclaim again.
+var reclaiming: bool = false;
+
+/// A free page from the bitmap, asking the buffer cache for memory once if
+/// there is none.
+fn takePage() ?u64 {
+    if (bm.alloc()) |pa| return pa;
+    const hook = reclaim_hook orelse return null;
+    if (reclaiming) return null;
+    reclaiming = true;
+    defer reclaiming = false;
+    if (hook(RECLAIM_BATCH) == 0) return null;
+    return bm.alloc();
+}
+
+fn pfn(pa: PAddr) usize {
+    return @intCast(pa.int() >> phys.PAGE_SHIFT);
+}
+
+/// A zeroed page for user space, counted as mapped once.
+pub fn allocUser() ?PAddr {
+    const pa: PAddr = physalloc() orelse return null;
+    refs[pfn(pa)] = 1;
+    return pa;
+}
+
+/// Like allocUser, but not zeroed: for a copy that overwrites it whole.
+pub fn allocUserUninit() ?PAddr {
+    const pa: PAddr = physallocUninit() orelse return null;
+    refs[pfn(pa)] = 1;
+    return pa;
+}
+
+/// Count one more user mapping of `pa` (copy-on-write sharing).
+pub fn ref(pa: PAddr) void {
+    refs[pfn(pa)] += 1;
+}
+
+/// Drop one user mapping of `pa`, freeing the page with the last one.
+pub fn unref(pa: PAddr) void {
+    const n: *u16 = &refs[pfn(pa)];
+    if (n.* == 0) {
+        prf.print("vm_page: unref of an unmapped page pa=");
+        prf.printHex(pa.int());
+        prf.printLine("");
+        return;
+    }
+    n.* -= 1;
+    if (n.* == 0) physfree(pa);
+}
+
+/// The user mappings of `pa`.
+pub fn refCount(pa: PAddr) u16 {
+    return refs[pfn(pa)];
+}
+
 /// True when `pa` names an aligned 4 KiB page within the usable physical memory.
 pub fn validPage(pa: PAddr) bool {
     const a: u64 = pa.int();
@@ -73,7 +143,7 @@ pub fn physunload(start: PAddr, end: PAddr) void {
 
 /// Allocate a zeroed 4 KiB page, or null when memory is exhausted.
 pub fn physalloc() ?PAddr {
-    const pa: PAddr = PAddr.fromInt(bm.alloc() orelse return null);
+    const pa: PAddr = PAddr.fromInt(takePage() orelse return null);
     const page: [*]u64 = pagePtr(pa);
     var i: usize = 0;
     while (i < param.PAGE_SIZE / 8) : (i += 1) {
@@ -86,13 +156,21 @@ pub fn physalloc() ?PAddr {
 /// it at once (fork's page copies). Never hand such a page to user space
 /// before filling it.
 pub fn physallocUninit() ?PAddr {
-    return PAddr.fromInt(bm.alloc() orelse return null);
+    return PAddr.fromInt(takePage() orelse return null);
 }
 
 /// Allocate `n` zeroed, physically contiguous pages (kernel stacks); returns
 /// the address of the first, or null.
 pub fn physallocContig(n: u64) ?PAddr {
-    const pa: PAddr = PAddr.fromInt(bm.allocContig(n) orelse return null);
+    const pa: PAddr = PAddr.fromInt(bm.allocContig(n) orelse blk: {
+        // Freed buffers are scattered, but give them back and try again.
+        const hook = reclaim_hook orelse return null;
+        if (reclaiming) return null;
+        reclaiming = true;
+        defer reclaiming = false;
+        _ = hook(RECLAIM_BATCH);
+        break :blk bm.allocContig(n) orelse return null;
+    });
     const words: [*]u64 = pagePtr(pa);
     @memset(words[0 .. n * param.PAGE_SIZE / 8], 0);
     return pa;

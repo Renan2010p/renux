@@ -114,17 +114,31 @@ const signal: type = @import("../sys/signal.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const kern_sched: type = @import("kern_sched.zig");
 const kern_signal: type = @import("kern_signal.zig");
+const kern_resource: type = @import("kern_resource.zig");
 
 /// Called on every clock tick: fire the interval timers that are due.
 pub fn hardclock(ticks: u64) void {
+    // Charge the tick to the running thread's process, as user or system
+    // time (FreeBSD's statclock), and look at its resident set once a
+    // second -- only when it was interrupted in user mode, so that its page
+    // tables are not halfway through a change.
+    if (!kern_sched.in_scheduler) {
+        const p: *proc.Proc = kern_proc.curthread.proc;
+        if (arch.trap.intr_from_user) {
+            p.usage.uticks += 1;
+            if (ticks % arch.clock.HZ == 0) kern_resource.sampleRss(p);
+        } else {
+            p.usage.sticks += 1;
+        }
+    }
     for (&kern_proc.table) |*p| {
         if (p.state == .unused or p.state == .zombie or p.itimer_due == 0) continue;
         if (ticks < p.itimer_due) continue;
         p.itimer_due = if (p.itimer_interval != 0) ticks + p.itimer_interval else 0;
+        // psignal wakes the thread that takes it if it waits in the kernel.
         kern_signal.psignal(p, signal.SIGALRM);
-        // Let a process blocked in the kernel notice the signal.
-        if (p.state == .sleeping) p.state = .runnable;
     }
+    kern_sched.wakeTimedOut(ticks);
 }
 
 const USEC_PER_TICK: u64 = 1_000_000 / arch.clock.HZ;
@@ -187,9 +201,8 @@ pub fn sysNanosleep(args: [sys.MAXARGS]u64) u64 {
     const ns: u64 = @as(u64, @intCast(rq.tv_sec)) * 1_000_000_000 + @as(u64, @intCast(rq.tv_nsec));
     const ns_per_tick: u64 = 1_000_000_000 / arch.clock.HZ;
     const due: u64 = arch.clock.tickCount() + (ns + ns_per_tick - 1) / ns_per_tick;
-    const p = kern_proc.current;
     while (arch.clock.tickCount() < due) {
-        if ((p.sig_pending & ~p.sig_mask) != 0) {
+        if (kern_signal.interrupted()) {
             if (args[1] != 0) {
                 const left: u64 = (due - arch.clock.tickCount()) * ns_per_tick;
                 const rm: *align(1) Timespec = @ptrFromInt(args[1]);

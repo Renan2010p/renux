@@ -15,9 +15,12 @@
 //                       the catalog's signing key must match a fingerprint
 //                       FreeBSD trusts, its RSA signature over the catalog must
 //                       verify, and each package's checksum must match.
-//   fetch               both (the default)
+//   fetch zig           the Zig toolchain for FreeBSD, the system compiler of
+//                       an installed Renux (/sbin/zig, /lib/zig)
+//                       -> tools/freebsd/zig, checked against a pinned SHA-256
+//   fetch               all three (the default)
 //
-// Nothing it writes is committed; tools/mkrootfs.zig reads the two trees.
+// Nothing it writes is committed; tools/mkrootfs.zig reads the trees.
 // FreeBSD is BSD-licensed; its notices travel with the files.
 
 const std: type = @import("std");
@@ -34,11 +37,21 @@ const LAYOUT = "3";
 const ABI = "FreeBSD:14:amd64";
 const REPO = "https://pkg.freebsd.org/" ++ ABI ++ "/quarterly";
 
+/// The Zig release an installed Renux carries as its compiler: the FreeBSD
+/// build, which runs on Renux through the FreeBSD ABI. The checksum is the
+/// one ziglang.org/download/index.json publishes.
+const ZIG_VERSION = "0.17.0";
+const ZIG_NAME = "zig-x86_64-freebsd-" ++ ZIG_VERSION;
+const ZIG_URL = "https://ziglang.org/download/" ++ ZIG_VERSION ++ "/" ++ ZIG_NAME ++ ".tar.xz";
+const ZIG_SHA256 = "a314f1cc92d098bd39caf9e5607a0de2a8fd0d00064776cb3fd5b3bee38a67c9";
+
 const BASE_DIR = "tools/freebsd";
 const ROOT = BASE_DIR ++ "/root";
 const PKG_DIR = BASE_DIR ++ "/pkg";
 const PKGROOT = BASE_DIR ++ "/pkgroot";
 const TXZ = BASE_DIR ++ "/base-" ++ RELEASE ++ ".txz";
+const ZIG_DIR = BASE_DIR ++ "/zig";
+const ZIG_TXZ = BASE_DIR ++ "/" ++ ZIG_NAME ++ ".tar.xz";
 
 /// Parts of the base system not needed to run Renux (as the shell script
 /// skipped them): debug info, tests, headers, 32-bit compat, documentation
@@ -79,11 +92,14 @@ pub fn main(init: std.process.Init) !void {
         try fetchBase(ctx);
     } else if (std.mem.eql(u8, what, "pkgs")) {
         try fetchPkgs(ctx, pkgs);
+    } else if (std.mem.eql(u8, what, "zig")) {
+        try fetchZig(ctx);
     } else if (std.mem.eql(u8, what, "all")) {
         try fetchBase(ctx);
         try fetchPkgs(ctx, pkgs);
+        try fetchZig(ctx);
     } else {
-        std.process.fatal("usage: fetch [base|pkgs|all] [package ...]", .{});
+        std.process.fatal("usage: fetch [base|pkgs|zig|all] [package ...]", .{});
     }
 }
 
@@ -172,6 +188,45 @@ fn fetchBase(ctx: Ctx) !void {
     cwd.deleteTree(ctx.io, ROOT) catch {};
     try cwd.rename(tmp, cwd, ROOT, ctx.io);
     say(ctx, "fetch: {s} ready in {s}", .{ RELEASE, ROOT });
+}
+
+// -- the Zig toolchain -------------------------------------------------------
+
+/// Download the FreeBSD build of Zig and unpack it as tools/freebsd/zig
+/// (the `zig` binary next to its `lib/`).
+fn fetchZig(ctx: Ctx) !void {
+    const cwd = Io.Dir.cwd();
+    if (readSmall(ctx, ZIG_DIR ++ "/.release")) |got| {
+        if (std.mem.eql(u8, std.mem.trim(u8, got, " \t\r\n"), ZIG_NAME)) {
+            say(ctx, "fetch: Zig {s} already in {s}", .{ ZIG_VERSION, ZIG_DIR });
+            return;
+        }
+    }
+
+    try cwd.createDirPath(ctx.io, BASE_DIR);
+    if (!fileExists(ctx, ZIG_TXZ)) {
+        say(ctx, "fetch: downloading {s}", .{ZIG_URL});
+        try download(ctx, ZIG_URL, ZIG_TXZ);
+    }
+
+    say(ctx, "fetch: checking {s}", .{ZIG_TXZ});
+    const sum = try sha256Hex(ctx, ZIG_TXZ);
+    if (!std.mem.eql(u8, &sum, ZIG_SHA256)) {
+        cwd.deleteFile(ctx.io, ZIG_TXZ) catch {};
+        std.process.fatal("fetch: checksum mismatch for {s}", .{ZIG_TXZ});
+    }
+
+    // The archive holds one directory, zig-x86_64-freebsd-<version>/; it
+    // becomes tools/freebsd/zig once unpacked whole.
+    const tmp = ZIG_DIR ++ ".tmp";
+    say(ctx, "fetch: unpacking into {s}", .{tmp});
+    cwd.deleteTree(ctx.io, tmp) catch {};
+    try extractTxz(ctx, ZIG_TXZ, tmp, &.{});
+    try cwd.writeFile(ctx.io, .{ .sub_path = tmp ++ "/" ++ ZIG_NAME ++ "/.release", .data = ZIG_NAME });
+    cwd.deleteTree(ctx.io, ZIG_DIR) catch {};
+    try cwd.rename(tmp ++ "/" ++ ZIG_NAME, cwd, ZIG_DIR, ctx.io);
+    cwd.deleteTree(ctx.io, tmp) catch {};
+    say(ctx, "fetch: Zig {s} ready in {s}", .{ ZIG_VERSION, ZIG_DIR });
 }
 
 fn isExcluded(rel: []const u8, excludes: []const []const u8) bool {

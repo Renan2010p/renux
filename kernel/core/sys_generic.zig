@@ -38,7 +38,7 @@ fn transfer(f: *file.File, request: anytype, comptime op: fn (*file.File, @TypeO
         const n: isize = op(f, request);
         arch.cpu.disable_interrupts();
         if (n != again or (f.f_flag & file.FNONBLOCK) != 0) return sys.signed(n);
-        if (kern_signal.interrupted(kern_proc.current)) return sys.signed(-errno.EINTR);
+        if (kern_signal.interrupted()) return sys.signed(-errno.EINTR);
         kern_sched.ioWait();
     }
 }

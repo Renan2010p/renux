@@ -10,6 +10,15 @@
 //
 // Page tables are reached through the higher-half direct map offset supplied by
 // the bootloader.
+//
+// Two kinds of pages hang off a page map:
+//
+//   - its own page-table pages, recorded in the pmap's arena and freed with
+//     it (destroy);
+//   - the user pages its leaf entries map. These are counted (vm_page.ref):
+//     copy-on-write fork maps one page in two page maps, and a page is
+//     freed when its last mapping goes. Device memory is mapped UNMANAGED
+//     and never counted or freed.
 
 const pte: type = @import("../include/pte.zig");
 const iface: type = @import("../include/pmap.zig");
@@ -32,11 +41,10 @@ const PML4_SLOTS: usize = 512;
 var hhdm: u64 = 0;
 var kernel_pmap: Pmap = 0;
 
-/// Per-pmap record of every physical page that belongs to the pmap's address
-/// space: its top level, its page tables, and all its data pages. destroy()
-/// frees exactly this record -- there is no walk, so it can never touch a page
-/// the pmap does not own. This mirrors FreeBSD's pmap_release(), which frees
-/// only the pmap's own pages and clears the shared kernel entries.
+/// Per-pmap record of the page-table pages of the pmap (its top level and
+/// every table below), which destroy() frees. The shared kernel half is
+/// never recorded. This mirrors FreeBSD's pmap_release(), which frees only
+/// the pmap's own pages and clears the shared kernel entries.
 const MAXARENA: usize = 64;
 const BLOCK_PAGES: usize = 500;
 
@@ -114,17 +122,8 @@ fn arenaClose(pmap: u64) void {
     a.n = 0;
 }
 
-/// Allocate a zeroed page and record it as belonging to `pmap`. Every page in a
-/// process's address space -- data and page tables -- is allocated through here.
-/// Like allocPage(), but the page is not zeroed: for a copy that overwrites
-/// it whole.
-fn allocPageUninit(pmap: Pmap) ?u64 {
-    const pa: u64 = (vm_page.physallocUninit() orelse return null).int();
-    recordPage(pmap, pa);
-    return pa;
-}
-
-pub fn allocPage(pmap: Pmap) ?u64 {
+/// A zeroed page-table page for `pmap`, recorded so destroy() frees it.
+fn allocTable(pmap: Pmap) ?u64 {
     const pa: u64 = (vm_page.physalloc() orelse return null).int();
     recordPage(pmap, pa);
     return pa;
@@ -193,6 +192,7 @@ fn flagsFor(prot: Prot) u64 {
         .user_rw => pte.P | pte.RW | pte.US | pte.NX,
         .user_ro => pte.P | pte.US | pte.NX,
         .user_rx => pte.P | pte.US,
+        .user_rwx => pte.P | pte.RW | pte.US,
     };
 }
 
@@ -207,27 +207,109 @@ fn index(va: u64, comptime shift: u6) usize {
 fn descend(owner: u64, parent: [*]u64, i: usize) ?[*]u64 {
     var entry: u64 = parent[i];
     if ((entry & pte.P) == 0) {
-        const child: u64 = allocPage(owner) orelse return null;
+        const child: u64 = allocTable(owner) orelse return null;
         entry = child | pte.P | pte.RW | pte.US;
         parent[i] = entry;
     }
     return table(entry);
 }
 
-/// Install a leaf mapping with raw PTE flags.
+/// Flush the TLB entry for `va` when `p` is the loaded page map.
+fn invalidate(p: Pmap, va: u64) void {
+    if (p != current()) return;
+    asm volatile ("invlpg (%[p])"
+        :
+        : [p] "r" (va),
+        : .{ .memory = true });
+}
+
+/// Flush the whole TLB when `p` is the loaded page map (after changing
+/// many entries).
+fn invalidateAll(p: Pmap) void {
+    if (p == current()) activate(p);
+}
+
+/// Drop the page a leaf entry maps, unless it is device memory.
+fn releaseLeaf(entry: u64) void {
+    if ((entry & pte.P) == 0 or (entry & pte.UNMANAGED) != 0) return;
+    vm_page.unref(vm_page.PAddr.fromInt(entry & pte.FRAME_MASK));
+}
+
+/// Install a leaf mapping with raw PTE flags. A page it replaces loses that
+/// mapping.
 fn install(p: Pmap, va: u64, pa: u64, flags: u64) void {
     const pml4 = table(p);
     const pdp = descend(p, pml4, index(va, pte.L4_SHIFT)) orelse return;
     const pd = descend(p, pdp, index(va, pte.L3_SHIFT)) orelse return;
     const pt = descend(p, pd, index(va, pte.L2_SHIFT)) orelse return;
-    pt[index(va, pte.L1_SHIFT)] = (pa & pte.FRAME_MASK) | flags;
+    const slot: *u64 = &pt[index(va, pte.L1_SHIFT)];
+    const old: u64 = slot.*;
+    slot.* = (pa & pte.FRAME_MASK) | flags;
+    if ((old & pte.P) != 0 and (old & pte.FRAME_MASK) != (pa & pte.FRAME_MASK)) releaseLeaf(old);
+    invalidate(p, va);
+}
 
-    if (p == current()) {
-        asm volatile ("invlpg (%[p])"
-            :
-            : [p] "r" (va),
-            : .{ .memory = true });
+/// The leaf entry for `va` in `p`, or null when no page table covers it.
+fn leafSlot(p: Pmap, va: u64) ?*u64 {
+    const e4: u64 = table(p)[index(va, pte.L4_SHIFT)];
+    if ((e4 & pte.P) == 0) return null;
+    const e3: u64 = table(e4)[index(va, pte.L3_SHIFT)];
+    if ((e3 & pte.P) == 0 or (e3 & pte.PS) != 0) return null;
+    const e2: u64 = table(e3)[index(va, pte.L2_SHIFT)];
+    if ((e2 & pte.P) == 0 or (e2 & pte.PS) != 0) return null;
+    return &table(e2)[index(va, pte.L1_SHIFT)];
+}
+
+/// Call `visit(ctx, va, slot)` for every present leaf entry of `p` in
+/// [start, end), skipping quickly over the address ranges no page table
+/// covers.
+fn eachLeaf(p: Pmap, start: u64, end: u64, ctx: anytype, comptime visit: fn (@TypeOf(ctx), u64, *u64) void) void {
+    const L2_SPAN: u64 = @as(u64, 1) << pte.L2_SHIFT; // one page table
+    var va: u64 = start & ~@as(u64, param.PAGE_SIZE - 1);
+    while (va < end) {
+        const e4: u64 = table(p)[index(va, pte.L4_SHIFT)];
+        if ((e4 & pte.P) == 0) {
+            va = nextBoundary(va, pte.L4_SHIFT);
+            continue;
+        }
+        const e3: u64 = table(e4)[index(va, pte.L3_SHIFT)];
+        if ((e3 & pte.P) == 0 or (e3 & pte.PS) != 0) {
+            va = nextBoundary(va, pte.L3_SHIFT);
+            continue;
+        }
+        const e2: u64 = table(e3)[index(va, pte.L2_SHIFT)];
+        if ((e2 & pte.P) == 0 or (e2 & pte.PS) != 0) {
+            va = nextBoundary(va, pte.L2_SHIFT);
+            continue;
+        }
+        const pt: [*]u64 = table(e2);
+        const table_end: u64 = @min(end, (va & ~(L2_SPAN - 1)) + L2_SPAN);
+        while (va < table_end) : (va += param.PAGE_SIZE) {
+            const slot: *u64 = &pt[index(va, pte.L1_SHIFT)];
+            if ((slot.* & pte.P) != 0) visit(ctx, va, slot);
+        }
     }
+}
+
+/// The number of pages mapped in the user half of page map `p`: its
+/// resident set.
+pub fn residentCount(p: Pmap) u64 {
+    const Visit = struct {
+        fn visit(count: *u64, va: u64, slot: *u64) void {
+            _ = va;
+            _ = slot;
+            count.* += 1;
+        }
+    };
+    var n: u64 = 0;
+    eachLeaf(p, 0, @as(u64, 1) << 47, &n, Visit.visit);
+    return n;
+}
+
+/// The first address past the region of size 2^shift containing `va`.
+fn nextBoundary(va: u64, comptime shift: u6) u64 {
+    const span: u64 = @as(u64, 1) << shift;
+    return (va & ~(span - 1)) +% span;
 }
 
 /// Install a leaf mapping `va` -> `pa` in page map `p`.
@@ -235,53 +317,119 @@ pub fn map(p: Pmap, va: u64, pa: u64, prot: Prot) void {
     install(p, va, pa, flagsFor(prot));
 }
 
-/// Duplicate the user half of `src` into `dst` (fork): every present 4 KiB user
-/// page is copied to a fresh physical page.
-pub fn copyUser(dst: Pmap, src: Pmap, hhdm_offset: u64) void {
-    const pml4 = table(src);
-    var idx4: usize = 0;
-    while (idx4 < KERNEL_PML4_START) : (idx4 += 1) {
-        const e4: u64 = pml4[idx4];
-        if ((e4 & pte.P) == 0) continue;
-        const pdp = table(e4);
-        var idx3: usize = 0;
-        while (idx3 < INDEX_MASK + 1) : (idx3 += 1) {
-            const e3: u64 = pdp[idx3];
-            if ((e3 & pte.P) == 0 or (e3 & pte.PS) != 0) continue;
-            const pd = table(e3);
-            var idx2: usize = 0;
-            while (idx2 < INDEX_MASK + 1) : (idx2 += 1) {
-                const e2: u64 = pd[idx2];
-                if ((e2 & pte.P) == 0 or (e2 & pte.PS) != 0) continue;
-                const pt = table(e2);
-                var idx1: usize = 0;
-                while (idx1 < INDEX_MASK + 1) : (idx1 += 1) {
-                    const e1: u64 = pt[idx1];
-                    if ((e1 & pte.P) == 0) continue;
-
-                    const dst_pa: u64 = allocPageUninit(dst) orelse return;
-                    const s: [*]const u8 = @ptrFromInt((e1 & pte.FRAME_MASK) + hhdm_offset);
-                    const d: [*]u8 = @ptrFromInt(dst_pa + hhdm_offset);
-                    @memcpy(d[0..param.PAGE_SIZE], s[0..param.PAGE_SIZE]);
-
-                    const va: u64 = (@as(u64, idx4) << pte.L4_SHIFT) |
-                        (@as(u64, idx3) << pte.L3_SHIFT) |
-                        (@as(u64, idx2) << pte.L2_SHIFT) |
-                        (@as(u64, idx1) << pte.L1_SHIFT);
-                    install(dst, va, dst_pa, (e1 & 0xfff) | (e1 & pte.NX));
-                }
-            }
+/// Unmap [start, end) in `p`, dropping each page's mapping (munmap, and
+/// what a new mapping replaces).
+pub fn removeRange(p: Pmap, start: u64, end: u64) void {
+    const Visit = struct {
+        fn visit(_: void, _: u64, slot: *u64) void {
+            const old: u64 = slot.*;
+            slot.* = 0;
+            releaseLeaf(old);
         }
-    }
+    };
+    eachLeaf(p, start, end, {}, Visit.visit);
+    invalidateAll(p);
 }
 
-/// Tear down a process's address space: free every page recorded for `p` (its
-/// top level, its page tables and its data pages). There is no walk, so it can
-/// never touch a page the pmap does not own, and the shared kernel half (which
-/// is never recorded) is left alone. Called when a process is reaped or execs
-/// away its old image.
+/// Map the pages `src` has in [start, end) in `dst` too, copy-on-write
+/// (fork): both page maps lose write access to a shared page, which is
+/// marked COW so the first write copies it (resolveCow). Device memory is
+/// simply shared.
+pub fn copyRangeCow(dst: Pmap, src: Pmap, start: u64, end: u64) void {
+    const Visit = struct {
+        fn visit(target: Pmap, va: u64, slot: *u64) void {
+            var entry: u64 = slot.*;
+            if ((entry & pte.UNMANAGED) == 0) {
+                if ((entry & pte.RW) != 0) {
+                    entry = (entry & ~pte.RW) | pte.COW;
+                    slot.* = entry;
+                }
+                vm_page.ref(vm_page.PAddr.fromInt(entry & pte.FRAME_MASK));
+            }
+            // The child starts with the page clean: only what it writes
+            // itself is its to write back to a shared file mapping.
+            install(target, va, entry & pte.FRAME_MASK, entry & ~(pte.FRAME_MASK | pte.D));
+        }
+    };
+    eachLeaf(src, start, end, dst, Visit.visit);
+    invalidateAll(src);
+}
+
+/// Call `visit(ctx, va, pa)` for every page in [start, end) the user has
+/// written since it was mapped or last visited (the hardware's dirty bit),
+/// and clear the bit (for writing a shared file mapping back to its file:
+/// munmap, msync, exit).
+pub fn eachDirty(p: Pmap, start: u64, end: u64, ctx: anytype, comptime visit: fn (@TypeOf(ctx), u64, u64) void) void {
+    const Ctx = struct { inner: @TypeOf(ctx) };
+    const Visit = struct {
+        fn leaf(c: Ctx, va: u64, slot: *u64) void {
+            if ((slot.* & pte.D) == 0 or (slot.* & pte.UNMANAGED) != 0) return;
+            slot.* &= ~pte.D;
+            visit(c.inner, va, slot.* & pte.FRAME_MASK);
+        }
+    };
+    eachLeaf(p, start, end, Ctx{ .inner = ctx }, Visit.leaf);
+    invalidateAll(p);
+}
+
+/// Give the pages present in [start, end) the protection `prot`
+/// (mprotect); with `accessible` false the user cannot reach them at all
+/// (PROT_NONE). A copy-on-write page stays read-only until written.
+pub fn protectRange(p: Pmap, start: u64, end: u64, prot: Prot, accessible: bool) void {
+    const Ctx = struct { flags: u64, accessible: bool };
+    const Visit = struct {
+        fn visit(ctx: Ctx, _: u64, slot: *u64) void {
+            const keep: u64 = slot.* & (pte.FRAME_MASK | pte.COW | pte.UNMANAGED | pte.A | pte.D);
+            var flags: u64 = ctx.flags;
+            if ((keep & pte.COW) != 0) flags &= ~pte.RW;
+            if (!ctx.accessible) flags &= ~pte.US;
+            slot.* = keep | flags;
+        }
+    };
+    eachLeaf(p, start, end, Ctx{ .flags = flagsFor(prot), .accessible = accessible }, Visit.visit);
+    invalidateAll(p);
+}
+
+/// Resolve a write to the copy-on-write page at `va` (FreeBSD's
+/// vm_fault_cow): a page no one else maps any more just becomes writable,
+/// a shared one is copied. Returns false when the page is not
+/// copy-on-write (the write is not allowed).
+pub fn resolveCow(p: Pmap, va: u64) bool {
+    const slot: *u64 = leafSlot(p, va) orelse return false;
+    const entry: u64 = slot.*;
+    if ((entry & pte.P) == 0) return false;
+    if ((entry & pte.RW) != 0) return true; // already resolved
+    if ((entry & pte.COW) == 0) return false;
+    const old: vm_page.PAddr = vm_page.PAddr.fromInt(entry & pte.FRAME_MASK);
+    if (vm_page.refCount(old) == 1) {
+        slot.* = (entry & ~pte.COW) | pte.RW;
+        invalidate(p, va);
+        return true;
+    }
+    const copy: vm_page.PAddr = vm_page.allocUserUninit() orelse return false;
+    const s: [*]const u8 = @ptrFromInt(old.int() + hhdm);
+    const d: [*]u8 = @ptrFromInt(copy.int() + hhdm);
+    @memcpy(d[0..param.PAGE_SIZE], s[0..param.PAGE_SIZE]);
+    slot.* = copy.int() | (entry & ~(pte.FRAME_MASK | pte.COW)) | pte.RW;
+    vm_page.unref(old);
+    invalidate(p, va);
+    return true;
+}
+
+/// Tear down a process's address space: drop the user pages its leaf
+/// entries map, then free its page tables (recorded in its arena). The
+/// shared kernel half is never touched. Called when a process is reaped or
+/// execs away its old image.
 pub fn destroy(p: Pmap, hhdm_off: u64) void {
     _ = hhdm_off;
+    const user_end: u64 = @as(u64, KERNEL_PML4_START) << pte.L4_SHIFT;
+    const Visit = struct {
+        fn visit(_: void, _: u64, slot: *u64) void {
+            releaseLeaf(slot.*);
+            slot.* = 0;
+        }
+    };
+    eachLeaf(p, 0, user_end, {}, Visit.visit);
     arenaClose(p);
 }
 
@@ -290,9 +438,15 @@ pub fn kenterPa(va: u64, pa: u64, prot: Prot) void {
     map(kernel_pmap, va, pa, prot);
 }
 
-/// Map a user page in page map `p`.
+/// Map user page `pa` (counted by vm_page.allocUser or ref) at `va` in
+/// page map `p`.
 pub fn enterUser(p: Pmap, va: u64, pa: u64, prot: Prot) void {
     map(p, va, pa, prot);
+}
+
+/// Map device memory `pa` at `va` in page map `p`: never counted or freed.
+pub fn enterDevice(p: Pmap, va: u64, pa: u64, prot: Prot) void {
+    install(p, va, pa, flagsFor(prot) | pte.UNMANAGED);
 }
 
 /// The page-table entries that translate `va` in `p`, top level first (PML4,

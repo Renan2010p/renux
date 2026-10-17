@@ -18,7 +18,8 @@
 //   zig build kernel             the kernel
 //   zig build loader             the UEFI loader
 //   zig build userland           the native programs
-//   zig build fetch              download the FreeBSD userland (base + packages)
+//   zig build fetch              download the FreeBSD userland (base, packages
+//                                and the Zig toolchain an install carries)
 //   zig build iso                the bootable UEFI ISO (Zig writer, no xorriso)
 //   zig build run                boot the ISO in QEMU (UEFI, serial console)
 //   zig build run-efi            boot it through UEFI, in a window
@@ -85,7 +86,7 @@ pub fn build(b: *Builder) void {
     // -- kernel ---------------------------------------------------------------------
     const kernel_step: *Builder.Step = b.step("kernel", "Build the kernel");
     const empty_img: Builder.LazyPath = b.addWriteFiles().add("empty.img", "");
-    const kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, empty_img);
+    const kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, empty_img, empty_img);
     const install_kernel: *Builder.Step.InstallFile = b.addInstallFileWithDir(kernel.getEmittedBin(), .{ .custom = "boot/kernel" }, "kernel");
     kernel_step.dependOn(&install_kernel.step);
 
@@ -114,6 +115,8 @@ pub fn build(b: *Builder) void {
     });
     const fetch_run: *Builder.Step.Run = b.addRunArtifact(fetch_tool);
     fetch_run.setCwd(b.path("."));
+    // `zig build fetch -- zig` fetches only the toolchain, and so on.
+    fetch_run.addPassthruArgs();
     fetch_step.dependOn(&fetch_run.step);
 
     // -- ISO ------------------------------------------------------------------------
@@ -149,7 +152,16 @@ pub fn build(b: *Builder) void {
     esp_run.addFileArg(b.path("bootloader/defaults/loader-installed.conf"));
     const esp_img: Builder.LazyPath = esp_run.addOutputFileArg("esp.img");
 
-    const installer_kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, esp_img);
+    // The installed root: the live root plus the system compiler (Zig, from
+    // `zig build fetch`) and room to build, gzip-compressed (/dev/md2).
+    const mksysroot: *Builder.Step.Run = b.addRunArtifact(mkrootfs_tool);
+    mksysroot.setCwd(b.path("."));
+    mksysroot.addArg("--installed");
+    mksysroot.addDirectoryArg(stage.getDirectory());
+    const sys_img: Builder.LazyPath = mksysroot.addOutputFileArg("system.img.gz");
+    mksysroot.has_side_effects = true;
+
+    const installer_kernel: *Builder.Step.Compile = buildKernel(b, devbuild, if (mdroot) root_img else empty_img, esp_img, sys_img);
     const installer_run: *Builder.Step.Run = b.addRunArtifact(mkiso);
     installer_run.addFileArg(installer_kernel.getEmittedBin());
     installer_run.addFileArg(loader.getEmittedBin());
@@ -307,6 +319,10 @@ fn hostTool(b: *Builder, name: []const u8, mkfs: *Builder.Module) *Builder.Step.
     const mod: *Builder.Module = b.createModule(.{
         .root_source_file = b.path(b.fmt("tools/{s}.zig", .{name})),
         .target = b.graph.host,
+        // Fast: mkrootfs compresses a gigabyte and a half for the installer
+        // (minutes in Debug), and std.compress.flate.Compress writes a
+        // corrupt stream in Debug builds.
+        .optimize = .ReleaseFast,
     });
     mod.addImport("mkfs", mkfs);
     return b.addExecutable(.{ .name = name, .root_module = mod });
@@ -314,7 +330,7 @@ fn hostTool(b: *Builder, name: []const u8, mkfs: *Builder.Module) *Builder.Step.
 
 // -- kernel -----------------------------------------------------------------------------
 
-fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath, esp_img: Builder.LazyPath) *Builder.Step.Compile {
+fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath, esp_img: Builder.LazyPath, sys_img: Builder.LazyPath) *Builder.Step.Compile {
     const cpu_arch: std.Target.Cpu.Arch = b.graph.host.query.cpu_arch orelse b.graph.host.result.cpu.arch;
     const target: Builder.ResolvedTarget = b.resolveTargetQuery(.{
         .cpu_arch = cpu_arch,
@@ -370,6 +386,9 @@ fn buildKernel(b: *Builder, devbuild: bool, root_img: Builder.LazyPath, esp_img:
     // The installer's ESP image (kernel/fs/espimage.zig); empty unless the
     // build is an installer one.
     kern.addAnonymousImport("espimage", .{ .root_source_file = esp_img });
+    // The installer's compressed installed root (kernel/fs/sysimage.zig);
+    // empty unless the build is an installer one.
+    kern.addAnonymousImport("sysimage", .{ .root_source_file = sys_img });
 
     const exe: *Builder.Step.Compile = b.addExecutable(.{
         .name = "kernel",

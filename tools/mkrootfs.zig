@@ -3,7 +3,7 @@
 //
 // mkrootfs -- build the root file system image the kernel embeds.
 //
-// Usage: mkrootfs <userland> <image>
+// Usage: mkrootfs [--installed] <userland> <image>
 //
 // The kernel carries its root file system (FreeBSD's MD_ROOT). This program
 // makes that image in two stages:
@@ -16,6 +16,16 @@
 //          (found from each ELF file's DT_NEEDED entries, recursively), the
 //          PAM modules and the configuration the login path reads;
 //   2. pack the tree into an ext2 image with tools/mkfs.zig.
+//
+// With --installed it makes the root of an installed system instead, which
+// the installer writes to disk: the same tree plus the system compiler --
+// Zig, `zig build fetch` puts it in tools/freebsd/zig -- as /sbin/zig with
+// its library in /lib/zig (where Zig looks, walking up from its binary), on
+// 4 KiB blocks with a gigabyte free for builds and their caches. That image
+// is large and mostly empty, so it is written gzip-compressed (deflate,
+// std.compress.flate) and padded to whole sectors: the installer kernel
+// carries it as /dev/md2 and the installer inflates it onto the disk. The
+// live root stays small, since the live system unpacks it into memory.
 //
 // The image is byte-for-byte reproducible (fixed timestamps, a zero UUID),
 // so an unchanged system does not rebuild the kernel that embeds it.
@@ -34,6 +44,8 @@ const FREEBSD_BASE: []const u8 = "tools/freebsd/root";
 const FREEBSD_PACKAGES: []const u8 = "tools/freebsd/pkgroot";
 /// Renux's own /etc files.
 const RENUX_ETC: []const u8 = "userland/etc";
+/// The Zig toolchain for FreeBSD, as `zig build fetch` unpacks it.
+const ZIG_TOOLCHAIN: []const u8 = "tools/freebsd/zig";
 
 /// The directories every root has, even when nothing is installed in them.
 const SKELETON: []const []const u8 = &.{
@@ -105,22 +117,38 @@ const IMAGE_FORMAT: mkfs.Options = .{
     .bytes_per_inode = 4096,
 };
 
+/// The installed root: 4 KiB blocks (the compiler is one 180 MB file), 5%
+/// reserved for root as newfs does, one inode per 16 KiB.
+const INSTALLED_FORMAT: mkfs.Options = .{
+    .bs = 4096,
+    .inode_size = 256,
+    .reserved_pct = 5,
+    .bytes_per_inode = 16384,
+    .label = "renux-root",
+};
+
 /// The image is the staged size plus half again plus 8 MiB of free space,
 /// so the running system can write to its root.
 fn imageBlocks(used_kib: u64) u64 {
     return used_kib + used_kib / 2 + 8192;
 }
 
+/// Free space an installed root gets on top: room to build with Zig (its
+/// cache in ~/.cache/zig grows by tens of megabytes per project).
+const INSTALLED_EXTRA_KIB: u64 = 1024 * 1024;
+
 pub fn main(init: std.process.Init) !void {
     const io: Io = init.io;
     const arena: Allocator = init.arena.allocator();
-    const args: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
-    if (args.len != 3) std.process.fatal("usage: mkrootfs <userland> <image>", .{});
+    var args: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
+    const installed: bool = args.len > 1 and std.mem.eql(u8, args[1], "--installed");
+    if (installed) args = args[1..];
+    if (args.len != 3) std.process.fatal("usage: mkrootfs [--installed] <userland> <image>", .{});
     const userland_path: []const u8 = args[1];
     const image_path: []const u8 = args[2];
 
     const cwd: Dir = Dir.cwd();
-    const work_path: []const u8 = try std.fs.path.join(arena, &.{ std.fs.path.dirname(image_path) orelse ".", "rootfs" });
+    const work_path: []const u8 = try std.fs.path.join(arena, &.{ std.fs.path.dirname(image_path) orelse ".", if (installed) "sysroot" else "rootfs" });
 
     var userland: Dir = cwd.openDir(io, userland_path, .{ .iterate = true }) catch
         std.process.fatal("mkrootfs: cannot open the native userland {s} (run 'zig build userland')", .{userland_path});
@@ -155,16 +183,104 @@ pub fn main(init: std.process.Init) !void {
         try freebsd.install();
     } else |_| {}
 
+    if (installed) try installZig(io, cwd, work);
+
     // -- the image -----------------------------------------------------------
     const used_kib: u64 = try diskUsageKib(io, work);
     const tmp_path: []const u8 = try std.fmt.allocPrint(arena, "{s}.img", .{work_path});
     cwd.deleteFile(io, tmp_path) catch {};
-    var options: mkfs.Options = IMAGE_FORMAT;
+    var options: mkfs.Options = if (installed) INSTALLED_FORMAT else IMAGE_FORMAT;
     options.dir = work_path;
     options.image = tmp_path;
-    options.blocks = imageBlocks(used_kib);
+    options.blocks = if (installed)
+        (imageBlocks(used_kib) + INSTALLED_EXTRA_KIB) / (INSTALLED_FORMAT.bs / 1024)
+    else
+        imageBlocks(used_kib);
     try mkfs.makeFs(io, std.heap.page_allocator, options);
-    try Dir.rename(cwd, tmp_path, cwd, image_path, io);
+    if (installed) {
+        try gzipImage(io, cwd, tmp_path, image_path);
+        try verifyGzip(io, cwd, tmp_path, image_path);
+        try cwd.deleteFile(io, tmp_path);
+    } else {
+        try Dir.rename(cwd, tmp_path, cwd, image_path, io);
+    }
+    // The staging tree is only needed to make the image.
+    if (installed) try cwd.deleteTree(io, work_path);
+}
+
+/// Install the system compiler: tools/freebsd/zig/zig as /sbin/zig and its
+/// library as /lib/zig. Zig finds the library by walking up from its own
+/// binary and trying <dir>/lib/zig and <dir>/lib at each step, so from
+/// /sbin it settles on /lib/zig.
+fn installZig(io: Io, cwd: Dir, work: Dir) !void {
+    var toolchain: Dir = cwd.openDir(io, ZIG_TOOLCHAIN, .{ .iterate = true }) catch {
+        std.debug.print("mkrootfs: no Zig toolchain in {s} (run 'zig build fetch'); the installed system has no compiler\n", .{ZIG_TOOLCHAIN});
+        return;
+    };
+    defer toolchain.close(io);
+    try Dir.copyFile(toolchain, "zig", work, "sbin/zig", io, .{});
+    try setMode(io, work, "sbin/zig", 0o755);
+    var lib: Dir = try toolchain.openDir(io, "lib", .{ .iterate = true });
+    defer lib.close(io);
+    var target: Dir = try work.createDirPathOpen(io, "lib/zig", .{ .open_options = .{ .iterate = true } });
+    defer target.close(io);
+    try copyTree(io, lib, target);
+    try Dir.copyFile(toolchain, "LICENSE", work, "lib/zig/LICENSE", io, .{});
+}
+
+/// Check that `gz` inflates back to exactly `original`, so that a bad
+/// compressed image fails the build instead of an install.
+fn verifyGzip(io: Io, cwd: Dir, original: []const u8, gz_path: []const u8) !void {
+    const flate = std.compress.flate;
+    const orig: Io.File = try cwd.openFile(io, original, .{});
+    defer orig.close(io);
+    const gz_file: Io.File = try cwd.openFile(io, gz_path, .{});
+    defer gz_file.close(io);
+
+    var orig_buf: [256 * 1024]u8 = undefined;
+    var orig_reader: Io.File.Reader = orig.reader(io, &orig_buf);
+    var gz_buf: [256 * 1024]u8 = undefined;
+    var gz_reader: Io.File.Reader = gz_file.reader(io, &gz_buf);
+    var window: [flate.max_window_len]u8 = undefined;
+    var gz: flate.Decompress = .init(&gz_reader.interface, .gzip, &window);
+
+    var a: [64 * 1024]u8 = undefined;
+    var b: [64 * 1024]u8 = undefined;
+    var off: u64 = 0;
+    while (true) {
+        const n: usize = try gz.reader.readSliceShort(&a);
+        const m: usize = try orig_reader.interface.readSliceShort(b[0..n]);
+        if (n != m or !std.mem.eql(u8, a[0..n], b[0..m])) {
+            std.process.fatal("mkrootfs: {s} does not inflate back to the image (at byte {d})", .{ gz_path, off });
+        }
+        if (n == 0) break;
+        off += n;
+    }
+}
+
+/// Write `from` gzip-compressed to `to`, padded with zeros to a multiple of
+/// 512 bytes so that it can be a disk (gzip readers stop at the end of the
+/// member and ignore the padding).
+fn gzipImage(io: Io, cwd: Dir, from: []const u8, to: []const u8) !void {
+    const flate = std.compress.flate;
+    const src: Io.File = try cwd.openFile(io, from, .{});
+    defer src.close(io);
+    const dst: Io.File = try cwd.createFile(io, to, .{});
+    defer dst.close(io);
+
+    var in_buf: [256 * 1024]u8 = undefined;
+    var reader: Io.File.Reader = src.reader(io, &in_buf);
+    var out_buf: [256 * 1024]u8 = undefined;
+    var writer: Io.File.Writer = dst.writer(io, &out_buf);
+    var window: [flate.max_window_len]u8 = undefined;
+    var gz: flate.Compress = try .init(&writer.interface, &window, .gzip, .level_6);
+    _ = try reader.interface.streamRemaining(&gz.writer);
+    try gz.finish();
+
+    const zeros: [512]u8 = @splat(0);
+    const len: u64 = writer.logicalPos();
+    try writer.interface.writeAll(zeros[0..@intCast(std.mem.alignForward(u64, len, 512) - len)]);
+    try writer.interface.flush();
 }
 
 // -- the FreeBSD userland ------------------------------------------------------

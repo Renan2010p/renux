@@ -14,6 +14,8 @@ const proc: type = @import("../sys/proc.zig");
 const kern_proc: type = @import("kern_proc.zig");
 const arch: type = @import("../arch/arch.zig");
 const subr_param: type = @import("subr_param.zig");
+const param: type = @import("../sys/param.zig");
+const user: type = @import("../sys/user.zig");
 
 /// RLIM_INFINITY as a 64-bit signed value.
 pub const RLIM_INFINITY: i64 = 0x7fff_ffff_ffff_ffff;
@@ -104,5 +106,48 @@ pub fn sysSetloginclass(args: [sys.MAXARGS]u64) u64 {
     }
     @memset(&p.loginclass, 0);
     @memcpy(p.loginclass[0..n], src[0..n]);
+    return 0;
+}
+
+/// Note the resident set of process `p` in its maximum (ru_maxrss). A vfork
+/// child runs in its parent's pages, none of them its own.
+pub fn sampleRss(p: *proc.Proc) void {
+    if (p.pmap == 0 or p.vm_borrowed_from != null) return;
+    const kb: u64 = arch.pmap.residentCount(p.pmap) * (param.PAGE_SIZE / 1024);
+    p.usage.maxrss_kb = @max(p.usage.maxrss_kb, kb);
+}
+
+fn ticksToTimeval(t: u64) user.Timeval {
+    const us: u64 = t * (1_000_000 / arch.clock.HZ);
+    return .{ .sec = @intCast(us / 1_000_000), .usec = @intCast(us % 1_000_000) };
+}
+
+/// The struct rusage that reports `u` (FreeBSD's calcru and rufetch).
+pub fn toRusage(u: proc.Usage) user.Rusage {
+    var ru: user.Rusage = .{ .utime = ticksToTimeval(u.uticks), .stime = ticksToTimeval(u.sticks), .longs = @splat(0) };
+    ru.longs[0] = @intCast(u.maxrss_kb); // ru_maxrss
+    return ru;
+}
+
+const RUSAGE_SELF: i32 = 0;
+const RUSAGE_CHILDREN: i32 = -1;
+const RUSAGE_THREAD: i32 = 1;
+
+/// getrusage(2): `getrusage(who, rusage)`, the resources the calling
+/// process (RUSAGE_SELF, and RUSAGE_THREAD: Renux accounts per process) or
+/// its reaped children (RUSAGE_CHILDREN) used.
+pub fn sysGetrusage(args: [sys.MAXARGS]u64) u64 {
+    const who: i32 = @bitCast(@as(u32, @truncate(args[0])));
+    if (args[1] == 0) return sys.signed(-errno.EFAULT);
+    const p: *proc.Proc = kern_proc.current;
+    const u: proc.Usage = switch (who) {
+        RUSAGE_SELF, RUSAGE_THREAD => blk: {
+            sampleRss(p);
+            break :blk p.usage;
+        },
+        RUSAGE_CHILDREN => p.usage_children,
+        else => return sys.signed(-errno.EINVAL),
+    };
+    @as(*align(1) user.Rusage, @ptrFromInt(args[1])).* = toRusage(u);
     return 0;
 }

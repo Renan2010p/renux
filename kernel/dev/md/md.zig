@@ -5,16 +5,19 @@
 //
 // FreeBSD's md(4) device backed by kernel memory. Here it exposes the images
 // the kernel carries (the root image, kernel/fs/rootimage.zig) as /dev/md0 --
-// and a second one, /dev/md1, when the build embedded an installer payload.
+// and, when the build embedded an installer payload, the ESP image as
+// /dev/md1 and the compressed installed root (kernel/fs/sysimage.zig) as
+// /dev/md2.
 // The installer copies them onto a target disk; nothing on the live system
 // writes to them.
 //
-// The disks are named md0, md1 (a number, not a letter): they are read-only
+// The disks are named md0, md1, md2 (a number, not a letter): they are read-only
 // images, not drives.
 
 const geom_disk: type = @import("../../geom/geom_disk.zig");
 const rootimage: type = @import("../../fs/rootimage.zig");
 const espimage: type = @import("../../fs/espimage.zig");
+const sysimage: type = @import("../../fs/sysimage.zig");
 const sysinit: type = @import("../../sys/sysinit.zig");
 const errno: type = @import("../../sys/errno.zig");
 const prf: type = @import("../../core/subr_prf.zig");
@@ -23,7 +26,8 @@ const Md: type = struct { data: []const u8 };
 
 var md0: Md = undefined;
 var md1: Md = undefined;
-var disks: [2]geom_disk.Disk = undefined;
+var md2: Md = undefined;
+var disks: [3]geom_disk.Disk = undefined;
 
 fn strategy(dp: *geom_disk.Disk, write: bool, offset: u64, buf: []u8) i32 {
     const m: *Md = @ptrCast(@alignCast(dp.d_drv1.?));
@@ -56,6 +60,8 @@ fn attach(_: ?*const anyopaque) callconv(.c) void {
     add(0, &md0);
     md1 = .{ .data = espimage.bytes };
     add(1, &md1);
+    md2 = .{ .data = sysimage.bytes };
+    add(2, &md2);
 }
 
 comptime {

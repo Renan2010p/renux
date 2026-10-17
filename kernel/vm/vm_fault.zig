@@ -1,44 +1,107 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 The Renux Project
 //
-// Demand-zero anonymous memory.
+// Page faults.
 //
-// A simplified stand-in for FreeBSD's sys/vm/vm_fault.c. mmap(2) of
-// anonymous memory records the range in the process (Proc.anon) instead of
-// allocating every page up front; the first touch of a page faults, and the
-// fault handler maps a fresh zeroed page there and lets the instruction
-// retry. Programs reserve far more than they use (libc's malloc maps 2 MiB
-// arenas), so this saves both the time to zero the pages and the memory.
-// There is no object/amap indirection yet.
+// The Zig counterpart of FreeBSD's sys/vm/vm_fault.c. A page fault on a user
+// address is resolved from the process's map (vm_map.zig):
+//
+//   - a page the map allows but the page tables lack is made: zero-filled
+//     for anonymous memory, read from the file for a file mapping (the
+//     program, its libraries, mmap of a file);
+//   - a write to a page shared copy-on-write since a fork gets the
+//     process its own copy (pmap.resolveCow);
+//   - anything else (no entry, or an access the protection forbids) is not
+//     resolved, and the caller sends SIGSEGV.
+//
+// Programs reserve far more than they touch (malloc arenas, thread stacks,
+// a 150 MB compiler binary), so only the pages actually used take memory.
 
-const proc: type = @import("../sys/proc.zig");
+const param: type = @import("../sys/param.zig");
+const arch: type = @import("../arch/arch.zig");
+const vm_page: type = @import("vm_page.zig");
+const vm_map: type = @import("vm_map.zig");
+const vnode: type = @import("../sys/vnode.zig");
 
-/// Registration counter (see AnonRange.seq).
-var next_seq: u64 = 1;
+/// Resolve a fault at `va` in the address space (`map`, `pmap`): a read, or
+/// a write when `write` is set. Returns false when the access is not
+/// allowed.
+pub fn fault(map: *vm_map.VmMap, pmap: arch.pmap.Pmap, va: u64, write: bool) bool {
+    const e: *vm_map.Entry = vm_map.lookup(map, va) orelse return false;
+    if (e.prot == 0) return false;
+    if (write and (e.prot & vm_map.PROT_WRITE) == 0) return false;
+    const page_va: u64 = va & ~@as(u64, param.PAGE_SIZE - 1);
 
-/// Record [start, end) of `p` as demand-zero memory. Returns false when the
-/// table is full; the caller then maps the pages at once.
-pub fn register(p: *proc.Proc, start: u64, end: u64, write: bool, exec: bool) bool {
-    for (&p.anon) |*r| {
-        if (r.end == 0) {
-            r.* = .{ .start = start, .end = end, .write = write, .exec = exec, .seq = next_seq };
-            next_seq += 1;
-            return true;
-        }
+    if (arch.pmap.extract(pmap, page_va) != null) {
+        // The page is there: a write to a copy-on-write page, or a fault
+        // another thread already resolved.
+        if (write) return arch.pmap.resolveCow(pmap, page_va);
+        return true;
     }
-    return false;
+
+    const pa: vm_page.PAddr = switch (e.object) {
+        .anon => vm_page.allocUser() orelse return false,
+        .vnode => |v| fromFile(v.vp, v.offset + (page_va - e.start), v.file_end) orelse return false,
+        // Device pages are mapped with the entry; a hole is no page at all.
+        .device => return false,
+    };
+    arch.pmap.enterUser(pmap, page_va, pa.int(), e.pmapProt());
+    return true;
 }
 
-/// The demand-zero range of `p` containing `va`, if any. Where ranges
-/// overlap the most recent one wins, as a later mmap(MAP_FIXED) replaces an
-/// earlier mapping (rtld reserves a library's span PROT_NONE, then maps its
-/// writable .bss over part of it).
-pub fn regionFor(p: *proc.Proc, va: u64) ?proc.AnonRange {
-    var best: ?proc.AnonRange = null;
-    for (p.anon) |r| {
-        if (r.end != 0 and va >= r.start and va < r.end) {
-            if (best == null or r.seq > best.?.seq) best = r;
+/// A new page holding the file bytes at `offset`, up to `file_end`; the
+/// rest of the page is zero.
+fn fromFile(vp: *vnode.Vnode, offset: u64, file_end: u64) ?vm_page.PAddr {
+    const pa: vm_page.PAddr = vm_page.allocUser() orelse return null;
+    if (offset < file_end) {
+        const hhdm: u64 = arch.boot.hhdmOffset() orelse return null;
+        const dst: [*]u8 = @ptrFromInt(pa.int() + hhdm);
+        const n: usize = @intCast(@min(param.PAGE_SIZE, file_end - offset));
+        if (vp.v_op.read(vp, offset, dst[0..n]) < 0) {
+            vm_page.unref(pa);
+            return null;
         }
     }
-    return best;
+    return pa;
+}
+
+/// The physical address of `va` in (`map`, `pmap`), faulting the page in
+/// (for writing when `write` is set). For the kernel's own accesses to an
+/// address space that is not the current one, such as a new program's
+/// stack while execve(2) builds it.
+pub fn hold(map: *vm_map.VmMap, pmap: arch.pmap.Pmap, va: u64, write: bool) ?u64 {
+    if (!fault(map, pmap, va, write)) return null;
+    return arch.pmap.extract(pmap, va);
+}
+
+/// Copy `bytes` to `va` in (`map`, `pmap`), a page at a time, faulting the
+/// pages in. Returns false when part of the range is not writable.
+pub fn writeBytes(map: *vm_map.VmMap, pmap: arch.pmap.Pmap, va: u64, bytes: []const u8) bool {
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
+    var done: usize = 0;
+    while (done < bytes.len) {
+        const addr: u64 = va + done;
+        const n: usize = @min(@as(usize, @intCast(param.PAGE_SIZE - addr % param.PAGE_SIZE)), bytes.len - done);
+        const pa: u64 = hold(map, pmap, addr, true) orelse return false;
+        const dst: [*]u8 = @ptrFromInt(pa + hhdm);
+        @memcpy(dst[0..n], bytes[done..][0..n]);
+        done += n;
+    }
+    return true;
+}
+
+/// Copy `out.len` bytes from `va` in (`map`, `pmap`), faulting the pages
+/// in. Returns false when part of the range is not readable.
+pub fn readBytes(map: *vm_map.VmMap, pmap: arch.pmap.Pmap, va: u64, out: []u8) bool {
+    const hhdm: u64 = arch.boot.hhdmOffset() orelse return false;
+    var done: usize = 0;
+    while (done < out.len) {
+        const addr: u64 = va + done;
+        const n: usize = @min(@as(usize, @intCast(param.PAGE_SIZE - addr % param.PAGE_SIZE)), out.len - done);
+        const pa: u64 = hold(map, pmap, addr, false) orelse return false;
+        const src: [*]const u8 = @ptrFromInt(pa + hhdm);
+        @memcpy(out[done..][0..n], src[0..n]);
+        done += n;
+    }
+    return true;
 }
